@@ -57,6 +57,38 @@ class SqliteSessionStore:
         messages = self._load_messages(session_id)
         return _session_from_row(row, messages)
 
+    def list(
+        self,
+        *,
+        limit: int = 50,
+        status: str | None = None,
+    ) -> list[Session]:
+        # Sessions returned by ``list`` carry an empty messages list;
+        # callers that need the conversation should call ``get`` for
+        # the rows they actually want to display.
+        if status is None:
+            rows = self._conn.execute(
+                f"""
+                SELECT {_SESSION_COLUMNS}
+                FROM sessions
+                ORDER BY created_at DESC
+                LIMIT ?;
+                """,
+                (limit,),
+            ).fetchall()
+        else:
+            rows = self._conn.execute(
+                f"""
+                SELECT {_SESSION_COLUMNS}
+                FROM sessions
+                WHERE status = ?
+                ORDER BY created_at DESC
+                LIMIT ?;
+                """,
+                (status, limit),
+            ).fetchall()
+        return [_session_from_row(r, messages=[]) for r in rows]
+
     def save(self, session: Session) -> None:
         with self._conn:
             self._conn.execute(

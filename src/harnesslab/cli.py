@@ -57,7 +57,7 @@ DEFAULT_REPORTS_DIR = "eval/reports"
 DEFAULT_PROPOSALS_DIR = "proposals"
 DEFAULT_MIN_OCCURRENCES = 2
 
-SUBCOMMANDS = ("run", "eval", "replay", "metrics", "propose")
+SUBCOMMANDS = ("run", "eval", "replay", "metrics", "propose", "session")
 
 EXIT_OK = 0
 EXIT_UNREPLAYABLE = 2
@@ -329,6 +329,80 @@ def _build_parser() -> argparse.ArgumentParser:
             "json: emit a JSON array on stdout instead of touching disk."
         ),
     )
+
+    # ----- session -----
+    se = sub.add_parser(
+        "session",
+        help="List, inspect, resume, or fork persisted sessions.",
+        description=(
+            "Operate on the persisted session store (SQLite). Use this "
+            "to find a session id, inspect its lifecycle and conversation, "
+            "continue work where it left off, or branch off a new session."
+        ),
+    )
+    se.add_argument(
+        "--workspace-root",
+        default=".",
+        help="Workspace root used to locate the SQLite store.",
+    )
+    se.add_argument(
+        "--sqlite-path",
+        default=None,
+        help=(
+            "SQLite DB path. Relative paths resolve against --workspace-root. "
+            f"Defaults to {DEFAULT_SQLITE_PATH!r}."
+        ),
+    )
+    se_sub = se.add_subparsers(
+        dest="session_action",
+        required=True,
+        metavar="ACTION",
+    )
+
+    ls = se_sub.add_parser("ls", help="List sessions newest-first.")
+    ls.add_argument("--limit", type=int, default=20, help="Max rows to print.")
+    ls.add_argument(
+        "--status",
+        default=None,
+        choices=["running", "waiting_user", "done", "failed", "aborted"],
+        help="Restrict to sessions in this lifecycle state.",
+    )
+
+    sh = se_sub.add_parser("show", help="Show one session and its messages.")
+    sh.add_argument("session_id")
+    sh.add_argument(
+        "--no-messages",
+        action="store_true",
+        help="Print metadata only (skip the conversation transcript).",
+    )
+
+    rs = se_sub.add_parser("resume", help="Run another turn on an existing session.")
+    rs.add_argument("session_id")
+    rs.add_argument("input", help="The next user message for this session.")
+    rs.add_argument(
+        "--model",
+        default="simple",
+        choices=["simple", "deepseek"],
+        help="Model backend for the resumed turn (default: simple).",
+    )
+    rs.add_argument(
+        "--max-steps",
+        type=int,
+        default=DEFAULT_MAX_STEPS,
+        help="Inner-loop step budget for the resumed turn.",
+    )
+
+    fk = se_sub.add_parser(
+        "fork",
+        help="Fork a session: copy messages, pin parent_session_id.",
+    )
+    fk.add_argument("session_id")
+    fk.add_argument(
+        "--goal",
+        default=None,
+        help="Override the goal/title of the new session (defaults to parent's).",
+    )
+
     return parser
 
 
@@ -367,6 +441,8 @@ def main() -> None:
         sys.exit(_cmd_metrics(args))
     if args.command == "propose":
         sys.exit(_cmd_propose(args))
+    if args.command == "session":
+        sys.exit(_cmd_session(args))
 
     parser.print_help(sys.stderr)
     sys.exit(EXIT_USAGE)
@@ -563,6 +639,141 @@ def _load_eval_results(report_path: Path) -> list[TaskResult]:
             f"eval report missing 'results' list: {report_path}"
         )
     return [TaskResult.model_validate(r) for r in raw_results]
+
+
+# ---------------------------------------------------------------------------
+# session subcommand
+# ---------------------------------------------------------------------------
+
+
+def _cmd_session(args: argparse.Namespace) -> int:
+    if args.session_action == "ls":
+        return _cmd_session_ls(args)
+    if args.session_action == "show":
+        return _cmd_session_show(args)
+    if args.session_action == "resume":
+        return _cmd_session_resume(args)
+    if args.session_action == "fork":
+        return _cmd_session_fork(args)
+    print(f"unknown session action: {args.session_action}", file=sys.stderr)
+    return EXIT_USAGE
+
+
+def _cmd_session_ls(args: argparse.Namespace) -> int:
+    workspace_root = Path(args.workspace_root).resolve()
+    sqlite_path = Path(args.sqlite_path) if args.sqlite_path else None
+    sessions, _ = _build_stores("sqlite", workspace_root, sqlite_path)
+    rows = sessions.list(limit=args.limit, status=args.status)
+    if not rows:
+        print("(no sessions)")
+        return EXIT_OK
+    print(_format_session_table(rows))
+    return EXIT_OK
+
+
+def _cmd_session_show(args: argparse.Namespace) -> int:
+    workspace_root = Path(args.workspace_root).resolve()
+    sqlite_path = Path(args.sqlite_path) if args.sqlite_path else None
+    sessions, _ = _build_stores("sqlite", workspace_root, sqlite_path)
+    try:
+        session = sessions.get(args.session_id)
+    except KeyError:
+        print(f"session not found: {args.session_id}", file=sys.stderr)
+        return EXIT_USAGE
+    print(_format_session_detail(session, include_messages=not args.no_messages))
+    return EXIT_OK
+
+
+def _cmd_session_resume(args: argparse.Namespace) -> int:
+    if args.max_steps < 1:
+        print(
+            f"--max-steps must be >= 1, got {args.max_steps}", file=sys.stderr
+        )
+        return EXIT_USAGE
+    workspace_root = Path(args.workspace_root).resolve()
+    sqlite_path = Path(args.sqlite_path) if args.sqlite_path else None
+    try:
+        loop = build_runtime(
+            workspace_root=workspace_root,
+            storage_backend="sqlite",
+            sqlite_path=sqlite_path,
+            model_backend=args.model,
+        )
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return EXIT_USAGE
+    try:
+        loop._sessions.get(args.session_id)  # type: ignore[attr-defined]
+    except KeyError:
+        print(f"session not found: {args.session_id}", file=sys.stderr)
+        return EXIT_USAGE
+    response = loop.run_session(args.session_id, args.input, max_steps=args.max_steps)
+    print(response)
+    return EXIT_OK
+
+
+def _cmd_session_fork(args: argparse.Namespace) -> int:
+    workspace_root = Path(args.workspace_root).resolve()
+    sqlite_path = Path(args.sqlite_path) if args.sqlite_path else None
+    loop = build_runtime(
+        workspace_root=workspace_root,
+        storage_backend="sqlite",
+        sqlite_path=sqlite_path,
+        model_backend="simple",
+    )
+    try:
+        forked = loop.fork(args.session_id, goal=args.goal)
+    except KeyError:
+        print(f"session not found: {args.session_id}", file=sys.stderr)
+        return EXIT_USAGE
+    print(forked.id)
+    return EXIT_OK
+
+
+def _format_session_table(sessions) -> str:
+    header = ("ID", "STATUS", "STEPS", "TURNS", "CREATED", "TITLE")
+    rows = [header]
+    for s in sessions:
+        rows.append(
+            (
+                s.id,
+                s.status,
+                str(s.step_count),
+                str(s.turn_count),
+                s.created_at.strftime("%Y-%m-%d %H:%M:%S"),
+                (s.title or s.goal)[:60],
+            )
+        )
+    widths = [max(len(r[i]) for r in rows) for i in range(len(header))]
+    lines = []
+    for row in rows:
+        lines.append(
+            "  ".join(cell.ljust(widths[i]) for i, cell in enumerate(row)).rstrip()
+        )
+    return "\n".join(lines)
+
+
+def _format_session_detail(session, *, include_messages: bool) -> str:
+    parent = session.parent_session_id or "(none)"
+    last_step = session.last_step_at.isoformat() if session.last_step_at else "(never)"
+    lines = [
+        f"Session:   {session.id}",
+        f"Title:     {session.title or '(none)'}",
+        f"Goal:      {session.goal}",
+        f"Status:    {session.status}",
+        f"Turns:     {session.turn_count}",
+        f"Steps:     {session.step_count}",
+        f"Created:   {session.created_at.isoformat()}",
+        f"Last step: {last_step}",
+        f"Parent:    {parent}",
+    ]
+    if include_messages:
+        lines.append("")
+        lines.append(f"Messages ({len(session.messages)}):")
+        for i, msg in enumerate(session.messages):
+            preview = msg.content if len(msg.content) <= 120 else msg.content[:117] + "..."
+            lines.append(f"  [{i}] {msg.role}: {preview}")
+    return "\n".join(lines)
 
 
 if __name__ == "__main__":

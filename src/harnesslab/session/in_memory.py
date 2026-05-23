@@ -15,3 +15,18 @@ class InMemorySessionStore:
 
     def save(self, session: Session) -> None:
         self._data[session.id] = session
+
+    def list(
+        self,
+        *,
+        limit: int = 50,
+        status: str | None = None,
+    ) -> list[Session]:
+        sessions = sorted(
+            self._data.values(),
+            key=lambda s: s.created_at,
+            reverse=True,
+        )
+        if status is not None:
+            sessions = [s for s in sessions if s.status == status]
+        return sessions[:limit]

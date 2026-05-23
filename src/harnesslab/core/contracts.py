@@ -30,6 +30,19 @@ class SessionStorePort(Protocol):
 
     def save(self, session: Session) -> None: ...
 
+    def list(
+        self,
+        *,
+        limit: int = 50,
+        status: str | None = None,
+    ) -> list[Session]:
+        """Return sessions newest-first, optionally filtered by ``status``.
+
+        Backends MAY load each row's messages eagerly or lazily; callers
+        should not depend on messages being populated in list results.
+        """
+        ...
+
 
 class MemoryStorePort(Protocol):
     def put(self, key: str, value: str) -> None: ...

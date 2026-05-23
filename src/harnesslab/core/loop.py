@@ -84,13 +84,26 @@ class HarnessLoop:
         """
 
         parent = self._sessions.get(source_id)
+        forked_id = self._ids.new_id("ses")
+        # Each ``messages.id`` is a globally unique PRIMARY KEY in the
+        # SQLite store, so copied-by-value messages need fresh ids and
+        # session_id pointers.
+        copied_messages = [
+            m.model_copy(
+                update={
+                    "id": self._ids.new_id("msg"),
+                    "session_id": forked_id,
+                }
+            )
+            for m in parent.messages
+        ]
         forked = Session(
-            id=self._ids.new_id("ses"),
+            id=forked_id,
             goal=goal or parent.goal,
             created_at=self._clock.now(),
             title=_derive_title(goal or parent.goal),
             parent_session_id=parent.id,
-            messages=[m.model_copy() for m in parent.messages],
+            messages=copied_messages,
         )
         self._sessions.create(forked)
         self._record(
