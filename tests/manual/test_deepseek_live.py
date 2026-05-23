@@ -34,5 +34,5 @@ def test_live_deepseek_round_trip() -> None:
         created_at=datetime.now(UTC),
     )
     decision = model.decide(session, "Reply with one short sentence.")
-    assert decision.kind == "assistant"
+    assert decision.kind == "final"
     assert decision.assistant_message

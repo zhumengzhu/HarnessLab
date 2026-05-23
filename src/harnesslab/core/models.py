@@ -54,7 +54,25 @@ class TraceEvent(BaseModel):
 
 
 class Decision(BaseModel):
-    kind: Literal["assistant", "tool"]
+    """A single step's model decision.
+
+    Kinds:
+
+    - ``tool``: invoke ``tool_name`` with ``tool_args``; the loop appends
+      the tool result and continues to the next step.
+    - ``assistant``: intermediate narration; the loop appends the
+      assistant message and continues to the next step.
+    - ``final``: terminal answer; the loop appends the assistant message
+      and stops with ``session_finished(reason="final")``.
+    - ``ask_user``: terminal pause awaiting more user input; the loop
+      appends the assistant message and stops with
+      ``session_finished(reason="ask_user")``.
+    """
+
+    kind: Literal["assistant", "tool", "final", "ask_user"]
     assistant_message: str | None = None
     tool_name: str | None = None
     tool_args: dict[str, Any] = Field(default_factory=dict)
+
+
+TERMINAL_DECISION_KINDS: frozenset[str] = frozenset({"final", "ask_user"})

@@ -128,16 +128,24 @@ def test_user_input_event_is_recorded_before_decision(tmp_path: Path) -> None:
         "user_input": '/tool read_file {"path":"a.txt"}',
     }
 
-    keep = {"user_input_received", "model_call", "decision_made"}
+    keep = {
+        "user_input_received",
+        "step_started",
+        "model_call",
+        "decision_made",
+        "step_completed",
+        "session_finished",
+    }
     types_in_order = [e["event_type"] for e in events if e["event_type"] in keep]
-    assert types_in_order == [
+    one_turn = [
         "user_input_received",
+        "step_started",
         "model_call",
         "decision_made",
-        "user_input_received",
-        "model_call",
-        "decision_made",
+        "step_completed",
+        "session_finished",
     ]
+    assert types_in_order == one_turn + one_turn
 
 
 def test_decision_made_payload_is_replay_complete(tmp_path: Path) -> None:
@@ -149,14 +157,10 @@ def test_decision_made_payload_is_replay_complete(tmp_path: Path) -> None:
 
     events = _read_trace(tmp_path)
     decisions = [e for e in events if e["event_type"] == "decision_made"]
-    assert decisions[0]["payload"] == {
-        "kind": "assistant",
-        "tool_name": None,
-        "tool_args": {},
-        "assistant_message": (
-            "HarnessLab is ready. Use '/tool <name> <json_args>' to call tools."
-        ),
-    }
+    assert decisions[0]["payload"]["kind"] == "final"
+    assert decisions[0]["payload"]["tool_name"] is None
+    assert decisions[0]["payload"]["tool_args"] == {}
+    assert "HarnessLab is ready" in decisions[0]["payload"]["assistant_message"]
     assert decisions[1]["payload"] == {
         "kind": "tool",
         "tool_name": "write_file",
@@ -175,5 +179,67 @@ def test_model_call_event_contains_latency_and_kind(tmp_path: Path) -> None:
     assert len(model_calls) == 1
     payload = model_calls[0]["payload"]
     assert payload["model_name"] == "SimpleModel"
-    assert payload["decision_kind"] == "assistant"
+    assert payload["decision_kind"] == "final"
     assert payload["latency_ms"] >= 0
+
+
+# ----- Phase 2.1 prerequisites: step + session_finished trace events -----
+
+
+def test_step_started_and_completed_bracket_each_decision(tmp_path: Path) -> None:
+    """Every model.decide call is wrapped by step_started/step_completed."""
+    loop = build_runtime(tmp_path)
+    session = loop.start(goal="step events")
+    loop.run_turn(session.id, "hello")
+
+    events = _read_trace(tmp_path)
+    starts = [e for e in events if e["event_type"] == "step_started"]
+    completes = [e for e in events if e["event_type"] == "step_completed"]
+    assert len(starts) == 1
+    assert len(completes) == 1
+    assert starts[0]["payload"] == {"step_index": 0, "reason": "initial"}
+    assert completes[0]["payload"] == {"step_index": 0, "outcome": "final"}
+
+
+def test_session_finished_records_reason_and_step_count(tmp_path: Path) -> None:
+    loop = build_runtime(tmp_path)
+    session = loop.start(goal="finish event")
+    loop.run_turn(session.id, "hi")
+    loop.run_turn(session.id, '/tool write_file {"path":"a.txt","content":"x"}')
+
+    events = _read_trace(tmp_path)
+    finished = [e for e in events if e["event_type"] == "session_finished"]
+    assert len(finished) == 2
+    assert finished[0]["payload"] == {"reason": "final", "steps": 1}
+    assert finished[1]["payload"] == {"reason": "max_steps", "steps": 1}
+
+
+def test_step_completed_outcome_for_tool_path(tmp_path: Path) -> None:
+    loop = build_runtime(tmp_path)
+    session = loop.start(goal="tool outcome")
+    loop.run_turn(session.id, '/tool write_file {"path":"a.txt","content":"x"}')
+
+    events = _read_trace(tmp_path)
+    completes = [e for e in events if e["event_type"] == "step_completed"]
+    assert len(completes) == 1
+    assert completes[0]["payload"] == {"step_index": 0, "outcome": "tool_ok"}
+
+
+def test_step_completed_outcome_for_policy_denial(tmp_path: Path) -> None:
+    loop = build_runtime(tmp_path)
+    session = loop.start(goal="denial outcome")
+    loop.run_turn(session.id, '/tool read_file {"path":"../../etc/passwd"}')
+
+    events = _read_trace(tmp_path)
+    completes = [e for e in events if e["event_type"] == "step_completed"]
+    assert completes[-1]["payload"]["outcome"] == "tool_denied"
+
+
+def test_step_completed_outcome_for_invalid_args(tmp_path: Path) -> None:
+    loop = build_runtime(tmp_path)
+    session = loop.start(goal="invalid args outcome")
+    loop.run_turn(session.id, '/tool write_file {}')
+
+    events = _read_trace(tmp_path)
+    completes = [e for e in events if e["event_type"] == "step_completed"]
+    assert completes[-1]["payload"]["outcome"] == "tool_invalid_args"

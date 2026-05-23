@@ -8,7 +8,7 @@ from typing import Literal
 
 from harnesslab.core.config import RuntimeLimits
 from harnesslab.core.contracts import MemoryStorePort, SessionStorePort
-from harnesslab.core.loop import HarnessLoop
+from harnesslab.core.loop import DEFAULT_MAX_STEPS, HarnessLoop
 from harnesslab.core.runtime import SystemClock, UuidIdProvider
 from harnesslab.core.simple_model import SimpleModel
 from harnesslab.eval.baseline import compare, load_baseline, save_baseline
@@ -156,6 +156,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Model backend for `run` (default: simple). "
             "Use `deepseek` to call DeepSeek with DEEPSEEK_API_KEY."
+        ),
+    )
+    run.add_argument(
+        "--max-steps",
+        type=int,
+        default=DEFAULT_MAX_STEPS,
+        help=(
+            "Maximum decision steps inside the inner agent loop "
+            f"(default: {DEFAULT_MAX_STEPS}). The loop stops earlier when "
+            "the model returns a terminal decision (final or ask_user)."
         ),
     )
 
@@ -337,6 +347,12 @@ def main() -> None:
 def _cmd_run(args: argparse.Namespace) -> int:
     workspace_root = Path(args.workspace_root).resolve()
     sqlite_path = Path(args.sqlite_path) if args.sqlite_path else None
+    if args.max_steps < 1:
+        print(
+            f"--max-steps must be >= 1, got {args.max_steps}",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
     try:
         loop = build_runtime(
             workspace_root=workspace_root,
@@ -348,7 +364,7 @@ def _cmd_run(args: argparse.Namespace) -> int:
         print(str(exc), file=sys.stderr)
         return EXIT_USAGE
     session = loop.start(goal=args.input)
-    response = loop.run_turn(session.id, args.input)
+    response = loop.run_session(session.id, args.input, max_steps=args.max_steps)
     print(response)
     return EXIT_OK
 

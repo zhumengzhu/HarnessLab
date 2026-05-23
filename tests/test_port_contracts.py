@@ -45,7 +45,7 @@ def test_model_port_contract() -> None:
     session = Session(goal="contract")
     decision = model.decide(session, "hello")
     assert isinstance(decision, Decision)
-    assert decision.kind in {"assistant", "tool"}
+    assert decision.kind in {"assistant", "tool", "final", "ask_user"}
 
 
 def test_policy_port_contract(tmp_path: Path) -> None:

@@ -42,7 +42,10 @@ def test_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
         DeepSeekModel(tool_specs_provider=lambda: [])
 
 
-def test_returns_assistant_decision() -> None:
+def test_returns_final_decision_when_no_tool_calls() -> None:
+    """Assistant text without tool_calls is the OpenAI/DeepSeek
+    convention for "I'm done"; the loop treats that as a terminal
+    decision (``kind="final"``)."""
     payload = {
         "choices": [{"message": {"content": "hi from deepseek"}}],
         "usage": {"prompt_tokens": 10, "completion_tokens": 2, "total_tokens": 12},
@@ -53,7 +56,7 @@ def test_returns_assistant_decision() -> None:
         transport=_transport(payload),
     )
     decision = model.decide(_session(), "hello")
-    assert decision.kind == "assistant"
+    assert decision.kind == "final"
     assert decision.assistant_message == "hi from deepseek"
     assert model.last_call_meta() == {
         "provider": "deepseek",
@@ -93,7 +96,7 @@ def test_returns_tool_decision() -> None:
     assert decision.tool_args == {"path": "a.txt", "content": "x"}
 
 
-def test_invalid_tool_call_json_falls_back_to_assistant() -> None:
+def test_invalid_tool_call_json_falls_back_to_final() -> None:
     payload = {
         "choices": [
             {
@@ -111,18 +114,18 @@ def test_invalid_tool_call_json_falls_back_to_assistant() -> None:
         transport=_transport(payload),
     )
     decision = model.decide(_session(), "write")
-    assert decision.kind == "assistant"
+    assert decision.kind == "final"
     assert "invalid JSON args" in (decision.assistant_message or "")
 
 
-def test_http_error_falls_back_to_assistant() -> None:
+def test_http_error_falls_back_to_final() -> None:
     model = DeepSeekModel(
         tool_specs_provider=lambda: [],
         api_key="x",
         transport=_transport({"error": "bad"}, status_code=500),
     )
     decision = model.decide(_session(), "hello")
-    assert decision.kind == "assistant"
+    assert decision.kind == "final"
     assert "DeepSeek request failed" in (decision.assistant_message or "")
     assert model.last_call_meta() == {
         "provider": "deepseek",
@@ -171,7 +174,7 @@ def test_request_body_includes_tools_spec() -> None:
         transport=httpx.MockTransport(handler),
     )
     decision = model.decide(_session(), "hello")
-    assert decision.kind == "assistant"
+    assert decision.kind == "final"
     assert captured["model"] == "deepseek-chat"
     assert captured["tool_choice"] == "auto"
     assert captured["tools"][0]["function"]["name"] == "read_file"

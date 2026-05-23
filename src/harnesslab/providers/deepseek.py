@@ -17,7 +17,10 @@ DEFAULT_TIMEOUT_SECONDS = 30.0
 _SYSTEM_PROMPT = (
     "You are HarnessLab's model adapter. "
     "Prefer tool calls when tools are needed. "
-    "When responding directly, be concise."
+    "Tool calls happen one at a time; the harness will feed the tool "
+    "result back to you in the next step. Once you have enough information "
+    "to answer, respond with plain assistant text (no tool calls) — that "
+    "ends the session."
 )
 
 
@@ -69,7 +72,7 @@ class DeepSeekModel:
                 "model_name": self._model_name,
             }
             return Decision(
-                kind="assistant",
+                kind="final",
                 assistant_message=f"DeepSeek request failed: {type(exc).__name__}: {exc}",
             )
 
@@ -97,17 +100,26 @@ class DeepSeekModel:
 
 
 def _decision_from_payload(payload: dict[str, Any]) -> Decision:
+    """Translate one DeepSeek response into a ``Decision``.
+
+    Tool calls produce ``kind="tool"`` (non-terminal — the inner loop
+    will execute the tool and call the model again). Plain assistant
+    text with no tool calls produces ``kind="final"``: that is the
+    OpenAI function-calling convention for "the model considers itself
+    done".
+    """
+
     choices = payload.get("choices")
     if not isinstance(choices, list) or not choices:
         return Decision(
-            kind="assistant",
+            kind="final",
             assistant_message="DeepSeek response invalid: missing choices.",
         )
     first = choices[0] if isinstance(choices[0], dict) else {}
     message = first.get("message", {})
     if not isinstance(message, dict):
         return Decision(
-            kind="assistant",
+            kind="final",
             assistant_message="DeepSeek response invalid: malformed message.",
         )
 
@@ -118,33 +130,33 @@ def _decision_from_payload(payload: dict[str, Any]) -> Decision:
         arguments = function.get("arguments")
         if not isinstance(name, str) or not name:
             return Decision(
-                kind="assistant",
+                kind="final",
                 assistant_message="DeepSeek tool call invalid: missing function name.",
             )
         if not isinstance(arguments, str):
             return Decision(
-                kind="assistant",
+                kind="final",
                 assistant_message="DeepSeek tool call invalid: arguments must be a JSON string.",
             )
         try:
             tool_args = json.loads(arguments)
         except json.JSONDecodeError as exc:
             return Decision(
-                kind="assistant",
+                kind="final",
                 assistant_message=f"DeepSeek tool call invalid JSON args: {exc.msg}",
             )
         if not isinstance(tool_args, dict):
             return Decision(
-                kind="assistant",
+                kind="final",
                 assistant_message="DeepSeek tool call invalid: JSON args must be an object.",
             )
         return Decision(kind="tool", tool_name=name, tool_args=tool_args)
 
     content = message.get("content")
     if isinstance(content, str) and content.strip():
-        return Decision(kind="assistant", assistant_message=content.strip())
+        return Decision(kind="final", assistant_message=content.strip())
     return Decision(
-        kind="assistant",
+        kind="final",
         assistant_message="DeepSeek returned an empty response.",
     )
 

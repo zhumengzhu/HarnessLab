@@ -10,14 +10,37 @@ from harnesslab.core.contracts import (
     SessionStorePort,
     TraceRecorderPort,
 )
-from harnesslab.core.models import Decision, Message, Session, ToolCall, ToolResult, TraceEvent
+from harnesslab.core.models import (
+    TERMINAL_DECISION_KINDS,
+    Decision,
+    Message,
+    Session,
+    ToolCall,
+    ToolResult,
+    TraceEvent,
+)
 from harnesslab.core.runtime import SystemClock, UuidIdProvider
 from harnesslab.tools.registry import ToolRegistry
 
 _TRACE_OUTPUT_PREVIEW_BYTES = 512
 
+DEFAULT_MAX_STEPS = 20
+
 
 class HarnessLoop:
+    """Orchestrate one session's interaction with the model and tools.
+
+    The public surface is two methods:
+
+    - :meth:`run_turn` runs a single decision step (backwards-compatible
+      with the original one-step loop; equivalent to
+      ``run_session(..., max_steps=1)``).
+    - :meth:`run_session` runs the autonomous inner loop: it keeps calling
+      the model — feeding tool results back in via ``session.messages`` —
+      until the model returns a terminal decision (``final`` or
+      ``ask_user``) or ``max_steps`` is exhausted.
+    """
+
     def __init__(
         self,
         model: ModelPort,
@@ -51,6 +74,35 @@ class HarnessLoop:
         return session
 
     def run_turn(self, session_id: str, user_input: str) -> str:
+        """Run exactly one decision step.
+
+        Equivalent to ``run_session(..., max_steps=1)``. Kept as the
+        narrow surface used by eval tasks and tests that want
+        deterministic, single-step trace shapes.
+        """
+
+        return self.run_session(session_id, user_input, max_steps=1)
+
+    def run_session(
+        self,
+        session_id: str,
+        user_input: str,
+        max_steps: int = DEFAULT_MAX_STEPS,
+    ) -> str:
+        """Drive the model/tool loop until terminal or ``max_steps``.
+
+        The model is consulted once per step. After a non-terminal
+        decision (``tool`` or ``assistant``), the loop appends the
+        relevant message to ``session.messages`` and calls the model
+        again so it can react to the new state. The empty string is
+        passed as ``user_input`` to follow-up calls; real model adapters
+        rely on ``session.messages`` for the new signal, and
+        ``SimpleModel`` falls through to its canned final response.
+        """
+
+        if max_steps < 1:
+            raise ValueError(f"max_steps must be >= 1, got {max_steps}")
+
         session = self._sessions.get(session_id)
         self._record(
             session=session,
@@ -63,32 +115,92 @@ class HarnessLoop:
         session.messages.append(
             self._make_message(role="user", content=user_input, session=session)
         )
-        model_started = self._clock.now()
-        decision = self._model.decide(session, user_input)
-        model_ended = self._clock.now()
+
+        last_response = ""
+        terminal_reason = "max_steps"
+        steps_used = 0
+        prev_terminal: str | None = None
+
+        for step_index in range(max_steps):
+            self._record(
+                session=session,
+                event_type="step_started",
+                payload={
+                    "step_index": step_index,
+                    "reason": (
+                        "initial" if step_index == 0 else f"after_{prev_terminal}"
+                    ),
+                },
+            )
+
+            step_input = user_input if step_index == 0 else ""
+            decision, decision_started, decision_ended = self._call_model(
+                session, step_input
+            )
+            self._record(
+                session=session,
+                event_type="model_call",
+                payload=self._model_call_payload(
+                    decision=decision,
+                    started_at=decision_started,
+                    ended_at=decision_ended,
+                ),
+            )
+            self._record(
+                session=session,
+                event_type="decision_made",
+                payload={
+                    "kind": decision.kind,
+                    "tool_name": decision.tool_name,
+                    "tool_args": decision.tool_args,
+                    "assistant_message": decision.assistant_message,
+                },
+            )
+
+            step_response, step_outcome = self._apply_decision(session, decision)
+            last_response = step_response
+            prev_terminal = step_outcome
+            steps_used = step_index + 1
+
+            self._record(
+                session=session,
+                event_type="step_completed",
+                payload={
+                    "step_index": step_index,
+                    "outcome": step_outcome,
+                },
+            )
+
+            if decision.kind in TERMINAL_DECISION_KINDS:
+                terminal_reason = decision.kind
+                break
+
         self._record(
             session=session,
-            event_type="model_call",
-            payload=self._model_call_payload(
-                decision=decision,
-                started_at=model_started,
-                ended_at=model_ended,
-            ),
-        )
-        self._record(
-            session=session,
-            event_type="decision_made",
+            event_type="session_finished",
             payload={
-                "kind": decision.kind,
-                "tool_name": decision.tool_name,
-                "tool_args": decision.tool_args,
-                "assistant_message": decision.assistant_message,
+                "reason": terminal_reason,
+                "steps": steps_used,
             },
         )
-        response = self._apply_decision(session, decision)
+
         session.turn_count += 1
         self._sessions.save(session)
-        return response
+        return last_response
+
+    # ------------------------------------------------------------------
+    # model + decision helpers
+    # ------------------------------------------------------------------
+
+    def _call_model(
+        self,
+        session: Session,
+        user_input: str,
+    ) -> tuple[Decision, datetime, datetime]:
+        started = self._clock.now()
+        decision = self._model.decide(session, user_input)
+        ended = self._clock.now()
+        return decision, started, ended
 
     def _model_call_payload(
         self,
@@ -120,14 +232,46 @@ class HarnessLoop:
         }
         return {k: raw[k] for k in allowed if k in raw}
 
-    def _apply_decision(self, session: Session, decision: Decision) -> str:
-        if decision.kind == "assistant":
-            reply = decision.assistant_message or "No response."
+    def _apply_decision(
+        self,
+        session: Session,
+        decision: Decision,
+    ) -> tuple[str, str]:
+        """Apply one decision; return ``(user_visible_response, outcome)``.
+
+        ``outcome`` is the short string written to the ``step_completed``
+        trace event. It is one of ``final | ask_user | assistant | tool |
+        tool_invalid_args | tool_denied | tool_error | tool_ok``.
+        """
+
+        if decision.kind == "final":
+            reply = decision.assistant_message or ""
             session.messages.append(
                 self._make_message(role="assistant", content=reply, session=session)
             )
-            return reply
+            return reply, "final"
 
+        if decision.kind == "ask_user":
+            reply = decision.assistant_message or ""
+            session.messages.append(
+                self._make_message(role="assistant", content=reply, session=session)
+            )
+            return reply, "ask_user"
+
+        if decision.kind == "assistant":
+            reply = decision.assistant_message or ""
+            session.messages.append(
+                self._make_message(role="assistant", content=reply, session=session)
+            )
+            return reply, "assistant"
+
+        return self._apply_tool_decision(session, decision)
+
+    def _apply_tool_decision(
+        self,
+        session: Session,
+        decision: Decision,
+    ) -> tuple[str, str]:
         call = self._make_tool_call(
             session_id=session.id,
             name=decision.tool_name or "",
@@ -155,7 +299,7 @@ class HarnessLoop:
                     "error": schema_error,
                 },
             )
-            return invalid_msg
+            return invalid_msg, "tool_invalid_args"
 
         allowed, reason = self._policy.allow_tool(call)
         call.policy_decision = f"{'allow' if allowed else 'deny'}:{reason}"
@@ -181,7 +325,7 @@ class HarnessLoop:
                     "reason": reason,
                 },
             )
-            return denied_msg
+            return denied_msg, "tool_denied"
 
         call.started_at = self._clock.now()
         result = self._tools.execute(call)
@@ -201,7 +345,7 @@ class HarnessLoop:
             event_type="tool_executed",
             payload=self._tool_executed_payload(call=call, result=result),
         )
-        return tool_message
+        return tool_message, "tool_ok" if result.ok else "tool_error"
 
     def _tool_executed_payload(self, call: ToolCall, result: ToolResult) -> dict:
         duration_ms: float | None = None

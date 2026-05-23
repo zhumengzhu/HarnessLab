@@ -1,9 +1,11 @@
 """Deterministic single-session replay of a JSONL trace.
 
-The replayer extracts the user-input + decision pairs from a trace,
-constructs a `ReplayModel` over those decisions, runs the loop end-to-end
-with a `FrozenClock` + `SeqIdProvider`, and returns the freshly recorded
-trace events. Callers then hand both event lists to `detect_divergence`.
+The replayer reconstructs ``(user_input, [decisions...])`` per turn
+from a trace, builds a ``ReplayModel`` over the flattened decision
+list, and re-drives the production loop with ``FrozenClock`` +
+``SeqIdProvider``. Each turn is replayed via
+``HarnessLoop.run_session(..., max_steps=len(decisions))`` so multi-step
+turns recorded by the new agentic loop round-trip correctly.
 """
 
 from __future__ import annotations
@@ -27,18 +29,17 @@ class UnreplayableTraceError(Exception):
     """Raised when a trace lacks the structure required to replay it."""
 
 
+# Per-turn structure produced by ``_extract_turns``: the user input that
+# started the turn, plus every ``Decision`` the model produced before the
+# next user input (or end of session).
+TurnPlan = tuple[str, list[Decision]]
+
+
 def replay_session(
     events: list[TraceEvent],
     workspace_root: Path | None = None,
 ) -> list[TraceEvent]:
-    """Replay one single-session event sequence; return the new trace.
-
-    The caller is responsible for splitting multi-session traces with
-    `group_by_session` before calling this function. When
-    ``workspace_root`` is None, a fresh tmp dir is used; this keeps
-    replay hermetic for tasks that only touch their own workspace
-    (e.g. write_then_read).
-    """
+    """Replay one single-session event sequence; return the new trace."""
 
     if not events:
         raise UnreplayableTraceError("trace is empty")
@@ -48,15 +49,12 @@ def replay_session(
         )
 
     goal = events[0].payload.get("goal", "")
-    inputs, decisions = _extract_turns(events)
-    return _drive_loop(goal, inputs, decisions, workspace_root)
+    turns = _extract_turns(events)
+    return _drive_loop(goal, turns, workspace_root)
 
 
-def _extract_turns(
-    events: list[TraceEvent],
-) -> tuple[list[str], list[Decision]]:
-    inputs: list[str] = []
-    decisions: list[Decision] = []
+def _extract_turns(events: list[TraceEvent]) -> list[TurnPlan]:
+    turns: list[TurnPlan] = []
     i = 0
     while i < len(events):
         e = events[i]
@@ -68,21 +66,39 @@ def _extract_turns(
             raise UnreplayableTraceError(
                 f"user_input_received event #{i} missing user_input payload"
             )
-        decision_index = i + 1
-        if decision_index < len(events) and events[decision_index].event_type == "model_call":
-            decision_index += 1
-        if decision_index >= len(events) or events[decision_index].event_type != "decision_made":
+        decisions, next_i = _collect_turn_decisions(events, start=i + 1)
+        if not decisions:
             raise UnreplayableTraceError(
-                f"user_input_received at #{i} not followed by decision_made"
+                f"user_input_received at #{i} not followed by any decision_made"
             )
-        decision = _decision_from_payload(
-            events[decision_index].payload,
-            index=decision_index,
-        )
-        inputs.append(user_input)
-        decisions.append(decision)
-        i = decision_index + 1
-    return inputs, decisions
+        turns.append((user_input, decisions))
+        i = next_i
+    return turns
+
+
+def _collect_turn_decisions(
+    events: list[TraceEvent],
+    start: int,
+) -> tuple[list[Decision], int]:
+    """Collect every ``decision_made`` until the next ``user_input_received``.
+
+    Event types other than ``decision_made`` are skipped (in particular
+    ``step_started`` / ``step_completed`` / ``model_call`` / tool events
+    / ``session_finished``). The function returns the decisions plus the
+    index of the next event to inspect (either the next
+    ``user_input_received`` or ``len(events)``).
+    """
+
+    decisions: list[Decision] = []
+    j = start
+    while j < len(events):
+        et = events[j].event_type
+        if et == "user_input_received":
+            return decisions, j
+        if et == "decision_made":
+            decisions.append(_decision_from_payload(events[j].payload, index=j))
+        j += 1
+    return decisions, j
 
 
 def _decision_from_payload(payload: dict, index: int) -> Decision:
@@ -105,21 +121,19 @@ def _decision_from_payload(payload: dict, index: int) -> Decision:
 
 def _drive_loop(
     goal: str,
-    inputs: list[str],
-    decisions: list[Decision],
+    turns: list[TurnPlan],
     workspace_root: Path | None,
 ) -> list[TraceEvent]:
     if workspace_root is None:
         with tempfile.TemporaryDirectory() as ws:
-            return _run(Path(ws), goal, inputs, decisions)
-    return _run(workspace_root, goal, inputs, decisions)
+            return _run(Path(ws), goal, turns)
+    return _run(workspace_root, goal, turns)
 
 
 def _run(
     workspace: Path,
     goal: str,
-    inputs: list[str],
-    decisions: list[Decision],
+    turns: list[TurnPlan],
 ) -> list[TraceEvent]:
     limits = RuntimeLimits()
     tools = ToolRegistry()
@@ -127,9 +141,11 @@ def _run(
     tools.register(WriteFileTool(workspace, limits=limits))
     tools.register(RunShellSafeTool(workspace, limits=limits))
 
+    flat_decisions: list[Decision] = [d for _, ds in turns for d in ds]
+
     recorder = ReplayTraceRecorder()
     loop = HarnessLoop(
-        model=ReplayModel(decisions=decisions),
+        model=ReplayModel(decisions=flat_decisions),
         policy=DefaultPolicy(workspace_root=workspace),
         sessions=InMemorySessionStore(),
         tools=tools,
@@ -139,6 +155,6 @@ def _run(
     )
 
     session = loop.start(goal=goal)
-    for user_input in inputs:
-        loop.run_turn(session.id, user_input)
+    for user_input, decisions in turns:
+        loop.run_session(session.id, user_input, max_steps=len(decisions))
     return recorder.events
