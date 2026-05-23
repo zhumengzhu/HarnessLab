@@ -24,6 +24,7 @@ from harnesslab.improve import (
 from harnesslab.memory.in_memory import InMemoryMemoryStore
 from harnesslab.memory.sqlite_store import SqliteMemoryStore
 from harnesslab.policy.default_policy import DefaultPolicy
+from harnesslab.providers.deepseek import DeepSeekModel, tool_specs_from_registry
 from harnesslab.replay import (
     UnreplayableTraceError,
     detect_divergence,
@@ -40,6 +41,7 @@ from harnesslab.tools.registry import ToolRegistry
 from harnesslab.tools.shell_tool import RunShellSafeTool
 
 StorageBackend = Literal["memory", "sqlite"]
+ModelBackend = Literal["simple", "deepseek"]
 
 DEFAULT_SQLITE_PATH = ".harnesslab/state.sqlite"
 DEFAULT_TASKS_DIR = "eval/tasks"
@@ -79,6 +81,7 @@ def build_runtime(
     limits: RuntimeLimits | None = None,
     storage_backend: StorageBackend = "memory",
     sqlite_path: Path | None = None,
+    model_backend: ModelBackend = "simple",
 ) -> HarnessLoop:
     limits = limits or RuntimeLimits()
     # Memory store is constructed for parity with the SessionStore but is
@@ -91,7 +94,12 @@ def build_runtime(
     tools.register(WriteFileTool(workspace_root, limits=limits))
     tools.register(RunShellSafeTool(workspace_root, limits=limits))
     trace = JsonlTraceRecorder(workspace_root / ".harnesslab" / "trace.jsonl")
-    model = SimpleModel()
+    if model_backend == "deepseek":
+        model = DeepSeekModel(
+            tool_specs_provider=lambda: tool_specs_from_registry(tools.list()),
+        )
+    else:
+        model = SimpleModel()
     return HarnessLoop(
         model=model,
         policy=policy,
@@ -139,6 +147,15 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "SQLite DB path. Relative paths resolve against --workspace-root. "
             f"Defaults to {DEFAULT_SQLITE_PATH!r} when --storage=sqlite."
+        ),
+    )
+    run.add_argument(
+        "--model",
+        default="simple",
+        choices=["simple", "deepseek"],
+        help=(
+            "Model backend for `run` (default: simple). "
+            "Use `deepseek` to call DeepSeek with DEEPSEEK_API_KEY."
         ),
     )
 
@@ -320,11 +337,16 @@ def main() -> None:
 def _cmd_run(args: argparse.Namespace) -> int:
     workspace_root = Path(args.workspace_root).resolve()
     sqlite_path = Path(args.sqlite_path) if args.sqlite_path else None
-    loop = build_runtime(
-        workspace_root=workspace_root,
-        storage_backend=args.storage,
-        sqlite_path=sqlite_path,
-    )
+    try:
+        loop = build_runtime(
+            workspace_root=workspace_root,
+            storage_backend=args.storage,
+            sqlite_path=sqlite_path,
+            model_backend=args.model,
+        )
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return EXIT_USAGE
     session = loop.start(goal=args.input)
     response = loop.run_turn(session.id, args.input)
     print(response)

@@ -69,6 +69,31 @@ def test_run_subcommand_prints_assistant_reply(
     assert "HarnessLab is ready" in out
 
 
+def test_run_deepseek_without_api_key_returns_usage(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "harnesslab",
+            "run",
+            "hello",
+            "--workspace-root",
+            str(tmp_path),
+            "--model",
+            "deepseek",
+        ],
+    )
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    err = capsys.readouterr().err
+    assert exc.value.code == cli.EXIT_USAGE
+    assert "DEEPSEEK_API_KEY is required" in err
+
+
 # ---------- harnesslab eval ----------
 
 
