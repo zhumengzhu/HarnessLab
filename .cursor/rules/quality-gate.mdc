@@ -1,0 +1,33 @@
+---
+description: Mandatory quality gate before every commit in HarnessLab.
+alwaysApply: true
+---
+
+# HarnessLab Quality Gate
+
+Before creating ANY git commit in this repository, the agent MUST run both:
+
+```bash
+uv run pytest
+uv run ruff check
+```
+
+Only proceed with `git commit` if both succeed. If either fails, fix the
+issue first and re-run the gate.
+
+This is also enforced by the local pre-commit hook
+(`.pre-commit-config.yaml`), but the agent should never rely on the hook
+alone — running the gate explicitly produces clearer error context and
+matches the workflow defined in `AGENTS.md` ("Before completing non-trivial
+changes, run: uv run pytest, uv run ruff check").
+
+## On contract changes
+
+If a change touches any stable Port (`ModelPort`, `PolicyPort`, `ToolPort`,
+`SessionStorePort`, `MemoryStorePort`, `TraceRecorderPort`, `ClockPort`,
+`IdPort`), the same commit MUST also update:
+
+- `docs/architecture/overview.md`
+- `docs/architecture/data-model.md` (if data shape changed)
+- `docs/architecture/tool-runtime.md` (if tool/policy behavior changed)
+- Relevant contract tests under `tests/`

@@ -20,9 +20,17 @@ HarnessLab is a learning-first agent harness project.
 ```bash
 cd /Users/zmz/Github/HarnessLab
 uv sync
+uv run pre-commit install   # one-time: enables local quality-gate hook
 uv run harnesslab "list files in this workspace"
 uv run pytest
 ```
+
+## Quality Gate
+
+Before every commit, both `uv run pytest` and `uv run ruff check` must
+pass. This is enforced by the local pre-commit hook
+(`.pre-commit-config.yaml`) and documented in `.cursor/rules/quality-gate.mdc`
+for AI agents working on the repo.
 
 ## Project Layout
 
