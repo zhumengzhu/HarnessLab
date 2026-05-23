@@ -106,10 +106,66 @@ When behavior changes, keep docs synchronized in the same PR.
 - Do not introduce new dependencies without clear need.
 - Preserve naming consistency across code, docs, and diagrams.
 
+## Proposal Handling
+
+HarnessLab generates improvement proposals via `harnesslab propose`.
+Proposals live under `proposals/` as markdown files with YAML
+front-matter (`id`, `status`, `kind`, `cluster_signature`,
+`occurrences`, `generated_at`, `related_files`).
+
+The following rules are **binding** for every AI agent (including the
+one editing this repo) and every human contributor.
+
+1. **Proposals are advisory.**
+   - AI agents MUST NOT automatically apply a proposal's suggested
+     actions, even when the suggestion looks safe.
+   - AI agents MAY draft a code change that addresses an `open`
+     proposal, but the change is a normal PR and remains subject to
+     the project's standard quality gate.
+
+2. **Status transitions are human-driven.**
+   - A proposal moves from `status: open` to `accepted` only after
+     ALL of:
+     - (a) a human reviewed the proposal and the proposed code change,
+     - (b) `uv run pytest` is green,
+     - (c) `uv run harnesslab eval` shows no baseline regression.
+   - A proposal moves to `rejected` requires a `## Decision` section
+     stating the reason; the cluster_signature stays on file so future
+     `propose` runs do not keep raising the same dead-end suggestion.
+   - A proposal moves to `superseded` requires a link to the
+     replacement proposal id in the body.
+
+3. **Commit hygiene.**
+   - When a commit addresses an open proposal, the commit message
+     SHOULD reference the proposal id (e.g.
+     `Addresses prop_2026_05_23_a3f2c1`).
+   - The proposal file's `status:` SHOULD be updated to `accepted` in
+     the same commit (or the immediately following commit when split).
+   - Never edit a proposal's `cluster_signature`, `occurrences`, or
+     `generated_at` by hand; those reflect the input data and are
+     diagnostic, not policy.
+
+4. **Generator behavior is stable.**
+   - Default `--min-occurrences` is 2. Single events do not warrant a
+     proposal.
+   - Identical `cluster_signature` is deduped against any `open`
+     proposal on disk; `accepted` / `rejected` / `superseded` proposals
+     do not block re-emission so recurring problems stay surfaced.
+   - The proposal id is `prop_<YYYYMMDDhhmm>_<sha1(signature)[:8]>`,
+     stable for a given (signature, generated_at minute).
+
+5. **No LLM in the proposal pipeline.**
+   - `suggested_actions` come from hand-written templates keyed by
+     cluster kind (`src/harnesslab/improve/templates.py`).
+   - Do not wire an LLM call into the proposal generator without first
+     updating this section, `docs/architecture/overview.md` Improvement
+     Loop, and the Non-Goals in the same change.
+
 ## Prohibited Practices
 
 - Hidden side effects in core loop logic
 - Direct infrastructure calls that bypass adapters/contracts
 - Untested behavior changes in policy or tool runtime
 - Silent changes to data model fields without doc updates
+- Auto-applying improvement proposals (see "Proposal Handling" above)
 

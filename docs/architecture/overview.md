@@ -67,6 +67,10 @@ flowchart TD
 8. `replay`
    - Trace reader, deterministic session replayer, divergence detector
    - `harnesslab replay` / `harnesslab metrics` CLI subcommands
+9. `improve`
+   - Failure fingerprinting, clustering, advisory proposal generation
+   - `harnesslab propose` CLI subcommand; proposals committed under
+     `proposals/` with explicit accept/reject lifecycle
 
 ## Runtime Flow (Single Turn)
 
@@ -191,6 +195,52 @@ Unreplayable traces raise `UnreplayableTraceError` early: missing
 `decision_made`, or a `decision_made` payload that fails to validate as
 a `Decision`. The CLI surfaces this as exit code 2.
 
+## Improvement Loop (Step 6)
+
+The proposal generator mines failures from two sources and turns
+recurring clusters into advisory markdown files. Nothing is ever
+applied automatically; humans review and accept each proposal under
+the gate of `harnesslab eval` + `pytest`.
+
+```mermaid
+flowchart TD
+    Trace[trace.jsonl] --> Fingerprint
+    EvalReport[eval/reports/latest.json] --> Fingerprint
+    Fingerprint --> Cluster[build_clusters --min-occurrences=N]
+    Cluster --> Generator[generate -> Proposal]
+    Generator --> Dedupe[dedupe_against_existing open proposals]
+    Dedupe --> Render[markdown with YAML front-matter]
+    Render --> ProposalsDir[proposals/prop_*.md status=open]
+    ProposalsDir --> HumanReview{Human review}
+    HumanReview -->|accept| Gate[uv run harnesslab eval + pytest]
+    Gate -->|green| Accepted[status: accepted]
+    HumanReview -->|reject| Rejected[status: rejected with reason]
+```
+
+Failure signal sources and their fingerprint shapes:
+
+| Source | Trigger | Fingerprint |
+| --- | --- | --- |
+| trace | `tool_executed.ok=false` | `tool_executed:<tool>:<short_error>` |
+| trace | `tool_denied` | `tool_denied:<tool>:<short_reason>` |
+| trace | `tool_invalid_args` | `tool_invalid_args:<tool>:<short_error>` |
+| eval report | `TaskResult.passed=false` | `eval:<task_name>:<short_failure>` |
+
+`replay` divergences are intentionally **not** failure signals;
+divergence may reflect IO state changes (workspace contents) rather
+than loop misbehavior. If a divergence reflects a real regression the
+right place to encode it is a new eval task.
+
+Suggested-action text is generated from hand-written templates keyed
+by cluster `kind`. The project does not call an LLM here:
+
+- It would add a network and credential dependency that the rest of
+  the runtime carefully avoids.
+- It would obscure the contract that proposals are deterministic
+  artifacts of `(trace, eval_report)` plus version-pinned templates.
+- It would muddy the AGENTS.md guarantee that proposals are advisory
+  and never self-modify the codebase.
+
 ## Planned Evolution
 
 1. Replace in-memory stores with SQLite-backed stores — DONE (Step 3)
@@ -198,4 +248,5 @@ a `Decision`. The CLI surfaces this as exit code 2.
 3. Add evaluation task sets and baseline diffing — DONE (Step 4)
 4. Introduce metrics dashboards or reports — partial (Step 5: CLI
    aggregation; dashboards remain future work)
-5. Add guarded self-improvement proposal pipeline — Step 6
+5. Add guarded self-improvement proposal pipeline — DONE (Step 6,
+   advisory-only by AGENTS.md contract)

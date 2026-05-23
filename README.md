@@ -25,7 +25,7 @@ uv run harnesslab run "list files in this workspace"
 uv run pytest
 ```
 
-The CLI exposes four subcommands:
+The CLI exposes five subcommands:
 
 - `harnesslab run <input>` — run one turn of the loop.
 - `harnesslab eval` — run the YAML eval suite.
@@ -33,6 +33,8 @@ The CLI exposes four subcommands:
   report any divergence.
 - `harnesslab metrics <trace.jsonl>` — aggregate counts and latency
   from a recorded trace.
+- `harnesslab propose` — turn recurring failure clusters in traces
+  and eval runs into advisory improvement proposals.
 
 Run `harnesslab --help` for the full surface.
 
@@ -128,6 +130,49 @@ and tool output text (`output_preview`, `output_size`,
 loop behavior. Everything else — the sequence of event types, the
 tool name and args, the policy decision, the `ok` / `error` outcome —
 must match.
+
+### Improvement Proposals
+
+When recurring failures show up in real traces or eval runs,
+`harnesslab propose` turns them into advisory markdown proposals in
+`proposals/`. Proposals are **never applied automatically**; see
+`AGENTS.md` "Proposal Handling" for the binding contract.
+
+```bash
+# Mine a production trace for failure clusters.
+uv run harnesslab propose --trace .harnesslab/trace.jsonl
+
+# Combine trace + eval failures, write into a custom dir.
+uv run harnesslab propose \
+    --trace .harnesslab/trace.jsonl \
+    --eval-report eval/reports/latest.json \
+    --out proposals/
+
+# Single events do not warrant a proposal. Default min-occurrences is 2.
+uv run harnesslab propose --trace .harnesslab/trace.jsonl --min-occurrences 3
+
+# Non-destructive preview (JSON to stdout, no files written).
+uv run harnesslab propose --trace .harnesslab/trace.jsonl --format json
+```
+
+Each proposal file (`prop_<YYYYMMDDhhmm>_<sig8>.md`) has YAML
+front-matter (id, status, kind, cluster_signature, occurrences,
+generated_at, related_files) plus body sections including an
+**Acceptance checklist** that requires:
+
+- Human review
+- `uv run pytest` green
+- `uv run harnesslab eval` showing no baseline regression
+- A new or updated test if code changed
+
+The generator dedupes against any signature with an `open` proposal
+on disk, so re-running `propose` is safe and idempotent. To clear a
+proposal, edit its front-matter `status` to `accepted` / `rejected` /
+`superseded` in a reviewed commit.
+
+`harnesslab propose` always exits 0 — it is a discovery tool, not a
+gate. The gate is `harnesslab eval`, enforced by the checklist on
+every proposal.
 
 ## Quality Gate
 

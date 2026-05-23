@@ -235,14 +235,47 @@ Stable interfaces reduce migration risk from Python to TypeScript.
   end-to-end through the CLI on real JSONL written by the production
   loop (`tests/test_cli_replay_metrics.py::test_replay_with_shared_workspace_round_trips_across_sessions`).
 
-### Step 6 — Guarded Improvement Proposals
+### Step 6 — Guarded Improvement Proposals — DONE
 - **Entry**: Step 5 exit criteria met.
 - **Deliverables**:
-  - Failed-run clustering
-  - Proposal generation (human-readable suggestions; no autonomous code
-    edits)
-  - Regression gate + rollback playbook
-- **Exit**: proposals are produced from real failure clusters; every
-  proposal is gated by the Step 4 regression runner before any merge.
-  Consistent with the project's Non-Goal of "fully automated self-modifying
-  code paths".
+  - Failed-run clustering — DONE
+    (`src/harnesslab/improve/{fingerprint,cluster}.py`). Failure
+    signals are mined from two sources: `tool_executed(ok=false)` /
+    `tool_denied` / `tool_invalid_args` events in JSONL traces, and
+    `failures` arrays from `eval/reports/latest.json`. Each is reduced
+    to a compact, human-readable signature
+    (e.g. `tool_denied:run_shell_safe:command not in allowlist`) and
+    grouped; clusters below `--min-occurrences` (default 2) are
+    dropped so single events do not warrant a proposal.
+  - Proposal generation — DONE
+    (`src/harnesslab/improve/{proposal,templates,generator,render}.py`).
+    `Proposal` is a Pydantic model with `status` (`open` | `accepted`
+    | `rejected` | `superseded`) and a stable id
+    (`prop_<YYYYMMDDhhmm>_<sha1(sig)[:8]>`). Suggested actions are
+    generated from hand-written templates keyed by cluster kind — no
+    LLM call, consistent with the Non-Goal of "fully automated
+    self-modifying code paths". Markdown rendering writes YAML
+    front-matter (machine-readable) plus body sections (Cluster,
+    Sample events, Sample task failures, Suggested actions,
+    Acceptance checklist) targeted at humans.
+  - Regression gate + rollback playbook — DONE. Every proposal's
+    "Acceptance checklist" literally names `uv run harnesslab eval`
+    and `uv run pytest`, so acceptance binds the Step 4 regression
+    runner into the Step 6 workflow. `AGENTS.md` "Proposal Handling"
+    pins the binding contract: proposals are advisory, AI must not
+    auto-apply, status moves require all four checklist items.
+    Rollback is by design — proposals are never auto-applied, so
+    "undo" is just `git revert` of the accepting commit (proposal
+    file then needs its status edited back to `open`).
+  - CLI — DONE. `harnesslab propose [--trace TRACE]
+    [--eval-report REPORT] [--out proposals/] [--min-occurrences N]
+    [--format md|json]`. Idempotent across reruns via
+    `dedupe_against_existing` against on-disk `open` proposals.
+- **Exit**: shipped fixture trace
+  (`tests/fixtures/sample_failure_trace.jsonl`) yields exactly the
+  expected two proposals (`tests/test_improve.py::test_generate_against_shipped_fixture`);
+  rerun on the same input yields zero new proposals
+  (`tests/test_cli_propose.py::test_propose_md_is_idempotent_across_runs`);
+  every shipped proposal's Acceptance checklist requires
+  `uv run harnesslab eval`, satisfying the "gated by the Step 4
+  regression runner" Exit criterion.
