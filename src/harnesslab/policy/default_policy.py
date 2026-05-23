@@ -7,7 +7,55 @@ from harnesslab.core.models import ToolCall
 
 SHELL_METACHARS: frozenset[str] = frozenset("&|;<>`$()\n\r")
 
-DEFAULT_SHELL_ALLOWLIST: frozenset[str] = frozenset({"ls", "pwd", "echo", "cat"})
+# Commands the agent is permitted to invoke through ``run_shell_safe``.
+#
+# Scope: this allowlist defends against the agent issuing a single
+# obviously-destructive command directly. It does NOT promise that
+# ``python``/``pytest``/``uv run`` invocations cannot run arbitrary
+# code — a malicious or buggy script can. The workspace sandbox
+# (``cwd``) and the file tools' path checks remain the primary
+# defenses for that. Add commands here only when they are clearly
+# read-only or scoped to the workspace.
+DEFAULT_SHELL_ALLOWLIST: frozenset[str] = frozenset(
+    {
+        # Original Phase 1 minimum.
+        "ls",
+        "pwd",
+        "echo",
+        "cat",
+        # File inspection.
+        "head",
+        "tail",
+        "wc",
+        "file",
+        "du",
+        "df",
+        "stat",
+        # Discovery / introspection.
+        "which",
+        "env",
+        "date",
+        "whoami",
+        "hostname",
+        "uname",
+        # Search and tree (the grep/glob tools cover this too, but
+        # models sometimes reach for the shell out of habit).
+        "find",
+        "tree",
+        # Dev tooling (Python-first stack).
+        "python",
+        "python3",
+        "pytest",
+        "ruff",
+        "mypy",
+        "uv",
+        # Git is special-cased: only the read-only subcommands in
+        # SAFE_GIT_SUBCOMMANDS are accepted; everything else
+        # (push/reset/clean/checkout/…) is denied even though the
+        # head ``git`` appears here.
+        "git",
+    }
+)
 
 DEFAULT_SHELL_DENYLIST: frozenset[str] = frozenset(
     {
@@ -27,6 +75,30 @@ DEFAULT_SHELL_DENYLIST: frozenset[str] = frozenset(
         "reboot",
         "scp",
         "ssh",
+    }
+)
+
+# When the head argv is ``git``, the second argv must be in this set.
+# Subcommands that mutate history, remotes, or the working tree
+# (``push``, ``reset``, ``checkout``, ``clean``, ``rebase``, ``stash``
+# write paths, etc.) are intentionally absent so the policy rejects
+# them even though ``git`` is in the allowlist.
+SAFE_GIT_SUBCOMMANDS: frozenset[str] = frozenset(
+    {
+        "status",
+        "log",
+        "diff",
+        "show",
+        "branch",
+        "remote",
+        "ls-files",
+        "ls-tree",
+        "rev-parse",
+        "describe",
+        "tag",
+        "blame",
+        "shortlog",
+        "config",
     }
 )
 
@@ -107,4 +179,19 @@ class DefaultPolicy:
             return False, f"command '{head}' is on the denylist"
         if head not in self._shell_allowlist:
             return False, f"command '{head}' not in allowlist"
+        if head == "git":
+            return self._check_git_argv(argv)
+        return True, "ok"
+
+    @staticmethod
+    def _check_git_argv(argv: list[str]) -> tuple[bool, str]:
+        if len(argv) < 2:
+            return False, "git requires a subcommand"
+        sub = argv[1]
+        if sub not in SAFE_GIT_SUBCOMMANDS:
+            return (
+                False,
+                f"git subcommand '{sub}' not allowed "
+                f"(safe set: {', '.join(sorted(SAFE_GIT_SUBCOMMANDS))})",
+            )
         return True, "ok"
