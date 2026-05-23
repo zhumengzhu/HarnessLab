@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 from pathlib import Path
 from typing import Literal
@@ -18,8 +19,16 @@ from harnesslab.eval.task import TaskSuite
 from harnesslab.memory.in_memory import InMemoryMemoryStore
 from harnesslab.memory.sqlite_store import SqliteMemoryStore
 from harnesslab.policy.default_policy import DefaultPolicy
+from harnesslab.replay import (
+    UnreplayableTraceError,
+    detect_divergence,
+    group_by_session,
+    read_trace,
+    replay_session,
+)
 from harnesslab.session.in_memory import InMemorySessionStore
 from harnesslab.session.sqlite_store import SqliteSessionStore
+from harnesslab.telemetry.aggregate import aggregate, render_metrics
 from harnesslab.telemetry.jsonl_recorder import JsonlTraceRecorder
 from harnesslab.tools.file_tools import ReadFileTool, WriteFileTool
 from harnesslab.tools.registry import ToolRegistry
@@ -32,11 +41,13 @@ DEFAULT_TASKS_DIR = "eval/tasks"
 DEFAULT_BASELINE_PATH = "eval/baseline.json"
 DEFAULT_REPORTS_DIR = "eval/reports"
 
-SUBCOMMANDS = ("run", "eval")
+SUBCOMMANDS = ("run", "eval", "replay", "metrics")
 
 EXIT_OK = 0
+EXIT_UNREPLAYABLE = 2
 EXIT_TASK_FAILED = 2
 EXIT_REGRESSED = 3
+EXIT_DIVERGED = 4
 EXIT_USAGE = 64
 
 
@@ -158,6 +169,51 @@ def _build_parser() -> argparse.ArgumentParser:
         default=DEFAULT_REPORTS_DIR,
         help=f"Where to write JSON reports (default: {DEFAULT_REPORTS_DIR}).",
     )
+
+    # ----- replay -----
+    rp = sub.add_parser(
+        "replay",
+        help="Replay a JSONL trace and report any divergence.",
+        description=(
+            "Re-drive the recorded loop using ReplayModel + FrozenClock "
+            "and compare the new trace to the original."
+        ),
+    )
+    rp.add_argument("trace", help="Path to a JSONL trace file.")
+    rp.add_argument(
+        "--session-id",
+        default=None,
+        help="Replay only this session id (default: replay every session in order).",
+    )
+    rp.add_argument(
+        "--workspace",
+        default=None,
+        help=(
+            "Workspace root to use during replay (default: a fresh tmp dir). "
+            "Pass the original workspace when tools depend on filesystem "
+            "state written by earlier sessions."
+        ),
+    )
+    rp.add_argument(
+        "--strict",
+        action="store_true",
+        help=(
+            "Compare byte-for-byte instead of the semantic default "
+            "(ignore timestamps, normalize ids, ignore tool output text)."
+        ),
+    )
+
+    # ----- metrics -----
+    mt = sub.add_parser(
+        "metrics",
+        help="Aggregate counts and latency from a JSONL trace.",
+    )
+    mt.add_argument("trace", help="Path to a JSONL trace file.")
+    mt.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON instead of the human summary.",
+    )
     return parser
 
 
@@ -190,6 +246,10 @@ def main() -> None:
         sys.exit(_cmd_run(args))
     if args.command == "eval":
         sys.exit(_cmd_eval(args))
+    if args.command == "replay":
+        sys.exit(_cmd_replay(args))
+    if args.command == "metrics":
+        sys.exit(_cmd_metrics(args))
 
     parser.print_help(sys.stderr)
     sys.exit(EXIT_USAGE)
@@ -247,6 +307,62 @@ def _load_suite_or_single(tasks_dir: Path, task_stem: str | None) -> TaskSuite:
     if not task_path.exists():
         raise SystemExit(f"task file not found: {task_path}")
     return TaskSuite(tasks=[load_task(task_path)])
+
+
+def _cmd_replay(args: argparse.Namespace) -> int:
+    trace_path = Path(args.trace)
+    if not trace_path.exists():
+        raise SystemExit(f"trace file not found: {trace_path}")
+    try:
+        events = read_trace(trace_path)
+    except json.JSONDecodeError as exc:
+        print(f"invalid JSONL trace: {exc}", file=sys.stderr)
+        return EXIT_UNREPLAYABLE
+
+    grouped = group_by_session(events)
+    if args.session_id is not None:
+        if args.session_id not in grouped:
+            print(
+                f"session id {args.session_id!r} not found in trace "
+                f"(present: {list(grouped.keys())})",
+                file=sys.stderr,
+            )
+            return EXIT_UNREPLAYABLE
+        grouped = {args.session_id: grouped[args.session_id]}
+
+    workspace_root = Path(args.workspace).resolve() if args.workspace else None
+
+    any_divergence = False
+    for sid, session_events in grouped.items():
+        try:
+            replayed = replay_session(session_events, workspace_root=workspace_root)
+        except UnreplayableTraceError as exc:
+            print(f"[{sid}] unreplayable: {exc}", file=sys.stderr)
+            return EXIT_UNREPLAYABLE
+        report = detect_divergence(session_events, replayed, strict=args.strict)
+        print(f"[{sid}] {report.render()}")
+        if not report.matched:
+            any_divergence = True
+
+    return EXIT_DIVERGED if any_divergence else EXIT_OK
+
+
+def _cmd_metrics(args: argparse.Namespace) -> int:
+    trace_path = Path(args.trace)
+    if not trace_path.exists():
+        raise SystemExit(f"trace file not found: {trace_path}")
+    try:
+        events = read_trace(trace_path)
+    except json.JSONDecodeError as exc:
+        print(f"invalid JSONL trace: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+
+    metrics = aggregate(events)
+    if args.json:
+        print(json.dumps(metrics.model_dump(mode="json"), indent=2))
+    else:
+        print(render_metrics(metrics))
+    return EXIT_OK
 
 
 if __name__ == "__main__":
