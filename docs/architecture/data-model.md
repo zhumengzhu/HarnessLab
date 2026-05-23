@@ -20,7 +20,11 @@ erDiagram
       string goal
       string status
       int turn_count
+      int step_count
       datetime created_at
+      datetime last_step_at
+      string parent_session_id
+      string title
     }
     MESSAGE {
       string id
@@ -68,16 +72,33 @@ Diagram style and naming rules are defined in
 
 ## Session
 
-Represents a conversational run context.
+Represents a conversational run context. Phase 2.3 makes
+Session a first-class persisted entity with explicit lifecycle.
 
-Suggested fields:
+Fields:
 
 - `id`: unique session ID
 - `goal`: high-level user objective
-- `status`: `running | done | failed`
-- `turn_count`: number of processed turns
+- `status`: `pending | running | waiting_user | done | failed | aborted`
+  - `pending`: created but no turn executed yet
+  - `running`: inner loop is mid-flight, or hit `max_steps`
+    without a terminal decision
+  - `waiting_user`: model returned `Decision.kind == "ask_user"`
+  - `done`: model returned `Decision.kind == "final"`
+  - `failed` / `aborted`: reserved for runtime/operator failure
+    paths
+- `turn_count`: number of user inputs processed
+- `step_count`: number of inner-loop iterations executed across
+  all turns (Phase 2.1)
 - `messages`: ordered message timeline
 - `created_at`: creation timestamp
+- `last_step_at`: timestamp of the most recent inner step (None
+  until the first step runs)
+- `parent_session_id`: when this session was created via
+  `loop.fork(parent_id, ...)`, points to the parent (None
+  otherwise)
+- `title`: short human label derived from the goal at `start()`
+  time and used by `harnesslab session ls`
 
 ## Message
 
@@ -143,17 +164,42 @@ shapes are what `harnesslab metrics` aggregates.
 | --- | --- |
 | `session_started` | `goal: str` |
 | `user_input_received` | `turn_index: int`, `user_input: str` |
-| `model_call` | `decision_kind`, `latency_ms`, optional: `model_name`, `provider`, `request_tokens`, `response_tokens`, `total_tokens` |
-| `decision_made` | `kind: "assistant" \| "tool"`, `tool_name: str \| null`, `tool_args: dict`, `assistant_message: str \| null` |
+| `step_started` | `step_index: int`, `reason: "initial" \| "after_<prev_outcome>"` |
+| `model_call` | `decision_kind`, `latency_ms`, `context: ContextSnapshot`, optional: `model_name`, `provider`, `request_tokens`, `response_tokens`, `total_tokens` |
+| `decision_made` | `kind: "assistant" \| "tool" \| "final" \| "ask_user"`, `tool_name: str \| null`, `tool_args: dict`, `assistant_message: str \| null` |
 | `tool_invalid_args` | `tool_call_id`, `tool`, `args`, `error` |
 | `tool_denied` | `tool_call_id`, `tool`, `args`, `policy_decision`, `reason` |
 | `tool_executed` | `tool_call_id`, `tool`, `args`, `policy_decision`, `started_at`, `ended_at`, `duration_ms`, `ok`, `error`, `output_size`, `output_preview`, `output_truncated` |
+| `step_completed` | `step_index: int`, `outcome: "final" \| "ask_user" \| "assistant" \| "tool_ok" \| "tool_error" \| "tool_denied" \| "tool_invalid_args"` |
+| `compaction_started` | `trigger: "threshold" \| "overflow"`, `before_messages: int`, `before_tokens: int`, `keep_last: int` |
+| `compaction_completed` | `after_messages: int`, `after_tokens: int` |
+| `session_finished` | `reason: "final" \| "ask_user" \| "max_steps" \| "overflow"`, `steps: int` |
 
 `tool_executed`'s `output_*` fields, model telemetry fields
-(`model_name`, `provider`, token counters), and timing fields
-(`created_at`, `started_at`, `ended_at`, `duration_ms`, `latency_ms`)
-are considered "volatile" by the divergence detector (see
+(`model_name`, `provider`, token counters), timing fields
+(`created_at`, `started_at`, `ended_at`, `duration_ms`,
+`latency_ms`), and the Phase 2.6 `context` snapshot are considered
+"volatile" by the divergence detector (see
 `docs/architecture/overview.md`, Replay & Divergence Model).
+`context` is volatile because token estimates depend on tool
+outputs that embed workspace paths.
+
+### ContextSnapshot payload shape (Phase 2.6)
+
+Attached to every `model_call.payload.context`:
+
+| Field | Source |
+| --- | --- |
+| `conversation_tokens` | `estimate_messages_tokens(session.messages)` |
+| `message_count` | `len(session.messages)` |
+| `limit_tokens` | `RuntimeLimits.context_window_tokens` |
+| `compaction_threshold_tokens` | `RuntimeLimits.compaction_threshold_tokens` |
+| `usage_ratio` | `conversation_tokens / limit_tokens` |
+| `threshold_ratio` | `conversation_tokens / compaction_threshold_tokens` |
+| `prompt_tokens_estimate` | optional, adapter-supplied total of composed prompt blocks |
+| `static_block_tokens` | optional, adapter-supplied |
+| `dynamic_block_tokens` | optional, adapter-supplied |
+| `prompt_block_names` | optional, ordered list of prompt block names |
 
 ## MemoryRecord (Planned)
 
@@ -191,6 +237,7 @@ CREATE TABLE schema_version (
     applied_at TEXT NOT NULL
 );
 
+-- v1
 CREATE TABLE sessions (
     id TEXT PRIMARY KEY,
     goal TEXT NOT NULL,
@@ -198,6 +245,14 @@ CREATE TABLE sessions (
     turn_count INTEGER NOT NULL,
     created_at TEXT NOT NULL
 );
+-- v2 (Phase 2.3 — session as first-class citizen)
+ALTER TABLE sessions ADD COLUMN step_count INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE sessions ADD COLUMN last_step_at TEXT;
+ALTER TABLE sessions ADD COLUMN parent_session_id TEXT
+    REFERENCES sessions(id) ON DELETE SET NULL;
+ALTER TABLE sessions ADD COLUMN title TEXT;
+CREATE INDEX idx_sessions_status_created ON sessions(status, created_at DESC);
+CREATE INDEX idx_sessions_parent ON sessions(parent_session_id);
 
 CREATE TABLE messages (
     id TEXT PRIMARY KEY,

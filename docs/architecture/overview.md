@@ -74,18 +74,55 @@ flowchart TD
 10. `providers`
    - External `ModelPort` adapters (e.g. DeepSeek)
    - Runtime-selectable backend for `harnesslab run --model ...`
+11. `core/prompt` (Phase 2.2)
+   - File-loaded static blocks + factory-built dynamic blocks
+   - `PromptComposer` assembles `(static, dynamic, conversation)`
+     into a `ComposedPrompt` consumed by real providers
+12. `core/compaction` (Phase 2.4)
+   - Token estimator, threshold check, message-history compactor
+   - `LiveSummarizer` (opt-in LLM summary) + `ModelOverflowError`
+     contract between adapters and the loop
+13. `core/context` (Phase 2.6)
+   - `ContextSnapshot` published on every `model_call` event;
+     surfaced through `harnesslab context` and `harnesslab metrics`
 
-## Runtime Flow (Single Turn)
+## Runtime Flow (Multi-step Session — Phase 2.1)
 
-1. Receive user input
-2. Append a user message to the session
-3. Model decides:
-   - assistant response, or
-   - tool invocation
-4. Policy validates the tool call
-5. Tool executes (or is denied)
-6. Result is recorded to session + trace
-7. Assistant-visible output is returned
+`run_session(session_id, user_input, max_steps=N)` drives the
+inner agent loop. Each iteration emits `step_started`, calls the
+model, applies the decision, and emits `step_completed`. The loop
+exits on a terminal decision (`Decision.kind ∈ {final, ask_user}`)
+or when `max_steps` is reached.
+
+1. `start(goal=...)` opens the session and derives a short
+   `title` from the goal.
+2. `run_session` appends the user message, then enters the inner
+   loop:
+   - `_maybe_compact` runs against the session message list. When
+     `should_compact(messages, threshold) == True`, emit
+     `compaction_started(trigger=threshold)`, summarize older
+     messages, emit `compaction_completed`.
+   - `_call_model_with_overflow` calls the model. On
+     `ModelOverflowError`, emit
+     `compaction_started(trigger=overflow)`, compact more
+     aggressively (`keep_last = max(1, configured // 2)`), and
+     retry the call once.
+   - The model returns a `Decision` (`assistant | tool | final |
+     ask_user`).
+   - For `tool`, policy validates; if allowed, the tool runs and
+     a tool result message is appended. The next inner step then
+     runs with empty `user_input`.
+   - For `assistant`, the assistant text is appended and the loop
+     continues.
+   - For `final` / `ask_user`, the loop exits.
+3. `session_finished` is recorded with the terminal reason
+   (`final | ask_user | max_steps`).
+4. `session.status` is updated (`done | waiting_user | running`)
+   and persisted.
+
+The single-turn `run_turn(session_id, user_input)` is a
+`run_session(..., max_steps=1)` wrapper kept for backward
+compatibility.
 
 ```mermaid
 sequenceDiagram
@@ -159,7 +196,29 @@ should be replaceable behind these contracts.
   `assistant_message`) is sufficient to rebuild a `ReplayModel` without
   consulting the original Session or model
 - Model invocation is now auditable via `model_call` trace events
-  (decision kind, latency, and optional token counters/provider meta)
+  (decision kind, latency, optional token counters/provider meta, and
+  a `ContextSnapshot`)
+- The agent loop is autonomous (Phase 2.1): the model decides when to
+  stop (`Decision.kind ∈ {final, ask_user}`); the loop never returns
+  to the user mid-task on its own — only on a terminal decision or
+  when `max_steps` is hit
+- Prompts are composed, not hardcoded (Phase 2.2): the static system
+  prompt is a sequence of versioned markdown blocks loaded at import
+  time; dynamic blocks (`env`, `agents_md`, `tool_guide`) are
+  contributed per-call by the runtime; provider adapters render the
+  composer's output rather than carrying their own template
+- Sessions are persistent first-class entities (Phase 2.3):
+  `status`, `step_count`, `last_step_at`, `parent_session_id`, and
+  `title` are part of the contract; `harnesslab session ls/show/
+  resume/fork` are the user-facing surface
+- Context windows are managed by the loop, not the model (Phase 2.4):
+  a token threshold triggers compaction before each call, and a
+  `ModelOverflowError` from the adapter triggers emergency compaction
+  with a retry. Summarization defaults to a deterministic fallback;
+  `LiveSummarizer` is an opt-in LLM-backed wrapper
+- Context usage is observable per-call (Phase 2.6): every `model_call`
+  carries a `ContextSnapshot`, and `harnesslab context show/series`
+  surfaces it without requiring trace replay
 
 ## Replay & Divergence Model (Step 5)
 
@@ -263,12 +322,101 @@ This split keeps deterministic quality gates intact:
 - `eval`, `replay`, and contract tests continue to rely on deterministic
   clocks/ids/models so baseline and divergence behavior stay stable.
 
+## Prompt Composer (Phase 2.2)
+
+`core/prompt/composer.py` assembles a `ComposedPrompt` per model
+call. The composer concatenates three layers:
+
+1. **Static blocks** — markdown files under
+   `core/prompt/blocks/` loaded at import time
+   (`00_identity.md`, `01_harness.md`, `02_safety.md`,
+   `03_style.md`, `04_engineering.md`). Their order is fixed by
+   filename prefix. `${variable}` placeholders (e.g.
+   `${model_name}`) are substituted at build time.
+2. **Dynamic blocks** — per-call factories in
+   `core/prompt/dynamic.py`:
+   - `build_env_block(workspace_root)` — CWD, platform, date,
+     optional git summary.
+   - `build_agents_md_block(workspace_root)` — folds `AGENTS.md`
+     into the prompt when present.
+   - `build_tool_guide_block(registry)` — lists the live tool
+     surface so the model sees what is registered today, not what
+     was registered when a static prompt was written.
+3. **Conversation blocks** — derived from `session.messages` and
+   role-tagged for the provider's chat format.
+
+`ComposedPrompt.as_openai_messages()` collapses adjacent system
+blocks into a single OpenAI-shaped message; `as_text()` returns
+the flat string used by adapters that want a single prompt;
+`snapshot()` returns the ordered block names for introspection.
+
+`DeepSeekModel` consumes the composer directly: each call passes
+the live session, the dynamic blocks provider (wired by
+`cli.build_runtime`), and the `model_name` variable. The adapter
+also exposes prompt-side token estimates through
+`last_call_meta()` for the Phase 2.6 `ContextSnapshot`.
+
+## Compaction (Phase 2.4)
+
+`core/compaction.py` is the loop's defence against context-window
+pressure. Two trigger paths feed into the same code path:
+
+- **Threshold trigger.** Before each model call, the loop runs
+  `should_compact(messages, threshold_tokens)`. When
+  `estimate_messages_tokens(messages) > threshold`, the loop
+  emits `compaction_started(trigger=threshold)`, calls
+  `compact_messages(messages, keep_last=K, summarizer=…)`,
+  and emits `compaction_completed` with the resulting message
+  count and token estimate.
+- **Overflow trigger.** Adapters raise `ModelOverflowError`
+  when the provider rejects a request because the context window
+  is full. `_call_model_with_overflow` catches it, runs an
+  emergency compaction (`keep_last = max(1, configured // 2)`,
+  trigger=`overflow`), retries the model call once, and falls back
+  to a terminal `final` decision with an explanatory message if
+  the second attempt also overflows.
+
+Summarization is pluggable. The default `_fallback_summarizer` is
+deterministic and LLM-free (good for tests, eval, and offline
+workflows). `LiveSummarizer(model)` sends a summarization prompt
+to a `ModelPort` and returns its assistant text fenced in
+`<system-reminder>` tags; on empty model output it falls back to
+the deterministic summary so compaction always succeeds.
+
+## Context Observability (Phase 2.6)
+
+Every `model_call` event carries a `ContextSnapshot` produced by
+`core/context.py`:
+
+- **Loop-side fields** (always present): `conversation_tokens`,
+  `message_count`, `limit_tokens`,
+  `compaction_threshold_tokens`, `usage_ratio`,
+  `threshold_ratio`.
+- **Adapter-side fields** (optional, populated when the model
+  exposes them through `last_call_meta()`):
+  `prompt_tokens_estimate`, `static_block_tokens`,
+  `dynamic_block_tokens`, `prompt_block_names`.
+
+`Metrics` aggregates `max_conversation_tokens`,
+`peak_usage_ratio`, `compactions`, and `overflow_recoveries`
+across a trace; `harnesslab context show/series` surfaces the
+per-call snapshots without needing to replay. The divergence
+detector treats the `context` field as informational (token
+estimates depend on tool outputs that embed workspace paths), so
+adding `ContextSnapshot` did not break eval/replay round-trips.
+
 ## Planned Evolution
 
 1. Replace in-memory stores with SQLite-backed stores — DONE (Step 3)
 2. Add deterministic replay from traces — DONE (Step 5)
 3. Add evaluation task sets and baseline diffing — DONE (Step 4)
-4. Introduce metrics dashboards or reports — partial (Step 5: CLI
-   aggregation; dashboards remain future work)
+4. Introduce metrics dashboards or reports — partial (Step 5 CLI
+   aggregation plus Phase 2.6 `harnesslab context`; static HTML
+   dashboards remain deferred — see `docs/roadmap.md`)
 5. Add guarded self-improvement proposal pipeline — DONE (Step 6,
    advisory-only by AGENTS.md contract)
+6. Real autonomous agent loop with prompt composer, persistent
+   sessions, auto compaction, and context observability — DONE
+   (Phase 2.1–2.6)
+7. Memory retrieval/writeback policy on top of the session
+   substrate — deferred (see `docs/roadmap.md` "Deferred")

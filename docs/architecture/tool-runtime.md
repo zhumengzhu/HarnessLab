@@ -70,16 +70,44 @@ Responsibilities:
 
 Current checks:
 
-- `read_file` and `write_file`: path must resolve inside workspace root
+- `read_file` / `write_file` / `edit_file`: path must resolve
+  inside workspace root (`_check_path`).
+- `grep` / `glob`: path is optional; when provided, must resolve
+  inside workspace root (`_check_optional_path`).
 - `run_shell_safe`: command must contain no shell metacharacters
-  (`& | ; < > \` $ ( ) \n \r`); after `shlex` parsing, `argv[0]` must not be
-  on the denylist (`rm`, `sudo`, `curl`, `wget`, `dd`, `mkfs`, `mount`,
-  `umount`, `chmod`, `chown`, `kill`, `killall`, `shutdown`, `reboot`,
-  `scp`, `ssh`), and must appear in the allowlist
-  (`ls`, `pwd`, `echo`, `cat` by default).
+  (`& | ; < > \` $ ( ) \n \r`); after `shlex` parsing, `argv[0]`
+  must not be on the denylist (`rm`, `sudo`, `curl`, `wget`,
+  `dd`, `mkfs`, `mount`, `umount`, `chmod`, `chown`, `kill`,
+  `killall`, `shutdown`, `reboot`, `scp`, `ssh`), and must appear
+  in the allowlist. The Phase 2.5 allowlist is intentionally
+  wide enough for everyday read-only inspection:
+  - File inspection: `ls`, `pwd`, `echo`, `cat`, `head`, `tail`,
+    `wc`, `file`, `du`, `df`, `stat`
+  - Introspection: `which`, `env`, `date`, `whoami`, `hostname`,
+    `uname`
+  - Search: `find`, `tree`
+  - Dev tooling: `python`, `python3`, `pytest`, `ruff`, `mypy`,
+    `uv`
+  - VCS: `git` (subcommand-gated, see below)
+- `git` is special-cased: it is on the head allowlist, but
+  `argv[1]` must be in `SAFE_GIT_SUBCOMMANDS` (read-only set:
+  `status`, `log`, `diff`, `show`, `branch`, `remote`,
+  `ls-files`, `ls-tree`, `rev-parse`, `describe`, `tag`,
+  `blame`, `shortlog`, `config`). Write-side subcommands
+  (`push`, `reset`, `checkout`, `clean`, `rebase`, `stash`,
+  `merge`, `commit`, `fetch`, `pull`) are rejected with an
+  advisory message listing the safe set.
 
-The denylist is consulted before the allowlist so that a destructive
-command stays rejected even if it is mistakenly added to the allowlist.
+The denylist is consulted before the allowlist so that a
+destructive command stays rejected even if it is mistakenly added
+to the allowlist.
+
+**Sandbox claim.** The expanded allowlist defends against the
+agent issuing a single obviously-destructive command directly.
+It does not promise that `python` / `pytest` / `uv run`
+invocations cannot run arbitrary code through user-authored
+files — the workspace sandbox (`cwd`) and the file tools' path
+checks remain the primary defenses for that.
 
 ### Tool Executor
 
@@ -111,16 +139,36 @@ stateDiagram-v2
 - Non-allowlisted shell commands are denied
 - Tool output is bounded to a safe max length
 
-## Current Sandboxing Level (MVP)
+## Built-in Tool Surface
 
-MVP uses process-level restrictions through policy checks and safe defaults.
-It is intentionally simple:
+| Tool | Purpose | Policy gate |
+| --- | --- | --- |
+| `read_file` | Read a workspace-relative text file | `_check_path` |
+| `write_file` | Create/overwrite a workspace-relative text file | `_check_path` |
+| `edit_file` | In-place string replacement (Phase 2.5); `old` must be present, must be unique unless `replace_all=True` | `_check_path` |
+| `grep` | UTF-8 regex search across the workspace, returns `path:lineno: line` matches with `glob` filter; default `max_matches=50`, hard cap `1000`; binary files and noise dirs skipped (Phase 2.5) | `_check_optional_path` |
+| `glob` | Workspace-relative glob match returning sorted relative paths; default `max_results=100`, hard cap `5000`; same noise-dir skip list (Phase 2.5) | `_check_optional_path` |
+| `run_shell_safe` | Argv shell invocation against the expanded allowlist + git subcommand gate (Phase 2.5) | `_check_shell` |
+
+The "noise dir" skip list applied to `grep` / `glob`:
+`.git`, `.venv`, `node_modules`, `__pycache__`, `dist`, `build`,
+`target`, `.mypy_cache`, `.pytest_cache`, `.ruff_cache`.
+
+## Current Sandboxing Level
+
+The runtime uses process-level restrictions through policy checks
+and safe defaults:
 
 - Controlled working directory
 - Allowlisted shell commands plus a destructive-command denylist
+- Subcommand-gated `git` (read-only subset only)
 - Configurable shell execution timeout (`RuntimeLimits.shell_timeout_seconds`)
 - Configurable per-call output cap (`RuntimeLimits.output_bytes_cap`),
-  applied uniformly to `read_file`, `write_file`, and `run_shell_safe`
+  applied uniformly to all file and shell tools
+- Configurable context-window thresholds for the agent loop
+  (`context_window_tokens`, `compaction_threshold_tokens`,
+  `compaction_keep_last_messages`) so the loop compacts before
+  the provider rejects the request
 
 ## Recommended Hardening Path
 
@@ -156,18 +204,30 @@ Each tool call emits exactly one of the following trace events:
 `tool_invalid_args` carries `tool_call_id`, `tool`, `args`, and `error`
 (the schema violation message).
 
-Separately, the loop emits one `model_call` event per turn before
-`decision_made`; this is outside tool runtime but often correlated in
-analysis. `model_call` includes:
+Separately, the loop emits one `model_call` event per inner step
+before `decision_made`; this is outside tool runtime but often
+correlated in analysis. `model_call` includes:
 
 - `decision_kind`
 - `latency_ms`
+- `context`: a `ContextSnapshot` (see
+  `docs/architecture/data-model.md` for the field list)
 - optional provider metadata: `model_name`, `provider`,
   `request_tokens`, `response_tokens`, `total_tokens`
 
-These records should be correlated by run/session IDs for replay and debugging.
-All timestamps must come from the injected `ClockPort` and IDs from `IdPort`
-so that replay runs can reproduce the exact same trace.
+The Phase 2.1 inner loop also wraps every step in
+`step_started` / `step_completed` events and ends each session
+with `session_finished`. Compactions are recorded as
+`compaction_started` (with `trigger: threshold | overflow`) and
+`compaction_completed`. See `docs/architecture/data-model.md`
+for the payload shapes.
+
+These records should be correlated by run/session IDs for replay
+and debugging. All timestamps must come from the injected
+`ClockPort` and IDs from `IdPort` so that replay runs can
+reproduce the exact same trace. `ContextSnapshot` is excluded
+from divergence comparison because its token estimates depend on
+tool outputs that embed workspace paths.
 
 Diagram style and naming rules are defined in
 `docs/architecture/diagram-conventions.md`.

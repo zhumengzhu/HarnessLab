@@ -47,12 +47,16 @@ flowchart TD
     S4[Step 4<br/>Eval Tasks + Regression Runner]
     S5[Step 5<br/>Replay + Telemetry Metrics]
     S6[Step 6<br/>Guarded Improvement Proposals]
+    P11[Phase 1.1<br/>DeepSeek Provider]
+    P21[Phase 2.1<br/>Real Agent Loop]
+    P22[Phase 2.2<br/>Prompt Composer]
+    P23[Phase 2.3<br/>Session as First-Class Citizen]
+    P24[Phase 2.4<br/>Auto Compaction]
+    P25[Phase 2.5<br/>Expanded Tool Surface]
+    P26[Phase 2.6<br/>Context Observability]
 
-    S1 --> S2
-    S2 --> S3
-    S3 --> S4
-    S4 --> S5
-    S5 --> S6
+    S1 --> S2 --> S3 --> S4 --> S5 --> S6
+    S6 --> P11 --> P21 --> P22 --> P23 --> P24 --> P25 --> P26
 ```
 
 ## MVP Deliverables
@@ -281,10 +285,10 @@ Stable interfaces reduce migration risk from Python to TypeScript.
   `uv run harnesslab eval`, satisfying the "gated by the Step 4
   regression runner" Exit criterion.
 
-## Post-MVP Phase 1 (Current)
+## Post-MVP Phase 1 — Provider Integration
 
-MVP Steps 1-6 are complete. The next phase focuses on real-model
-integration while preserving the existing eval/replay safety net.
+MVP Steps 1-6 are complete. Phase 1 wires in a real model provider
+without giving up the deterministic eval/replay surface.
 
 ### Phase 1.1 — Provider integration (`deepseek`) — DONE
 
@@ -296,23 +300,192 @@ integration while preserving the existing eval/replay safety net.
   usage (`request_tokens`, `response_tokens`, `total_tokens`), and
   wired telemetry aggregation to include those metrics.
 
-### Phase 1.2 — Memory retrieval/writeback policy — PLANNED
+## Post-MVP Phase 2 — Real Agent (Current)
 
-- Wire `MemoryStorePort` into `HarnessLoop` so turn-level inference can
-  read/write durable memory intentionally (not passively).
-- Define extraction policy (what to store, when to evict, how to avoid
-  unbounded growth) and add explicit eval tasks for memory-dependent
-  behaviors.
+Phase 1 added a model but kept the loop one-shot. Phase 2 turns
+HarnessLab into an actual autonomous agent: the model drives a
+multi-step inner loop, the prompt is composed from versioned blocks,
+sessions are first-class persistent entities, long conversations
+auto-compact, and the tool/observability surface is wide enough to
+do non-trivial work without falling back to raw shell.
 
-### Phase 1.3 — Metrics dashboard artifact — PLANNED
+The "Memory retrieval/writeback policy" / "Metrics dashboard
+artifact" / "Eval task expansion from real failures" items
+originally drafted as Phase 1.2–1.4 are deferred to a future
+Phase 3 in light of the deeper agent-loop work Phase 2 introduced.
+Memory in particular is intentionally postponed until the
+session-as-first-class-citizen substrate (Phase 2.3) is exercised
+by real workflows — see AGENTS.md "Memory is built on Session, not
+the other way around".
 
-- Keep `harnesslab metrics` as the data source and add an optional
-  static HTML report for trend visibility across multiple traces
-  (latency, denial rate, failure signatures).
+### Phase 2.1 — Real agent loop — DONE
 
-### Phase 1.4 — Eval task expansion from real failures — PLANNED
+- `Decision.kind` extended with terminal kinds `final` and
+  `ask_user`; `assistant` / `tool` are now intermediate steps.
+- `HarnessLoop.run_session(session_id, user_input, max_steps=N)`
+  drives the inner loop: each iteration calls the model, applies
+  the decision (tool / text), emits `step_started` and
+  `step_completed`, and stops on a terminal decision or when
+  `max_steps` is reached. `run_turn` is now a thin
+  `max_steps=1` wrapper preserved for compatibility.
+- New trace events: `step_started`, `step_completed`,
+  `session_finished` (with `reason` ∈ `{final, ask_user,
+  max_steps, overflow}`).
+- `SimpleModel` extended with `/final <msg>` and `/ask <msg>`
+  commands so the agent loop can be exercised deterministically
+  from CLI without a live LLM.
+- Replay and eval adapted: `_extract_turns` collects every
+  `decision_made` between `user_input_received` events,
+  `TaskTurn.max_steps` drives multi-step task replay, and a new
+  `eval/tasks/06_multi_step_tool_then_final.yaml` covers the
+  tool-then-final pattern.
 
-- Every recurring real-world failure discovered by `harnesslab propose`
-  should be codified as a new eval task before the corresponding fix is
-  merged, so Step 4's regression gate stays aligned with production
-  reality.
+### Phase 2.2 — Prompt composer — DONE
+
+- New `core/prompt/` package:
+  - `PromptBlock`: named, role-tagged, origin-tagged
+    (`static | dynamic | conversation`) text fragment.
+  - `ComposedPrompt`: ordered list of blocks with
+    `as_text` / `as_openai_messages` / `snapshot` views.
+  - `PromptComposer.build(session, dynamic_blocks=..., variables=...)`:
+    assembles `static + dynamic + conversation` blocks, runs
+    `${var}` substitution (used today for `${model_name}`), and
+    returns a `ComposedPrompt`.
+- Five packaged static blocks under
+  `core/prompt/blocks/` (`00_identity`, `01_harness`,
+  `02_safety`, `03_style`, `04_engineering`) loaded in lexical
+  order at import time. Files are markdown so they version cleanly
+  in Git.
+- Dynamic block factories in `core/prompt/dynamic.py`:
+  - `build_env_block(workspace_root)` — CWD, platform, date,
+    optional git summary.
+  - `build_agents_md_block(workspace_root)` — reads `AGENTS.md`
+    when present and folds it into the prompt.
+  - `build_tool_guide_block(registry)` — lists registered tools
+    with their descriptions so the model sees the live tool surface.
+- `DeepSeekModel` rebuilt to consume the composer instead of a
+  hardcoded system string; the CLI wires the env/agents_md/tool_guide
+  trio through `_make_dynamic_blocks_provider`.
+- `pyproject.toml` `[tool.hatch.build.targets.wheel.force-include]`
+  ensures the `.md` block files ship with the wheel.
+
+### Phase 2.3 — Session as first-class citizen — DONE
+
+- `Session` model gained
+  `status: pending|running|waiting_user|done|failed|aborted`,
+  `step_count`, `last_step_at`, `parent_session_id`, and `title`.
+  `loop.start(goal=…)` derives a short title from the goal.
+- `HarnessLoop.fork(session_id, *, new_goal=None)` creates a child
+  session with fresh message ids and `parent_session_id` set, so
+  forks can persist into SQLite without violating uniqueness.
+- `SessionStorePort.list(*, limit=None, status=None)` added.
+  Both `InMemorySessionStore` and `SqliteSessionStore` implement it.
+- SQLite schema bumped to v2 (`storage/sqlite.py::MIGRATIONS`) with
+  ALTERs for the new session columns plus supporting indexes.
+- New CLI surface: `harnesslab session
+  [--workspace-root .] [--sqlite-path PATH] ACTION` with
+  `ls / show / resume / fork` actions. The session subcommand
+  defaults to `sqlite` storage.
+
+### Phase 2.4 — Auto compaction — DONE
+
+- `core/compaction.py`:
+  - `estimate_tokens` / `estimate_messages_tokens`
+    (`len(text) // 4`, intentionally provider-agnostic).
+  - `should_compact(messages, threshold_tokens)`.
+  - `compact_messages(messages, keep_last, summarizer, …)`:
+    replaces all but the last `keep_last` messages with a single
+    summary system message, fenced in `<system-reminder>`.
+  - `Summarizer` protocol + `_fallback_summarizer` (deterministic,
+    LLM-free).
+  - `LiveSummarizer(model)` — opt-in wrapper that uses a real
+    `ModelPort` to summarize, with the fallback summary used when
+    the model returns an empty string.
+  - `ModelOverflowError` — the contract between adapters and the
+    loop for "the API rejected this request because the context
+    window is full".
+- `RuntimeLimits` gained `context_window_tokens`,
+  `compaction_threshold_tokens`, `compaction_keep_last_messages`.
+- `HarnessLoop`:
+  - `_maybe_compact` runs before each model call and triggers a
+    threshold-driven compaction when needed.
+  - `_call_model_with_overflow` catches `ModelOverflowError`,
+    runs an emergency compaction (`keep_last = max(1, configured
+    // 2)`), retries once, and surfaces a final decision with an
+    explanatory message if overflow persists.
+  - New trace events `compaction_started` (with
+    `trigger: threshold|overflow`) and `compaction_completed`.
+- `DeepSeekModel` detects OpenAI/DeepSeek HTTP 400 context-length
+  responses and raises `ModelOverflowError` so the loop can
+  recover.
+
+### Phase 2.5 — Expanded tool surface — DONE
+
+- New file tools in `tools/file_tools.py`:
+  - `EditFileTool` — in-place string replacement; `old` must be
+    present, must be unique unless `replace_all=True`, never
+    silently overwrites.
+  - `GrepTool` — UTF-8 walk of the workspace returning
+    `path:lineno: line` matches; optional `glob` filter, default
+    `max_matches=50`, hard cap `1000`, skips binary files and a
+    standard noise-dir list (`.git`, `.venv`, `node_modules`,
+    `__pycache__`, `dist`, `build`, …).
+  - `GlobTool` — workspace-relative path matches sorted
+    deterministically; default `max_results=100`, hard cap `5000`,
+    same noise-dir skip list.
+- `DefaultPolicy` admits all three: `edit_file` reuses the strict
+  `_check_path`; `grep` / `glob` use a new `_check_optional_path`
+  (path optional; must resolve in-workspace when supplied).
+- Read-only shell allowlist expanded from `{ls, pwd, echo, cat}`
+  to also cover file inspection (`head, tail, wc, file, du, df,
+  stat`), introspection (`which, env, date, whoami, hostname,
+  uname`), search (`find, tree`), dev tooling (`python, python3,
+  pytest, ruff, mypy, uv`), and `git`. `git` is special-cased:
+  it is on the head allowlist, but argv[1] must be one of
+  `SAFE_GIT_SUBCOMMANDS` (read-only set: `status, log, diff,
+  show, branch, remote, ls-files, ls-tree, rev-parse, describe,
+  tag, blame, shortlog, config`). Write-side subcommands
+  (`push`, `reset`, `checkout`, `clean`, …) stay rejected with
+  an advisory message listing the safe set.
+
+### Phase 2.6 — Context observability — DONE
+
+- `core/context.py::ContextSnapshot` — per-call snapshot of
+  conversation tokens / message count / configured budget /
+  usage ratios, with optional adapter-supplied prompt-side fields
+  (`prompt_tokens_estimate`, `static_block_tokens`,
+  `dynamic_block_tokens`, `prompt_block_names`).
+- `HarnessLoop._model_call_payload` attaches
+  `payload["context"]` to every `model_call` event. The replay
+  divergence detector ignores `context` (token estimates depend on
+  tool outputs that embed tmp workspace paths and are
+  informational, not behavioral).
+- `DeepSeekModel` publishes prompt-side fields by walking the
+  composed prompt blocks after each call.
+- New CLI: `harnesslab context <trace>`
+  - `show [--session-id ID] [--json]` — peak conversation
+    tokens, peak usage ratio, full breakdown of the latest
+    snapshot.
+  - `series [--session-id ID] [--limit N]` — one row per
+    `model_call` so growth over time is visible.
+- `Metrics` (and `render_metrics`) gained
+  `max_conversation_tokens`, `peak_usage_ratio`, `compactions`,
+  `overflow_recoveries`; pre-Phase-2.6 traces still aggregate
+  cleanly (missing fields default to `0` / `None`).
+
+## Deferred (Reconsider After Phase 2 in Production)
+
+- **Memory retrieval/writeback policy.** Wire `MemoryStorePort`
+  into `HarnessLoop` so turn-level inference can read/write
+  durable memory intentionally. Define extraction / eviction
+  policy and add explicit eval tasks. Deferred until the
+  Phase 2.3 session substrate is exercised by real workflows.
+- **Metrics dashboard artifact.** A static HTML report on top of
+  `harnesslab metrics` / `harnesslab context` for trend visibility
+  across many traces. Deferred — the JSON surfaces are already the
+  source of truth and external tooling can render them today.
+- **Eval task expansion from real failures.** Codify every
+  recurring real-world failure discovered by `harnesslab propose`
+  as a new eval task before merging the fix, so the Step 4
+  regression gate stays aligned with production reality. Will
+  start naturally as Phase 2 sees production use.
