@@ -25,10 +25,14 @@ uv run harnesslab run "list files in this workspace"
 uv run pytest
 ```
 
-The CLI exposes two subcommands:
+The CLI exposes four subcommands:
 
 - `harnesslab run <input>` — run one turn of the loop.
-- `harnesslab eval` — run the YAML eval suite (see below).
+- `harnesslab eval` — run the YAML eval suite.
+- `harnesslab replay <trace.jsonl>` — re-drive a recorded trace and
+  report any divergence.
+- `harnesslab metrics <trace.jsonl>` — aggregate counts and latency
+  from a recorded trace.
 
 Run `harnesslab --help` for the full surface.
 
@@ -79,6 +83,51 @@ Exit codes:
 Each task declares its expected trace shape (ordered event subset,
 forbidden event types, and `final_reply` substring), so the eval suite
 doubles as living documentation of the loop's invariants.
+
+### Replay & Metrics
+
+Every `harnesslab run` invocation appends to
+`<workspace>/.harnesslab/trace.jsonl`. Two read-only tools turn that
+file into evidence:
+
+```bash
+# Re-drive the recorded loop and report any divergence per session.
+uv run harnesslab replay .harnesslab/trace.jsonl
+
+# When a session depends on files written by an earlier session, replay
+# in the same workspace so the round-trip can succeed.
+uv run harnesslab replay .harnesslab/trace.jsonl --workspace .
+
+# Compare byte-for-byte (only useful for traces produced by the
+# FrozenClock + SeqIdProvider runtime, e.g. eval task traces).
+uv run harnesslab replay eval-trace.jsonl --strict
+
+# Restrict to one session id.
+uv run harnesslab replay .harnesslab/trace.jsonl --session-id ses_abc123
+
+# Telemetry aggregation (human-readable or JSON).
+uv run harnesslab metrics .harnesslab/trace.jsonl
+uv run harnesslab metrics .harnesslab/trace.jsonl --json
+```
+
+`replay` exit codes:
+
+| Code | Meaning |
+| --- | --- |
+| 0 | Every session replayed and matched the original. |
+| 2 | Trace is unreplayable (missing required events, malformed payload, or unknown `--session-id`). |
+| 4 | At least one session diverged; details are printed per session. |
+
+`metrics` always exits 0; it is an observation tool, not a gate.
+
+Semantic divergence ignores: timestamps (`created_at`, `started_at`,
+`ended_at`, `duration_ms`), id renaming (`ses_*`, `msg_*`, `tool_*`,
+`run_*` are normalized to `<prefix>_NNN` in first-appearance order),
+and tool output text (`output_preview`, `output_size`,
+`output_truncated`) because those reflect IO side effects rather than
+loop behavior. Everything else — the sequence of event types, the
+tool name and args, the policy decision, the `ok` / `error` outcome —
+must match.
 
 ## Quality Gate
 

@@ -124,13 +124,33 @@ Suggested fields:
 
 Represents one telemetry event for replay and debugging.
 
-Suggested fields:
+Top-level fields:
 
 - `run_id`: run/session correlation ID
 - `session_id`: session ID
 - `event_type`: semantic event label
-- `payload`: event attributes
+- `payload`: event-type-specific attributes (see below)
 - `created_at`: timestamp
+
+### Event types and payload shapes
+
+The shape of `payload` is part of the public trace contract: the Step 5
+replayer reads `user_input_received` and `decision_made` to rebuild a
+`ReplayModel`, and `tool_executed` / `tool_denied` / `tool_invalid_args`
+shapes are what `harnesslab metrics` aggregates.
+
+| `event_type` | payload (required keys) |
+| --- | --- |
+| `session_started` | `goal: str` |
+| `user_input_received` | `turn_index: int`, `user_input: str` |
+| `decision_made` | `kind: "assistant" \| "tool"`, `tool_name: str \| null`, `tool_args: dict`, `assistant_message: str \| null` |
+| `tool_invalid_args` | `tool_call_id`, `tool`, `args`, `error` |
+| `tool_denied` | `tool_call_id`, `tool`, `args`, `policy_decision`, `reason` |
+| `tool_executed` | `tool_call_id`, `tool`, `args`, `policy_decision`, `started_at`, `ended_at`, `duration_ms`, `ok`, `error`, `output_size`, `output_preview`, `output_truncated` |
+
+`tool_executed`'s `output_*` fields and the four timestamp fields are
+considered "volatile" by the divergence detector (see
+`docs/architecture/overview.md`, Replay & Divergence Model).
 
 ## MemoryRecord (Planned)
 
@@ -202,8 +222,9 @@ Notes:
 - `memory_kv` is the MVP key/value table that backs `MemoryStorePort`.
   The richer `MemoryRecord` model above will be added in its own table
   when retrieval/writeback policy lands, without breaking `memory_kv`.
-- `traces` are still emitted to JSONL and not yet persisted to SQLite;
-  that wiring is part of the Step 5 replay work.
+- `traces` are emitted to JSONL only; persisting them to SQLite is
+  deferred (the Step 5 replayer reads JSONL directly, which is enough
+  for the current divergence/metrics use cases).
 
 ## Compatibility Guidance
 

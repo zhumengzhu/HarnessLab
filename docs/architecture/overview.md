@@ -61,8 +61,12 @@ flowchart TD
    - Retrieval and writeback policy boundary
 6. `telemetry`
    - Structured traces, run events, and replay-friendly artifacts
-7. `eval` (planned)
-   - Task suites, pass rate tracking, and regression gating
+7. `eval`
+   - YAML task suites, pass rate tracking, and regression gating
+   - `harnesslab eval` CLI subcommand; baseline JSON in-repo
+8. `replay`
+   - Trace reader, deterministic session replayer, divergence detector
+   - `harnesslab replay` / `harnesslab metrics` CLI subcommands
 
 ## Runtime Flow (Single Turn)
 
@@ -143,11 +147,55 @@ should be replaceable behind these contracts.
 - Shell tool runs argv with `shell=False`; policy bans shell metacharacters
 - `ToolRegistry` normalizes both "unknown tool" and tool exceptions into
   `ToolResult(ok=False)` so the loop only sees the normalized result shape
+- Trace is the source of truth for replay: `user_input_received` plus a
+  full `decision_made` payload (`kind`, `tool_name`, `tool_args`,
+  `assistant_message`) is sufficient to rebuild a `ReplayModel` without
+  consulting the original Session or model
+
+## Replay & Divergence Model (Step 5)
+
+The replayer takes a JSONL trace, extracts `(user_input, Decision)` pairs
+from each session, and drives the production loop with `ReplayModel`
+backed by those decisions plus `FrozenClock` + `SeqIdProvider`. The new
+trace is then compared to the original by `detect_divergence`.
+
+```mermaid
+flowchart TD
+    JSONL[trace.jsonl] --> Reader[trace_reader.read_trace]
+    Reader --> Grouped[group_by_session]
+    Grouped --> Extract[extract user_input + Decision pairs]
+    Extract --> ReplayModel
+    ReplayModel --> Loop[HarnessLoop with FrozenClock + SeqIdProvider]
+    Loop --> NewTrace[New TraceEvent list]
+    NewTrace --> Divergence[detect_divergence]
+    Grouped --> Divergence
+    Divergence --> Report[DivergenceReport]
+```
+
+Two comparison modes:
+
+- **Semantic (default).** Normalizes prefix ids (`ses_*`, `msg_*`,
+  `tool_*`, `run_*`) to `<prefix>_NNN` in first-appearance order, and
+  scrubs volatile fields: timestamps (`created_at`, `started_at`,
+  `ended_at`, `duration_ms`) and tool output text (`output_preview`,
+  `output_size`, `output_truncated`). What remains — event order, event
+  types, tool name, args, policy decision, `ok` / `error` — must match
+  exactly. This is the right mode for any trace produced by `SystemClock`
+  + `UuidIdProvider`.
+- **Strict.** No normalization; byte-for-byte comparison. Only sensible
+  for traces already produced by `FrozenClock` + `SeqIdProvider`
+  (e.g. eval task traces).
+
+Unreplayable traces raise `UnreplayableTraceError` early: missing
+`session_started`, dangling `user_input_received` without a paired
+`decision_made`, or a `decision_made` payload that fails to validate as
+a `Decision`. The CLI surfaces this as exit code 2.
 
 ## Planned Evolution
 
-1. Replace in-memory stores with SQLite-backed stores
-2. Add deterministic replay from traces
-3. Add evaluation task sets and baseline diffing
-4. Introduce metrics dashboards or reports
-5. Add guarded self-improvement proposal pipeline
+1. Replace in-memory stores with SQLite-backed stores — DONE (Step 3)
+2. Add deterministic replay from traces — DONE (Step 5)
+3. Add evaluation task sets and baseline diffing — DONE (Step 4)
+4. Introduce metrics dashboards or reports — partial (Step 5: CLI
+   aggregation; dashboards remain future work)
+5. Add guarded self-improvement proposal pipeline — Step 6

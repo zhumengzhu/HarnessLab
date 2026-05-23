@@ -186,15 +186,54 @@ Stable interfaces reduce migration risk from Python to TypeScript.
   telemetry aggregation), GitHub Actions integration
   (template-only in this step, wired up after the workflow stabilizes).
 
-### Step 5 — Replay + Telemetry Metrics
+### Step 5 — Replay + Telemetry Metrics — DONE
 - **Entry**: Step 4 exit criteria met.
 - **Deliverables**:
   - Deterministic replay from JSONL trace using injected
-    `ClockPort` / `IdPort`
-  - Telemetry aggregation (pass rate, tool success, latency, denial rate)
-  - Replay-vs-original divergence detector
-- **Exit**: any historical trace can be replayed and either matches exactly
-  or produces a precise divergence report.
+    `ClockPort` / `IdPort` — DONE. `src/harnesslab/replay/`:
+    - `trace_reader.read_trace` parses JSONL into `TraceEvent`s.
+    - `trace_reader.group_by_session` splits multi-session traces.
+    - `replayer.replay_session` re-drives a single session through
+      the production loop with `FrozenClock` + `SeqIdProvider` and a
+      `ReplayModel` built from the trace's `decision_made` payloads.
+      Refuses to proceed with `UnreplayableTraceError` when the trace
+      lacks `user_input_received` or has malformed `decision_made`.
+    - Trace was first enriched (Step 5.1) with `user_input_received`
+      and full `decision_made` payload (`tool_args`, `assistant_message`)
+      so this replay is feasible without a second source of truth.
+    - Promoted `FrozenClock` / `SeqIdProvider` / `DEFAULT_REPLAY_CLOCK_START`
+      from the eval runner's private surface into `core.runtime` so
+      eval and replay share the same deterministic primitives.
+  - Telemetry aggregation — DONE
+    (`src/harnesslab/telemetry/aggregate.py`). `Metrics` covers
+    sessions, turns, tool_calls / successes / failures, denials,
+    invalid_args, `tool_success_rate`, `denial_rate`, and
+    `LatencyStats` (min / p50 / p95 / max, linear-interpolation,
+    stdlib-only). No "session pass rate" — production traces lack a
+    pass/fail signal; that lives in `harnesslab eval`.
+  - Replay-vs-original divergence detector — DONE
+    (`replay/divergence.py::detect_divergence`). Semantic mode
+    (default) normalizes prefix ids (ses/msg/tool/run_<…> →
+    `<prefix>_001…`) and scrubs volatile fields (timestamps +
+    `output_preview` / `output_size` / `output_truncated`) so traces
+    produced by `SystemClock` can still match a replay produced by
+    `FrozenClock`. Strict mode compares byte-for-byte. Output is a
+    structured `DivergenceReport` with per-event `Divergence`
+    records.
+  - CLI surface — DONE. Two new subcommands:
+    - `harnesslab replay <trace.jsonl>
+        [--session-id ID] [--workspace PATH] [--strict]`
+      Exit codes: 0 match · 2 unreplayable · 4 diverged.
+      `--workspace` lets operators re-use the original workspace when
+      tools depend on cross-session filesystem state.
+    - `harnesslab metrics <trace.jsonl> [--json]`
+      Always exit 0 — observation, not a gate.
+- **Exit**: every shipped eval task's trace replays divergence-free
+  against itself (`tests/test_replay_module.py::test_replay_matches_eval_task_traces`);
+  a tampered trace yields a precise `DivergenceReport`
+  (`test_divergence_detects_tampered_decision`); the round-trip works
+  end-to-end through the CLI on real JSONL written by the production
+  loop (`tests/test_cli_replay_metrics.py::test_replay_with_shared_workspace_round_trips_across_sessions`).
 
 ### Step 6 — Guarded Improvement Proposals
 - **Entry**: Step 5 exit criteria met.
