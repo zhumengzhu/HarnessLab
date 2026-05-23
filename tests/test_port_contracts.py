@@ -9,9 +9,12 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
+import pytest
+
 from harnesslab.core.contracts import (
     ClockPort,
     IdPort,
+    MemoryStorePort,
     ModelPort,
     PolicyPort,
     SessionStorePort,
@@ -69,22 +72,48 @@ def test_tool_port_contract_shell_tool(tmp_path: Path) -> None:
     assert isinstance(result.ok, bool)
 
 
-def test_session_store_port_contract() -> None:
-    store: SessionStorePort = InMemorySessionStore()
+@pytest.fixture(params=["in_memory"])
+def session_store(request: pytest.FixtureRequest, tmp_path: Path) -> SessionStorePort:
+    """Parametrized factory; Step 3 will add a 'sqlite' param here."""
+
+    backend = request.param
+    if backend == "in_memory":
+        return InMemorySessionStore()
+    raise ValueError(f"unknown session store backend: {backend}")
+
+
+@pytest.fixture(params=["in_memory"])
+def memory_store(request: pytest.FixtureRequest, tmp_path: Path) -> MemoryStorePort:
+    """Parametrized factory; Step 3 will add a 'sqlite' param here."""
+
+    backend = request.param
+    if backend == "in_memory":
+        return InMemoryMemoryStore()
+    raise ValueError(f"unknown memory store backend: {backend}")
+
+
+def test_session_store_port_contract(session_store: SessionStorePort) -> None:
     session = Session(goal="round-trip")
-    store.create(session)
-    fetched = store.get(session.id)
-    assert fetched is session
+    session_store.create(session)
+
+    fetched = session_store.get(session.id)
+    # Structural equality, not `is`, so SQLite-backed stores (which return
+    # freshly hydrated objects) satisfy the same contract.
+    assert fetched.id == session.id
+    assert fetched.goal == session.goal
+    assert fetched.turn_count == session.turn_count
+
     session.turn_count = 3
-    store.save(session)
-    assert store.get(session.id).turn_count == 3
+    session_store.save(session)
+    assert session_store.get(session.id).turn_count == 3
 
 
-def test_memory_store_port_contract() -> None:
-    store = InMemoryMemoryStore()
-    assert store.get("missing") is None
-    store.put("k", "v")
-    assert store.get("k") == "v"
+def test_memory_store_port_contract(memory_store: MemoryStorePort) -> None:
+    assert memory_store.get("missing") is None
+    memory_store.put("k", "v")
+    assert memory_store.get("k") == "v"
+    memory_store.put("k", "v2")
+    assert memory_store.get("k") == "v2"
 
 
 def test_trace_recorder_port_contract(tmp_path: Path) -> None:
