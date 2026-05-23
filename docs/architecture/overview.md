@@ -13,18 +13,24 @@ stronger observability and automated improvement workflows.
 ```mermaid
 flowchart TD
     UserInput[User Input] --> CoreLoop[Core Loop]
-    CoreLoop --> ModelPort[Model Port]
+    CoreLoop --> SessionStore[Session Store]
+    CoreLoop --> Compaction[Context Compaction]
+    Compaction --> ModelPort[Model Port]
     ModelPort --> Decision{Decision}
-    Decision -->|assistant| AssistantReply[Assistant Reply]
     Decision -->|tool| PolicyPort[Policy Port]
     PolicyPort -->|allow| ToolRuntime[Tool Runtime]
     PolicyPort -->|deny| DeniedReply[Denied Reply]
-    ToolRuntime --> SessionStore[Session Store]
-    AssistantReply --> SessionStore
+    ToolRuntime --> SessionStore
     DeniedReply --> SessionStore
-    ToolRuntime --> TraceRecorder[Trace Recorder]
-    AssistantReply --> TraceRecorder
+    Decision -->|assistant| ContinueLoop[Continue Inner Loop]
+    ContinueLoop --> Compaction
+    Decision -->|final or ask_user| TerminalReply[Terminal Reply]
+    TerminalReply --> SessionStore
+    CoreLoop --> TraceRecorder[Trace Recorder]
+    ToolRuntime --> TraceRecorder
     DeniedReply --> TraceRecorder
+    TerminalReply --> TraceRecorder
+    TerminalReply --> UserInput
 ```
 
 ## Goals
@@ -128,34 +134,41 @@ compatibility.
 sequenceDiagram
     participant User
     participant CoreLoop as Core Loop
+    participant SessionStore as Session Store
+    participant Compaction as Context Compaction
     participant ModelPort as Model Port
     participant PolicyPort as Policy Port
     participant ToolRuntime as Tool Runtime
-    participant SessionStore as Session Store
     participant TraceRecorder as Trace Recorder
 
     User->>CoreLoop: user_input
     CoreLoop->>SessionStore: append user message
-    CoreLoop->>ModelPort: decide(session, input)
-    ModelPort-->>CoreLoop: assistant or tool decision
-    alt assistant response
-        CoreLoop->>SessionStore: append assistant message
-        CoreLoop->>TraceRecorder: record decision + response
-        CoreLoop-->>User: assistant response
-    else tool call
-        CoreLoop->>PolicyPort: allow_tool(call)
-        alt denied
-            CoreLoop->>SessionStore: append tool message (denied)
-            CoreLoop->>TraceRecorder: record tool_denied
-            CoreLoop-->>User: denied response
-        else allowed
-            CoreLoop->>ToolRuntime: execute(call)
-            ToolRuntime-->>CoreLoop: tool result
-            CoreLoop->>SessionStore: append tool message
-            CoreLoop->>TraceRecorder: record tool_executed
-            CoreLoop-->>User: tool result message
+    loop inner steps until final, ask_user, or max_steps
+        CoreLoop->>TraceRecorder: step_started
+        CoreLoop->>Compaction: maybe compact messages
+        CoreLoop->>ModelPort: decide(session, input)
+        ModelPort-->>CoreLoop: Decision
+        CoreLoop->>TraceRecorder: model_call + decision_made
+        alt tool call
+            CoreLoop->>PolicyPort: allow_tool(call)
+            alt denied
+                CoreLoop->>SessionStore: append tool message (denied)
+                CoreLoop->>TraceRecorder: tool_denied
+            else allowed
+                CoreLoop->>ToolRuntime: execute(call)
+                ToolRuntime-->>CoreLoop: tool result
+                CoreLoop->>SessionStore: append tool message
+                CoreLoop->>TraceRecorder: tool_executed
+            end
+        else assistant (continue)
+            CoreLoop->>SessionStore: append assistant message
+        else final or ask_user (terminal)
+            CoreLoop->>SessionStore: append assistant message
         end
+        CoreLoop->>TraceRecorder: step_completed
     end
+    CoreLoop->>TraceRecorder: session_finished
+    CoreLoop-->>User: last visible response
 ```
 
 Diagram style and naming rules are defined in
@@ -186,7 +199,9 @@ should be replaceable behind these contracts.
 - Single process runtime for fast iteration
 - JSONL trace output for transparent debugging
 - Policy-first tool execution (deny by default for unknown tools)
-- Small built-in tool surface in MVP (`read_file`, `write_file`, `run_shell_safe`)
+- Built-in tool surface (Phase 2.5): `read_file`, `write_file`,
+  `edit_file`, `grep`, `glob`, `run_shell_safe` with expanded read-only
+  shell allowlist and git subcommand gate
 - Deterministic core via injected `ClockPort` and `IdPort` (replay-ready by construction)
 - Shell tool runs argv with `shell=False`; policy bans shell metacharacters
 - `ToolRegistry` normalizes both "unknown tool" and tool exceptions into
@@ -246,9 +261,10 @@ Two comparison modes:
   `tool_*`, `run_*`) to `<prefix>_NNN` in first-appearance order, and
   scrubs volatile fields: timestamps (`created_at`, `started_at`,
   `ended_at`, `duration_ms`, `latency_ms`), tool output text
-  (`output_preview`, `output_size`, `output_truncated`), and provider
+  (`output_preview`, `output_size`, `output_truncated`), provider
   telemetry (`model_name`, `provider`, `request_tokens`,
-  `response_tokens`, `total_tokens`). What remains — event order, event
+  `response_tokens`, `total_tokens`), and the Phase 2.6 `context`
+  snapshot on `model_call` events. What remains — event order, event
   types, tool name, args, policy decision, `ok` / `error` — must match
   exactly. This is the right mode for any trace produced by `SystemClock`
   + `UuidIdProvider`.

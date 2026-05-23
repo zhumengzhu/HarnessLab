@@ -1,12 +1,14 @@
 # HarnessLab
 
-HarnessLab is a learning-first agent harness project.
+HarnessLab is a learning-first agent harness: a single-process runtime with
+a multi-step agent loop, policy-gated tools, composed prompts, persistent
+sessions, and JSONL traces for eval and replay.
 
 ## Goals
 
-- Build a clear and minimal agentic loop.
+- Build a clear, autonomous agentic loop (model decides when to stop).
 - Support sandboxed tool use with policy checks.
-- Keep session and memory boundaries explicit.
+- Keep session boundaries explicit; treat sessions as first-class entities.
 - Make behavior observable and testable from day one.
 
 ## Tech Stack
@@ -18,25 +20,48 @@ HarnessLab is a learning-first agent harness project.
 ## Quick Start
 
 ```bash
-cd /Users/zmz/Github/HarnessLab
 uv sync
 uv run pre-commit install   # one-time: enables local quality-gate hook
 uv run harnesslab run "list files in this workspace"
 uv run pytest
 ```
 
-The CLI exposes five subcommands:
+The CLI exposes seven subcommands:
 
-- `harnesslab run <input>` — run one turn of the loop.
+- `harnesslab run <input>` — start a session and run the agent loop
+  (multi-step by default; see `--max-steps`).
 - `harnesslab eval` — run the YAML eval suite.
 - `harnesslab replay <trace.jsonl>` — re-drive a recorded trace and
   report any divergence.
-- `harnesslab metrics <trace.jsonl>` — aggregate counts and latency
-  from a recorded trace.
+- `harnesslab metrics <trace.jsonl>` — aggregate counts, latency, and
+  context usage from a recorded trace.
 - `harnesslab propose` — turn recurring failure clusters in traces
   and eval runs into advisory improvement proposals.
+- `harnesslab session` — list, inspect, resume, or fork persisted
+  sessions (SQLite).
+- `harnesslab context <trace.jsonl>` — inspect per-call context
+  snapshots from `model_call` events.
 
 Run `harnesslab --help` for the full surface.
+
+### Agent loop (`run`)
+
+Each `harnesslab run` invocation starts a new session and drives
+`run_session`: the model may call tools repeatedly until it returns a
+terminal decision (`final` — done, or `ask_user` — pause for input) or
+hits the step budget.
+
+```bash
+# Default: up to 20 inner steps per user message.
+uv run harnesslab run "find all Python files and summarize structure"
+
+# Cap the inner loop for testing or cost control.
+uv run harnesslab run "hello" --max-steps 3
+```
+
+Built-in tools: `read_file`, `write_file`, `edit_file`, `grep`, `glob`,
+`run_shell_safe`. See `docs/architecture/tool-runtime.md` for policy
+details.
 
 ### Model backends (`run`)
 
@@ -74,6 +99,28 @@ uv run harnesslab run "again" --storage sqlite \
 The same Port contract suite (`tests/test_port_contracts.py`) runs
 against both backends, so they are behaviorally interchangeable.
 
+### Session management
+
+When using SQLite storage, sessions persist across process restarts.
+Use the `session` subcommand to inspect and continue work:
+
+```bash
+# List recent sessions (newest first).
+uv run harnesslab session --workspace-root . ls
+
+# Show metadata and conversation for one session.
+uv run harnesslab session --workspace-root . show ses_abc123
+
+# Continue a session with another user message.
+uv run harnesslab session --workspace-root . resume ses_abc123 "keep going"
+
+# Fork: copy messages into a new session with parent_session_id set.
+uv run harnesslab session --workspace-root . fork ses_abc123 --goal "try alt approach"
+```
+
+Global flags (`--workspace-root`, `--sqlite-path`) must appear **before**
+the subcommand: `harnesslab session --workspace-root . ls`.
+
 ### Eval suite
 
 `harnesslab eval` drives a small, versioned set of YAML tasks
@@ -105,11 +152,11 @@ Each task declares its expected trace shape (ordered event subset,
 forbidden event types, and `final_reply` substring), so the eval suite
 doubles as living documentation of the loop's invariants.
 
-### Replay & Metrics
+### Replay, Metrics & Context
 
 Every `harnesslab run` invocation appends to
-`<workspace>/.harnesslab/trace.jsonl`. Two read-only tools turn that
-file into evidence:
+`<workspace>/.harnesslab/trace.jsonl`. Read-only tools turn that file
+into evidence:
 
 ```bash
 # Re-drive the recorded loop and report any divergence per session.
@@ -129,6 +176,11 @@ uv run harnesslab replay .harnesslab/trace.jsonl --session-id ses_abc123
 # Telemetry aggregation (human-readable or JSON).
 uv run harnesslab metrics .harnesslab/trace.jsonl
 uv run harnesslab metrics .harnesslab/trace.jsonl --json
+
+# Context window observability: peak usage and per-call snapshots.
+uv run harnesslab context .harnesslab/trace.jsonl show
+uv run harnesslab context .harnesslab/trace.jsonl series --limit 10
+uv run harnesslab context .harnesslab/trace.jsonl show --json
 ```
 
 `replay` exit codes:
@@ -144,10 +196,11 @@ uv run harnesslab metrics .harnesslab/trace.jsonl --json
 Semantic divergence ignores: timestamps (`created_at`, `started_at`,
 `ended_at`, `duration_ms`, `latency_ms`), id renaming (`ses_*`, `msg_*`, `tool_*`,
 `run_*` are normalized to `<prefix>_NNN` in first-appearance order),
-and tool output text (`output_preview`, `output_size`,
-`output_truncated`) and model telemetry (`model_name`, `provider`,
-`request_tokens`, `response_tokens`, `total_tokens`) because those
-reflect provider/runtime variability rather than loop behavior.
+tool output text (`output_preview`, `output_size`,
+`output_truncated`), model telemetry (`model_name`, `provider`,
+`request_tokens`, `response_tokens`, `total_tokens`), and the Phase 2.6
+`context` snapshot on `model_call` events — those reflect
+provider/runtime variability rather than loop behavior.
 Everything else — the sequence of event types, the tool name and args,
 the policy decision, the `ok` / `error` outcome — must match.
 
@@ -203,17 +256,25 @@ for AI agents working on the repo.
 
 ## Project Layout
 
-- `src/harnesslab/core`: contracts, domain models, agent loop
-- `src/harnesslab/tools`: tool runtime and built-in tools
-- `src/harnesslab/session`: session store
-- `src/harnesslab/memory`: memory store
+- `src/harnesslab/core`: contracts, domain models, agent loop; `prompt/`,
+  `compaction.py`, `context.py`
+- `src/harnesslab/tools`: tool registry and built-in tools
 - `src/harnesslab/policy`: safety policy checks
-- `src/harnesslab/telemetry`: trace models and recorder
-- `docs/roadmap.md`: MVP-to-advanced roadmap
+- `src/harnesslab/session`: session store (in-memory + SQLite)
+- `src/harnesslab/memory`: memory store (persistence only; no loop
+  writeback yet)
+- `src/harnesslab/telemetry`: JSONL trace recorder and metrics aggregation
+- `src/harnesslab/providers`: `ModelPort` adapters (DeepSeek)
+- `src/harnesslab/eval`: YAML task suite and regression runner
+- `src/harnesslab/replay`: trace reader, replayer, divergence detector
+- `src/harnesslab/improve`: advisory proposal generator
+- `eval/`: shipped tasks, baseline, reports
+- `docs/`: roadmap and architecture documentation
 
 ## Documentation
 
-- `docs/roadmap.md`: roadmap from MVP to advanced capabilities
+- `AGENTS.md`: binding guidelines for AI agents and contributors
+- `docs/roadmap.md`: MVP steps and Post-MVP phases (Phase 2 complete)
 - `docs/architecture/overview.md`: architecture boundaries and runtime flow
 - `docs/architecture/tool-runtime.md`: tool runtime and safety model
 - `docs/architecture/data-model.md`: core runtime data contracts

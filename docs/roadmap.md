@@ -19,12 +19,15 @@ HarnessLab is a local, single-process harness built for learning:
 
 ## Layered Architecture
 
-1. `core`: loop, state transitions, interfaces
+1. `core`: loop, state transitions, interfaces, prompt composition,
+   compaction, context snapshots
 2. `tools`: tool registry and executions
 3. `policy`: path and command checks
-4. `session`: session state repository
-5. `memory`: long-lived memory records
-6. `telemetry`: run trace and spans
+4. `session`: session state repository (first-class lifecycle)
+5. `memory`: long-lived memory records (store only; writeback deferred)
+6. `telemetry`: run trace and metrics aggregation
+7. `eval` / `replay` / `improve`: regression, divergence, proposals
+8. `providers`: external `ModelPort` adapters
 
 ## Step Model (Not a Timeline)
 
@@ -59,7 +62,29 @@ flowchart TD
     S6 --> P11 --> P21 --> P22 --> P23 --> P24 --> P25 --> P26
 ```
 
-## MVP Deliverables
+## Current State (Post-MVP Phase 2 — complete)
+
+HarnessLab is no longer a one-turn MVP loop. The shipped runtime includes:
+
+- **Multi-step agent loop** (`run_session`, `--max-steps`; terminal
+  decisions `final` / `ask_user`)
+- **Prompt composer** (static markdown blocks + dynamic env / AGENTS.md /
+  tool guide; consumed by DeepSeek)
+- **Session first-class** (status, step_count, title, fork/resume CLI;
+  SQLite v2 schema)
+- **Auto compaction** (threshold + overflow recovery with optional
+  `LiveSummarizer`)
+- **Six built-in tools** + expanded read-only shell allowlist
+- **Context observability** (`ContextSnapshot` on every `model_call`;
+  `harnesslab context show/series`)
+- **DeepSeek provider** for `harnesslab run --model deepseek`
+- **Eval / replay / propose** unchanged as quality gates
+
+**Deferred:** cross-session memory retrieval/writeback, static HTML metrics
+dashboards, eval task expansion from production failures — see
+[Deferred (Reconsider After Phase 2 in Production)](#deferred-reconsider-after-phase-2-in-production).
+
+## MVP Deliverables (historical — Step 1 baseline)
 
 - `run_once()` loop:
   - read user goal
@@ -134,14 +159,14 @@ Stable interfaces reduce migration risk from Python to TypeScript.
   and tested; resource limits are configurable; every Port has at least one
   compliance test; replay stubs satisfy the existing Port contracts.
 
-### Step 3 — Session/Memory Persistence — IN PROGRESS
+### Step 3 — Session/Memory Persistence — DONE
 - **Entry**: Step 2 exit criteria met.
 - **Deliverables**:
   - SQLite-backed `SessionStorePort` adapter — DONE
     (`src/harnesslab/session/sqlite_store.py`).
   - SQLite-backed `MemoryStorePort` adapter — DONE
     (`src/harnesslab/memory/sqlite_store.py`). Retrieval/writeback policy
-    is deferred to Step 4 where eval tasks need it.
+    is deferred (see Deferred section below).
   - Storage schema + migration mechanism — DONE
     (`src/harnesslab/storage/sqlite.py::MIGRATIONS` + `apply_migrations`).
     Migrations are tracked in a `schema_version` table for future
@@ -149,13 +174,14 @@ Stable interfaces reduce migration risk from Python to TypeScript.
   - Contract tests reused unchanged against the SQLite adapter — DONE
     (`tests/test_port_contracts.py` parametrizes the store fixtures over
     `[in_memory, sqlite]`).
-  - CLI surface — DONE (`harnesslab --storage sqlite [--sqlite-path PATH]`).
+  - CLI surface — DONE (`harnesslab run --storage sqlite [--sqlite-path PATH]`).
 - **Exit**: in-memory and SQLite adapters pass the same Port contract suite;
   a session survives process restart (covered by
   `tests/test_cli_storage.py::test_session_persists_via_cli_with_sqlite` and
   `tests/test_sqlite_storage.py::test_session_persists_across_store_instances`).
-- **Remaining for full DONE**: memory retrieval/writeback policy, once the
-  Step 4 eval runner shows what the loop actually needs to read/write.
+- **Note**: memory retrieval/writeback into the loop was intentionally
+  deferred until the session substrate matured (Phase 2.3). The store
+  adapters remain available; loop integration is future work.
 
 ### Step 4 — Eval Tasks + Regression Runner — DONE
 - **Entry**: Step 3 exit criteria met; `ReplayModel` available.

@@ -14,31 +14,63 @@ Secondary objective:
 
 ## Current Phase
 
-Current phase is MVP.
+MVP (Steps 1–6) and Post-MVP Phase 2 are **complete**. The runtime is a
+single-process, multi-step agent harness — not a one-turn decision machine.
 
-Must include:
+Must include (current):
 
 - Single-process runtime
-- One-turn loop plus session updates
-- Policy-gated tool execution
-- Trace recording
-- Unit tests
+- Multi-step agent loop (`run_session` with `max_steps`; terminal decisions
+  `final` / `ask_user`)
+- Policy-gated tool execution (six built-in tools; expanded read-only shell
+  allowlist with git subcommand gate)
+- Modular prompt composition (`PromptComposer` + static/dynamic blocks)
+- Session as first-class citizen (persist, list, resume, fork)
+- Automatic context compaction (threshold + overflow recovery)
+- Per-call context observability (`ContextSnapshot` on `model_call`)
+- Trace recording, eval/replay/propose CLI, unit + contract tests
+- DeepSeek provider behind `ModelPort` for `harnesslab run --model deepseek`
 
 Must NOT include yet:
 
+- Cross-session memory retrieval/writeback (deferred; session substrate first)
 - Multi-agent orchestration
 - Distributed runtime
 - Plugin marketplace complexity
 - Uncontrolled self-modifying pipelines
 
+## Agent Loop Contract (Phase 2)
+
+- `HarnessLoop.run_session(session_id, user_input, max_steps=N)` is the
+  primary entry point. `run_turn` is `run_session(..., max_steps=1)`.
+- `Decision.kind` is one of `tool | assistant | final | ask_user`.
+  Terminal kinds (`final`, `ask_user`) end the inner loop; `tool` and
+  `assistant` continue until `max_steps` or a terminal decision.
+- Before each model call the loop may compact older messages
+  (`compaction_started` / `compaction_completed` trace events). Adapters
+  raise `ModelOverflowError` on context overflow; the loop compacts once
+  and retries.
+- Provider adapters consume `PromptComposer` output — do not hardcode system
+  prompts in `providers/` except via composer blocks.
+- Session lifecycle fields (`status`, `step_count`, `last_step_at`,
+  `parent_session_id`, `title`) are part of the data contract; update
+  docs and SQLite migrations when they change.
+
 ## Repository Structure Ownership
 
-- `src/harnesslab/core`: loop orchestration, contracts, core models
-- `src/harnesslab/tools`: tool registry and tool implementations
+- `src/harnesslab/core`: loop orchestration, contracts, core models;
+  `core/prompt/` (composer + blocks), `core/compaction.py`,
+  `core/context.py`
+- `src/harnesslab/tools`: tool registry and built-in tool implementations
 - `src/harnesslab/policy`: safety and authorization checks
 - `src/harnesslab/session`: session persistence layer
-- `src/harnesslab/memory`: memory persistence layer
-- `src/harnesslab/telemetry`: trace and telemetry outputs
+- `src/harnesslab/memory`: memory persistence layer (store only; no loop
+  writeback yet)
+- `src/harnesslab/telemetry`: trace recording and metrics aggregation
+- `src/harnesslab/providers`: external `ModelPort` adapters (e.g. DeepSeek)
+- `src/harnesslab/eval`: YAML task suite and regression runner
+- `src/harnesslab/replay`: trace reader, replayer, divergence detector
+- `src/harnesslab/improve`: advisory proposal generator
 - `tests`: unit and contract tests
 - `docs`: roadmap and architecture documentation
 
@@ -58,16 +90,22 @@ Stable contract names:
 - `SessionStorePort`
 - `MemoryStorePort`
 - `TraceRecorderPort`
+- `ClockPort`
+- `IdPort`
 
 If a contract changes, update docs and tests in the same change.
 
 ## Safety and Tooling Rules
 
 - Deny unknown tools by default.
-- Deny out-of-workspace file paths.
-- Restrict shell execution to allowlisted commands.
+- Deny out-of-workspace file paths (`read_file`, `write_file`, `edit_file`
+  require path; `grep` / `glob` allow optional path with same workspace check).
+- Restrict shell execution to allowlisted commands; `git` requires a
+  read-only subcommand from `SAFE_GIT_SUBCOMMANDS`.
 - Enforce shell timeouts and bounded output.
 - Keep tool output normalized (`ok`, `output`, optional `error`).
+- The shell allowlist is not a sandbox against arbitrary code execution via
+  `python` / `pytest` / `uv run` — workspace path checks remain primary.
 
 Never bypass policy checks for convenience.
 
@@ -121,8 +159,9 @@ Rules:
    or key-like fixtures.
 4. Provider failures must degrade to normalized assistant responses, not
    unhandled exceptions that break the loop.
-5. Provider telemetry belongs in `model_call` trace payload; treat
-   token counters/model names as volatile in semantic replay compare.
+5. Provider telemetry and `ContextSnapshot` belong in `model_call` trace
+   payload; treat token counters, model names, and `context` as volatile
+   in semantic replay compare.
 
 ## Proposal Handling
 

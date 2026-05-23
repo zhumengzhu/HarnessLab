@@ -51,4 +51,5 @@ When a contract name changes, update diagrams in the same PR:
 - `docs/architecture/tool-runtime.md`
 - `docs/architecture/data-model.md`
 - `docs/roadmap.md` (if timeline scope changes)
+- `README.md` and `AGENTS.md` when CLI surface or agent phase changes
 
