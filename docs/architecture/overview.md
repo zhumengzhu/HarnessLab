@@ -97,13 +97,13 @@ sequenceDiagram
     else tool call
         CoreLoop->>PolicyPort: allow_tool(call)
         alt denied
-            CoreLoop->>SessionStore: append deny message
+            CoreLoop->>SessionStore: append tool message (denied)
             CoreLoop->>TraceRecorder: record tool_denied
             CoreLoop-->>User: denied response
         else allowed
             CoreLoop->>ToolRuntime: execute(call)
             ToolRuntime-->>CoreLoop: tool result
-            CoreLoop->>SessionStore: append tool + assistant message
+            CoreLoop->>SessionStore: append tool message
             CoreLoop->>TraceRecorder: record tool_executed
             CoreLoop-->>User: tool result message
         end
@@ -123,6 +123,12 @@ The following contracts should remain stable across implementations:
 - `SessionStorePort`
 - `MemoryStorePort`
 - `TraceRecorderPort`
+- `ClockPort`
+- `IdPort`
+
+`ClockPort` and `IdPort` are non-negotiable for deterministic replay: the loop
+must obtain every timestamp and every entity ID from them, never directly from
+`datetime.now()` or `uuid4()` at call sites.
 
 All infrastructure details (storage engine, model provider, runtime language)
 should be replaceable behind these contracts.
@@ -133,6 +139,10 @@ should be replaceable behind these contracts.
 - JSONL trace output for transparent debugging
 - Policy-first tool execution (deny by default for unknown tools)
 - Small built-in tool surface in MVP (`read_file`, `write_file`, `run_shell_safe`)
+- Deterministic core via injected `ClockPort` and `IdPort` (replay-ready by construction)
+- Shell tool runs argv with `shell=False`; policy bans shell metacharacters
+- `ToolRegistry` normalizes both "unknown tool" and tool exceptions into
+  `ToolResult(ok=False)` so the loop only sees the normalized result shape
 
 ## Planned Evolution
 

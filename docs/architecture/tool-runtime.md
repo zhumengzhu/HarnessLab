@@ -37,6 +37,15 @@ Responsibilities:
 - Registration (`name -> implementation`)
 - Lookup and dispatch
 - Standardized error behavior for unknown tools
+- Normalize any exception raised by a tool into `ToolResult(ok=False, error="crashed: ...")`
+  so that the loop never observes raw exceptions
+
+A registered tool must expose:
+
+- `name`: stable identifier used for lookup
+- `description`: short, human-readable purpose
+- `args_schema`: JSON Schema describing accepted arguments
+- `execute(call) -> ToolResult`: deterministic execution entry point
 
 ### Policy Layer
 
@@ -103,15 +112,24 @@ It is intentionally simple:
 
 ## Auditing and Observability
 
-Each tool call should produce:
+Each tool call must emit a `tool_executed` (or `tool_denied`) trace event whose
+payload carries the following fields:
 
-- Tool identity and args
-- Policy decision and reason
-- Start/end timestamps
-- Execution status
-- Truncated output references
+- `tool_call_id`: stable ID linking back to `ToolCall.id`
+- `tool`: tool name
+- `args`: invocation arguments
+- `policy_decision`: `allow:<reason>` or `deny:<reason>`
+- `started_at` / `ended_at`: ISO-8601 UTC timestamps (null when denied)
+- `duration_ms`: execution latency (null when denied)
+- `ok`: success boolean (denied events use a separate `tool_denied` event_type)
+- `error`: failure reason (null on success)
+- `output_size`: byte length of the full tool output
+- `output_preview`: first N bytes of `ToolResult.output` (current preview cap: 512)
+- `output_truncated`: whether `output_preview` is shorter than `output_size`
 
 These records should be correlated by run/session IDs for replay and debugging.
+All timestamps must come from the injected `ClockPort` and IDs from `IdPort`
+so that replay runs can reproduce the exact same trace.
 
 Diagram style and naming rules are defined in
 `docs/architecture/diagram-conventions.md`.

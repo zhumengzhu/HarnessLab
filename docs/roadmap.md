@@ -26,25 +26,33 @@ HarnessLab is a local, single-process harness built for learning:
 5. `memory`: long-lived memory records
 6. `telemetry`: run trace and spans
 
-## Timeline
+## Step Model (Not a Timeline)
+
+Progress is tracked in **steps**, not weeks. Each step is a contract that
+defines:
+
+- **Entry criteria**: what must be true before starting the step
+- **Deliverables**: concrete artifacts (code, tests, docs) the step produces
+- **Exit criteria**: the objective signals that the step is "done"
+
+Steps are dependency-ordered, not time-boxed. An AI-driven implementer can
+finish a step in hours; a human-driven implementer may take days. Either way,
+the same Exit criteria apply.
 
 ```mermaid
-gantt
-    title HarnessLab Roadmap (6 Weeks)
-    dateFormat  YYYY-MM-DD
-    axisFormat  %m/%d
+flowchart TD
+    S1[Step 1<br/>Scaffold + One-Turn Loop]
+    S2[Step 2<br/>Tool Runtime + Policy Hardening]
+    S3[Step 3<br/>Session/Memory Persistence]
+    S4[Step 4<br/>Eval Tasks + Regression Runner]
+    S5[Step 5<br/>Replay + Telemetry Metrics]
+    S6[Step 6<br/>Guarded Improvement Proposals]
 
-    section Foundations
-    Week 1: Scaffold contracts + one-turn loop :w1, 2026-05-26, 7d
-    Week 2: Tool runtime + policy hardening      :w2, after w1, 7d
-
-    section Data and Reliability
-    Week 3: Session/Memory persistence (SQLite) :w3, after w2, 7d
-    Week 4: Eval tasks + regression runner       :w4, after w3, 7d
-
-    section Advanced Capability
-    Week 5: Replay + telemetry metrics           :w5, after w4, 7d
-    Week 6: Guarded self-improvement loop        :w6, after w5, 7d
+    S1 --> S2
+    S2 --> S3
+    S3 --> S4
+    S4 --> S5
+    S5 --> S6
 ```
 
 ## MVP Deliverables
@@ -70,37 +78,87 @@ gantt
 - `SessionStorePort`: session persistence contract
 - `MemoryStorePort`: memory persistence contract
 - `TraceRecorderPort`: telemetry contract
+- `ClockPort`: time source for deterministic replay
+- `IdPort`: ID source for deterministic replay
 
 Stable interfaces reduce migration risk from Python to TypeScript.
 
-## Milestones
+## Steps
 
-### Week 1
-- Scaffold package and contracts
-- Implement one-turn loop
-- Add 4-6 unit tests
+### Step 1 — Scaffold + One-Turn Loop
+- **Entry**: empty repository, AGENTS.md and architecture docs in place.
+- **Deliverables**:
+  - Package layout (`core`, `policy`, `tools`, `session`, `memory`, `telemetry`)
+  - Stable Ports: `ModelPort`, `PolicyPort`, `ToolPort`, `SessionStorePort`,
+    `MemoryStorePort`, `TraceRecorderPort`, `ClockPort`, `IdPort`
+  - One-turn loop with deterministic `ClockPort`/`IdPort` injection
+  - Built-in tools `read_file`, `write_file`, `run_shell_safe` with
+    `args_schema`
+  - `DefaultPolicy` with workspace-safe path checks and shell metacharacter
+    rejection (`shell=False`, `shlex` parsing)
+  - `ToolRegistry` that normalizes unknown-tool and exception cases into
+    `ToolResult(ok=False)`
+  - Audit-grade `tool_executed` / `tool_denied` trace payloads
+  - JSONL trace recorder, CLI entry point
+  - Unit + contract tests (policy, registry, loop trace, determinism)
+- **Exit**: `uv run pytest` and `uv run ruff check` are green; two independent
+  runs of a canonical scenario produce byte-identical JSONL traces under
+  `FrozenClock` + `SeqIdProvider`.
 
-### Week 2
-- Harden tool runtime behavior and edge-case handling
-- Expand policy checks with explicit deny reasons
-- Add shell execution timeout and output cap tests
+### Step 2 — Tool Runtime + Policy Hardening
+- **Entry**: Step 1 exit criteria met.
+- **Deliverables**:
+  - Wire `ToolPort.args_schema` into runtime validation (reject malformed
+    arguments before the policy layer)
+  - Add a shell-command denylist (e.g. `rm`, `sudo`, `curl`) layered on top
+    of the existing allowlist
+  - Parameterize resource limits (`output_bytes_cap`, `timeout_seconds`) via
+    policy configuration rather than hardcoded constants
+  - Contract tests covering each stable Port (one minimal compliance test
+    per Port)
+  - `ReplayModel` and `ReplayTraceRecorder` stubs to unblock Step 4
+- **Exit**: malformed args never reach a tool; shell denylist is enforced
+  and tested; resource limits are configurable; every Port has at least one
+  compliance test.
 
-### Week 3
-- Add session persistence (SQLite)
-- Add memory retrieval/writeback policy
-- Introduce migration scripts for storage schema
+### Step 3 — Session/Memory Persistence
+- **Entry**: Step 2 exit criteria met.
+- **Deliverables**:
+  - SQLite-backed `SessionStorePort` adapter
+  - SQLite-backed `MemoryStorePort` adapter with retrieval/writeback policy
+  - Storage schema + migration scripts
+  - Contract tests reused unchanged against the SQLite adapter (proving the
+    Port abstraction holds)
+- **Exit**: in-memory and SQLite adapters pass the same Port contract suite;
+  a session survives process restart.
 
-### Week 4
-- Build a small eval task set
-- Add baseline comparison and regression runner
-- Publish a compact run-quality report
+### Step 4 — Eval Tasks + Regression Runner
+- **Entry**: Step 3 exit criteria met; `ReplayModel` available.
+- **Deliverables**:
+  - A small, versioned eval task set (input + expected outcome)
+  - Baseline comparison + regression runner
+  - Compact run-quality report (pass rate, tool success rate, latency)
+- **Exit**: a known-good baseline exists; CI gate fails when pass rate
+  regresses against the baseline.
 
-### Week 5
-- Add replay from trace
-- Add telemetry aggregation (pass rate, tool success, latency)
+### Step 5 — Replay + Telemetry Metrics
+- **Entry**: Step 4 exit criteria met.
+- **Deliverables**:
+  - Deterministic replay from JSONL trace using injected
+    `ClockPort` / `IdPort`
+  - Telemetry aggregation (pass rate, tool success, latency, denial rate)
+  - Replay-vs-original divergence detector
+- **Exit**: any historical trace can be replayed and either matches exactly
+  or produces a precise divergence report.
 
-### Week 6
-- Add a controlled self-improvement pipeline:
-  - failed run clustering
-  - proposal generation
-  - regression gate and rollback
+### Step 6 — Guarded Improvement Proposals
+- **Entry**: Step 5 exit criteria met.
+- **Deliverables**:
+  - Failed-run clustering
+  - Proposal generation (human-readable suggestions; no autonomous code
+    edits)
+  - Regression gate + rollback playbook
+- **Exit**: proposals are produced from real failure clusters; every
+  proposal is gated by the Step 4 regression runner before any merge.
+  Consistent with the project's Non-Goal of "fully automated self-modifying
+  code paths".

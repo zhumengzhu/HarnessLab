@@ -98,14 +98,15 @@ Represents a requested tool action.
 Suggested fields:
 
 - `id`: unique tool call ID
+- `session_id`: owning session ID
 - `name`: tool name
 - `args`: argument payload
+- `policy_decision`: `allow:<reason>` or `deny:<reason>` recorded by the policy layer
+- `started_at`: execution start timestamp (UTC); `None` if the call was denied
+- `ended_at`: execution end timestamp (UTC); `None` if the call was denied
 
 Extended fields (future):
 
-- `policy_decision`
-- `started_at`
-- `ended_at`
 - `resource_usage`
 - `stdout_ref` / `stderr_ref`
 
