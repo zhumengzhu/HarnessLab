@@ -50,6 +50,14 @@ class HarnessLoop:
 
     def run_turn(self, session_id: str, user_input: str) -> str:
         session = self._sessions.get(session_id)
+        self._record(
+            session=session,
+            event_type="user_input_received",
+            payload={
+                "turn_index": session.turn_count,
+                "user_input": user_input,
+            },
+        )
         session.messages.append(
             self._make_message(role="user", content=user_input, session=session)
         )
@@ -57,7 +65,12 @@ class HarnessLoop:
         self._record(
             session=session,
             event_type="decision_made",
-            payload={"kind": decision.kind, "tool_name": decision.tool_name},
+            payload={
+                "kind": decision.kind,
+                "tool_name": decision.tool_name,
+                "tool_args": decision.tool_args,
+                "assistant_message": decision.assistant_message,
+            },
         )
         response = self._apply_decision(session, decision)
         session.turn_count += 1
