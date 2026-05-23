@@ -1,0 +1,16 @@
+name: shell_denylist_blocks
+goal: denylist blocks rm
+description: |
+  `rm` is on the default shell denylist; even with a benign argument
+  and even if a future maintainer adds it to the allowlist, the call
+  must be denied by policy with no tool execution.
+turns:
+  - input: '/tool run_shell_safe {"command":"rm /tmp/nothing"}'
+expected:
+  events_include:
+    - event_type: tool_denied
+      payload_contains:
+        tool: run_shell_safe
+  no_event_types:
+    - tool_executed
+    - tool_invalid_args

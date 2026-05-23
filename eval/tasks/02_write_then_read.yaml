@@ -1,0 +1,23 @@
+name: write_then_read
+goal: persist and recall a note
+description: |
+  write_file followed by read_file in the same session should both
+  succeed, with the final assistant message echoing the written content.
+turns:
+  - input: '/tool write_file {"path":"notes/a.txt","content":"hello"}'
+  - input: '/tool read_file {"path":"notes/a.txt"}'
+expected:
+  final_reply_contains:
+    - "[tool:read_file] hello"
+  events_include:
+    - event_type: tool_executed
+      payload_contains:
+        tool: write_file
+        ok: true
+    - event_type: tool_executed
+      payload_contains:
+        tool: read_file
+        ok: true
+  no_event_types:
+    - tool_denied
+    - tool_invalid_args

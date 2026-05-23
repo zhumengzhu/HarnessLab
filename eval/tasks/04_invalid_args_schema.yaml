@@ -1,0 +1,16 @@
+name: invalid_args_schema
+goal: schema gate
+description: |
+  A write_file call missing the required `path` argument must be
+  rejected by the runtime schema gate before reaching the policy
+  layer. Neither tool_denied nor tool_executed should appear.
+turns:
+  - input: '/tool write_file {}'
+expected:
+  events_include:
+    - event_type: tool_invalid_args
+      payload_contains:
+        tool: write_file
+  no_event_types:
+    - tool_denied
+    - tool_executed

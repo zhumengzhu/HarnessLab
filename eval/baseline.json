@@ -1,0 +1,55 @@
+{
+  "version": 1,
+  "results": {
+    "assistant_fallback": {
+      "passed": true,
+      "metrics": {
+        "turns": 1,
+        "tool_calls": 0,
+        "tool_failures": 0,
+        "denials": 0,
+        "invalid_args": 0
+      }
+    },
+    "write_then_read": {
+      "passed": true,
+      "metrics": {
+        "turns": 2,
+        "tool_calls": 2,
+        "tool_failures": 0,
+        "denials": 0,
+        "invalid_args": 0
+      }
+    },
+    "policy_denied_path": {
+      "passed": true,
+      "metrics": {
+        "turns": 1,
+        "tool_calls": 0,
+        "tool_failures": 0,
+        "denials": 1,
+        "invalid_args": 0
+      }
+    },
+    "invalid_args_schema": {
+      "passed": true,
+      "metrics": {
+        "turns": 1,
+        "tool_calls": 0,
+        "tool_failures": 0,
+        "denials": 0,
+        "invalid_args": 1
+      }
+    },
+    "shell_denylist_blocks": {
+      "passed": true,
+      "metrics": {
+        "turns": 1,
+        "tool_calls": 0,
+        "tool_failures": 0,
+        "denials": 1,
+        "invalid_args": 0
+      }
+    }
+  }
+}

@@ -1,0 +1,17 @@
+name: assistant_fallback
+goal: greet
+description: |
+  A bare greeting should fall back to the canned assistant reply. No
+  tool path should fire; no policy or schema event should appear.
+turns:
+  - input: hello
+expected:
+  final_reply_contains:
+    - "HarnessLab is ready"
+  events_include:
+    - event_type: session_started
+    - event_type: decision_made
+  no_event_types:
+    - tool_executed
+    - tool_denied
+    - tool_invalid_args

@@ -1,0 +1,16 @@
+name: policy_denied_path
+goal: read outside workspace
+description: |
+  A relative path that escapes the workspace must be denied by policy,
+  with no tool execution occurring.
+turns:
+  - input: '/tool read_file {"path":"../../etc/passwd"}'
+expected:
+  events_include:
+    - event_type: tool_denied
+      payload_contains:
+        tool: read_file
+        policy_decision: "deny:path out of workspace"
+  no_event_types:
+    - tool_executed
+    - tool_invalid_args
