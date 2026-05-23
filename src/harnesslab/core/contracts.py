@@ -1,7 +1,8 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from harnesslab.core.models import Decision, Session, ToolCall, ToolResult, TraceEvent
 
@@ -12,6 +13,8 @@ class ModelPort(Protocol):
 
 class ToolPort(Protocol):
     name: str
+    description: str
+    args_schema: dict[str, Any]
 
     def execute(self, call: ToolCall) -> ToolResult: ...
 
@@ -21,7 +24,7 @@ class PolicyPort(Protocol):
 
 
 class SessionStorePort(Protocol):
-    def create(self, goal: str) -> Session: ...
+    def create(self, session: Session) -> None: ...
 
     def get(self, session_id: str) -> Session: ...
 
@@ -36,6 +39,18 @@ class MemoryStorePort(Protocol):
 
 class TraceRecorderPort(Protocol):
     def record(self, event: TraceEvent) -> None: ...
+
+
+class ClockPort(Protocol):
+    """Time source. Injected so replay/tests can use deterministic clocks."""
+
+    def now(self) -> datetime: ...
+
+
+class IdPort(Protocol):
+    """ID source. Injected so replay/tests can use deterministic IDs."""
+
+    def new_id(self, prefix: str) -> str: ...
 
 
 class RuntimeContext(Protocol):

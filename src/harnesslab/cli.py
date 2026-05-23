@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 
 from harnesslab.core.loop import HarnessLoop
+from harnesslab.core.runtime import SystemClock, UuidIdProvider
 from harnesslab.core.simple_model import SimpleModel
 from harnesslab.policy.default_policy import DefaultPolicy
 from harnesslab.session.in_memory import InMemorySessionStore
@@ -17,9 +18,9 @@ def build_runtime(workspace_root: Path) -> HarnessLoop:
     sessions = InMemorySessionStore()
     policy = DefaultPolicy(workspace_root=workspace_root)
     tools = ToolRegistry()
-    tools.register(ReadFileTool(workspace_root), name="read_file")
-    tools.register(WriteFileTool(workspace_root), name="write_file")
-    tools.register(RunShellSafeTool(workspace_root), name="run_shell_safe")
+    tools.register(ReadFileTool(workspace_root))
+    tools.register(WriteFileTool(workspace_root))
+    tools.register(RunShellSafeTool(workspace_root))
     trace = JsonlTraceRecorder(workspace_root / ".harnesslab" / "trace.jsonl")
     model = SimpleModel()
     return HarnessLoop(
@@ -28,6 +29,8 @@ def build_runtime(workspace_root: Path) -> HarnessLoop:
         sessions=sessions,
         tools=tools,
         trace=trace,
+        clock=SystemClock(),
+        ids=UuidIdProvider(),
     )
 
 

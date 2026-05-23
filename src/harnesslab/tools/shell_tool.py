@@ -3,6 +3,7 @@ from __future__ import annotations
 import shlex
 import subprocess
 from pathlib import Path
+from typing import Any
 
 from harnesslab.core.models import ToolCall, ToolResult
 
@@ -10,6 +11,23 @@ _MAX_OUTPUT_BYTES = 65536
 
 
 class RunShellSafeTool:
+    name = "run_shell_safe"
+    description = (
+        "Run a whitelisted command without shell interpretation. "
+        "Command must be a single argv expressible string (no &&, ||, |, ;, <, >, `, $())."
+    )
+    args_schema: dict[str, Any] = {
+        "type": "object",
+        "properties": {
+            "command": {
+                "type": "string",
+                "description": "Command line; parsed via shlex and executed with shell=False.",
+            },
+        },
+        "required": ["command"],
+        "additionalProperties": False,
+    }
+
     def __init__(self, workspace_root: Path, timeout_seconds: int = 5) -> None:
         self._workspace_root = workspace_root
         self._timeout_seconds = timeout_seconds

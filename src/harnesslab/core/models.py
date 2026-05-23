@@ -16,6 +16,8 @@ class Message(BaseModel):
     role: Literal["system", "user", "assistant", "tool"]
     content: str
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    session_id: str | None = None
+    tool_call_id: str | None = None
 
 
 class Session(BaseModel):
@@ -31,6 +33,10 @@ class ToolCall(BaseModel):
     id: str = Field(default_factory=lambda: _new_id("tool"))
     name: str
     args: dict[str, Any]
+    session_id: str | None = None
+    policy_decision: str | None = None
+    started_at: datetime | None = None
+    ended_at: datetime | None = None
 
 
 class ToolResult(BaseModel):
