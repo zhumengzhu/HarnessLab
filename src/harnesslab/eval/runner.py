@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import tempfile
 from collections.abc import Iterable
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -28,9 +29,33 @@ from harnesslab.eval.task import (
 )
 from harnesslab.policy.default_policy import DefaultPolicy
 from harnesslab.session.in_memory import InMemorySessionStore
-from harnesslab.tools.file_tools import ReadFileTool, WriteFileTool
+from harnesslab.tools.file_tools import (
+    EditFileTool,
+    GlobTool,
+    GrepTool,
+    ReadFileTool,
+    WriteFileTool,
+)
 from harnesslab.tools.registry import ToolRegistry
 from harnesslab.tools.shell_tool import RunShellSafeTool
+
+
+def _limits_for_task(task: Task) -> RuntimeLimits:
+    base = RuntimeLimits()
+    if task.limits is None:
+        return base
+    return replace(base, **task.limits.model_dump(exclude_none=True))
+
+
+def _build_tool_registry(workspace: Path, limits: RuntimeLimits) -> ToolRegistry:
+    tools = ToolRegistry()
+    tools.register(ReadFileTool(workspace, limits=limits))
+    tools.register(WriteFileTool(workspace, limits=limits))
+    tools.register(EditFileTool(workspace, limits=limits))
+    tools.register(GrepTool(workspace, limits=limits))
+    tools.register(GlobTool(workspace, limits=limits))
+    tools.register(RunShellSafeTool(workspace, limits=limits))
+    return tools
 
 
 def _payload_contains(actual: dict[str, Any], expected: dict[str, Any]) -> bool:
@@ -128,11 +153,8 @@ class TaskRunner:
     def _drive_loop(
         self, task: Task, workspace: Path
     ) -> tuple[list[TraceEvent], str]:
-        limits = RuntimeLimits()
-        tools = ToolRegistry()
-        tools.register(ReadFileTool(workspace, limits=limits))
-        tools.register(WriteFileTool(workspace, limits=limits))
-        tools.register(RunShellSafeTool(workspace, limits=limits))
+        limits = _limits_for_task(task)
+        tools = _build_tool_registry(workspace, limits)
 
         recorder = ReplayTraceRecorder()
         model: Any = (
@@ -147,6 +169,7 @@ class TaskRunner:
             trace=recorder,
             clock=FrozenClock(start=self._clock_start),
             ids=SeqIdProvider(),
+            limits=limits,
         )
 
         session = loop.start(goal=task.goal)

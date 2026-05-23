@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>HarnessLab</title>
+  <link rel="stylesheet" href="/static/style.css" />
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="sidebar-header">
+        <h1>HarnessLab</h1>
+        <button id="new-chat" type="button">新对话</button>
+      </div>
+      <ul id="session-list" class="session-list"></ul>
+    </aside>
+    <main class="chat">
+      <header class="chat-header">
+        <h2 id="chat-title">新对话</h2>
+        <span id="chat-status" class="status-pill"></span>
+      </header>
+      <div id="messages" class="messages"></div>
+      <form id="composer" class="composer">
+        <textarea id="input" rows="2" placeholder="输入消息… (Enter 发送, Shift+Enter 换行)"></textarea>
+        <button type="submit" id="send-btn">发送</button>
+      </form>
+    </main>
+  </div>
+  <script src="/static/app.js"></script>
+</body>
+</html>

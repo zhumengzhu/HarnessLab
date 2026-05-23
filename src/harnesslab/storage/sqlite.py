@@ -68,9 +68,15 @@ MIGRATIONS: list[tuple[int, str]] = [
 
 
 def connect(path: str | Path) -> sqlite3.Connection:
-    """Open a SQLite connection with foreign-key enforcement enabled."""
+    """Open a SQLite connection with foreign-key enforcement enabled.
 
-    conn = sqlite3.connect(str(path))
+    ``check_same_thread=False`` allows the Web UI server
+    (``ThreadingHTTPServer``) to share one connection across worker
+    threads. Callers must serialize writes (the web layer uses
+    per-session locks; CLI is single-threaded).
+    """
+
+    conn = sqlite3.connect(str(path), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
     return conn

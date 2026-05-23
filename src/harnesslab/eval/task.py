@@ -29,6 +29,20 @@ class TaskTurn(BaseModel):
     max_steps: int = 1
 
 
+class TaskLimits(BaseModel):
+    """Optional runtime limit overrides for a single eval task.
+
+    Used to exercise compaction with a low token threshold without
+    changing global defaults.
+    """
+
+    compaction_threshold_tokens: int | None = None
+    compaction_keep_last_messages: int | None = None
+    context_window_tokens: int | None = None
+    output_bytes_cap: int | None = None
+    shell_timeout_seconds: int | None = None
+
+
 class TaskExpected(BaseModel):
     final_reply_contains: list[str] = Field(default_factory=list)
     events_include: list[ExpectedEvent] = Field(default_factory=list)
@@ -41,6 +55,7 @@ class Task(BaseModel):
     description: str = ""
     decisions: list[Decision] | None = None
     turns: list[TaskTurn]
+    limits: TaskLimits | None = None
     expected: TaskExpected = Field(default_factory=TaskExpected)
 
 

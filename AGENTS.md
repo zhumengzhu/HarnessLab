@@ -28,6 +28,8 @@ Must include (current):
 - Session as first-class citizen (persist, list, resume, fork)
 - Automatic context compaction (threshold + overflow recovery)
 - Per-call context observability (`ContextSnapshot` on `model_call`)
+- Local Web chat UI (`harnesslab serve`, Phase 3.2)
+- Optional LLM session auto-titles after first turn (DeepSeek only)
 - Trace recording, eval/replay/propose CLI, unit + contract tests
 - DeepSeek provider behind `ModelPort` for `harnesslab run --model deepseek`
 
@@ -71,6 +73,7 @@ Must NOT include yet:
 - `src/harnesslab/eval`: YAML task suite and regression runner
 - `src/harnesslab/replay`: trace reader, replayer, divergence detector
 - `src/harnesslab/improve`: advisory proposal generator
+- `src/harnesslab/web`: localhost Web UI (`harnesslab serve`)
 - `tests`: unit and contract tests
 - `docs`: roadmap and architecture documentation
 

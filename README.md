@@ -26,7 +26,7 @@ uv run harnesslab run "list files in this workspace"
 uv run pytest
 ```
 
-The CLI exposes seven subcommands:
+The CLI exposes eight subcommands:
 
 - `harnesslab run <input>` — start a session and run the agent loop
   (multi-step by default; see `--max-steps`).
@@ -41,6 +41,7 @@ The CLI exposes seven subcommands:
   sessions (SQLite).
 - `harnesslab context <trace.jsonl>` — inspect per-call context
   snapshots from `model_call` events.
+- `harnesslab serve` — local Web chat UI (localhost only).
 
 Run `harnesslab --help` for the full surface.
 
@@ -62,6 +63,22 @@ uv run harnesslab run "hello" --max-steps 3
 Built-in tools: `read_file`, `write_file`, `edit_file`, `grep`, `glob`,
 `run_shell_safe`. See `docs/architecture/tool-runtime.md` for policy
 details.
+
+### Web chat UI (`serve`)
+
+```bash
+export DEEPSEEK_API_KEY="***"   # required for default --model deepseek
+uv run harnesslab serve --workspace-root .
+# open http://127.0.0.1:8787/
+```
+
+The browser UI shares the SQLite session store with the CLI — sessions
+created in the web UI appear in `harnesslab session ls`, and vice versa.
+When using DeepSeek, session titles in the sidebar are auto-generated
+after the first message (short LLM call, low token; falls back silently).
+
+Use `--model simple` for offline smoke tests without network access.
+Only `127.0.0.1` is allowed; the server refuses public bind addresses.
 
 ### Model backends (`run`)
 
@@ -150,7 +167,9 @@ Exit codes:
 
 Each task declares its expected trace shape (ordered event subset,
 forbidden event types, and `final_reply` substring), so the eval suite
-doubles as living documentation of the loop's invariants.
+doubles as living documentation of the loop's invariants. See
+[`eval/README.md`](eval/README.md) for the propose→eval workflow and
+task authoring guide (nine shipped tasks as of Phase 3.1).
 
 ### Replay, Metrics & Context
 

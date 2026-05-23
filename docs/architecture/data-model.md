@@ -174,6 +174,7 @@ shapes are what `harnesslab metrics` aggregates.
 | `compaction_started` | `trigger: "threshold" \| "overflow"`, `before_messages: int`, `before_tokens: int`, `keep_last: int` |
 | `compaction_completed` | `after_messages: int`, `after_tokens: int` |
 | `session_finished` | `reason: "final" \| "ask_user" \| "max_steps" \| "overflow"`, `steps: int` |
+| `session_titled` | `title: str`, `previous_title: str \| null`, `source: "llm"` |
 
 `tool_executed`'s `output_*` fields, model telemetry fields
 (`model_name`, `provider`, token counters), timing fields

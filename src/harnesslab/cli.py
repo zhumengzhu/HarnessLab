@@ -18,6 +18,7 @@ from harnesslab.core.prompt import (
 )
 from harnesslab.core.runtime import SystemClock, UuidIdProvider
 from harnesslab.core.simple_model import SimpleModel
+from harnesslab.core.title import LiveTitleNamer
 from harnesslab.eval.baseline import compare, load_baseline, save_baseline
 from harnesslab.eval.loader import load_suite, load_task
 from harnesslab.eval.report import render_stdout, write_json
@@ -52,6 +53,7 @@ from harnesslab.tools.file_tools import (
 )
 from harnesslab.tools.registry import ToolRegistry
 from harnesslab.tools.shell_tool import RunShellSafeTool
+from harnesslab.web.server import WebRuntime, serve
 
 StorageBackend = Literal["memory", "sqlite"]
 ModelBackend = Literal["simple", "deepseek"]
@@ -71,6 +73,7 @@ SUBCOMMANDS = (
     "propose",
     "session",
     "context",
+    "serve",
 )
 
 EXIT_OK = 0
@@ -148,8 +151,10 @@ def build_runtime(
                 workspace_root, tools
             ),
         )
+        title_namer = LiveTitleNamer(model)
     else:
         model = SimpleModel()
+        title_namer = None
     return HarnessLoop(
         model=model,
         policy=policy,
@@ -159,6 +164,7 @@ def build_runtime(
         clock=SystemClock(),
         ids=UuidIdProvider(),
         limits=limits,
+        title_namer=title_namer,
     )
 
 
@@ -470,6 +476,52 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Number of rows to print (newest last). Default 20.",
     )
 
+    # ----- serve (Web UI) -----
+    sv = sub.add_parser(
+        "serve",
+        help="Start the local Web chat UI (localhost only).",
+        description=(
+            "Bind a localhost HTTP server with a minimal chat interface. "
+            "Uses the same HarnessLoop and SQLite session store as the CLI."
+        ),
+    )
+    sv.add_argument(
+        "--workspace-root",
+        default=".",
+        help="Workspace root used by file and shell tools.",
+    )
+    sv.add_argument(
+        "--host",
+        default="127.0.0.1",
+        help="Bind address (default: 127.0.0.1 — local only).",
+    )
+    sv.add_argument(
+        "--port",
+        type=int,
+        default=8787,
+        help="TCP port (default: 8787).",
+    )
+    sv.add_argument(
+        "--sqlite-path",
+        default=None,
+        help=(
+            "SQLite DB path. Relative paths resolve against --workspace-root. "
+            f"Defaults to {DEFAULT_SQLITE_PATH!r}."
+        ),
+    )
+    sv.add_argument(
+        "--model",
+        default="deepseek",
+        choices=["simple", "deepseek"],
+        help="Model backend (default: deepseek).",
+    )
+    sv.add_argument(
+        "--max-steps",
+        type=int,
+        default=DEFAULT_MAX_STEPS,
+        help="Default inner-loop step budget per message.",
+    )
+
     return parser
 
 
@@ -512,14 +564,11 @@ def main() -> None:
         sys.exit(_cmd_session(args))
     if args.command == "context":
         sys.exit(_cmd_context(args))
+    if args.command == "serve":
+        sys.exit(_cmd_serve(args))
 
     parser.print_help(sys.stderr)
     sys.exit(EXIT_USAGE)
-
-
-# ---------------------------------------------------------------------------
-# subcommand handlers
-# ---------------------------------------------------------------------------
 
 
 def _cmd_run(args: argparse.Namespace) -> int:
@@ -544,6 +593,39 @@ def _cmd_run(args: argparse.Namespace) -> int:
     session = loop.start(goal=args.input)
     response = loop.run_session(session.id, args.input, max_steps=args.max_steps)
     print(response)
+    return EXIT_OK
+
+
+def _cmd_serve(args: argparse.Namespace) -> int:
+    if args.host not in ("127.0.0.1", "localhost", "::1"):
+        print(
+            "Refusing to bind to a non-local address. "
+            "HarnessLab serve is localhost-only.",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+    if args.max_steps < 1:
+        print(f"--max-steps must be >= 1, got {args.max_steps}", file=sys.stderr)
+        return EXIT_USAGE
+    workspace_root = Path(args.workspace_root).resolve()
+    sqlite_path = Path(args.sqlite_path) if args.sqlite_path else None
+    try:
+        loop = build_runtime(
+            workspace_root=workspace_root,
+            storage_backend="sqlite",
+            sqlite_path=sqlite_path,
+            model_backend=args.model,
+        )
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return EXIT_USAGE
+    runtime = WebRuntime(
+        loop=loop,
+        model_backend=args.model,
+        workspace_root=workspace_root,
+        default_max_steps=args.max_steps,
+    )
+    serve(runtime, host=args.host, port=args.port)
     return EXIT_OK
 
 

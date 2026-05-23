@@ -326,6 +326,31 @@ def test_runner_drives_multi_step_turn_via_max_steps() -> None:
     assert result.metrics.tool_calls == 1
 
 
+def test_runner_honors_task_limits_for_compaction() -> None:
+    from harnesslab.core.models import Decision
+    from harnesslab.eval.task import TaskLimits
+
+    long_body = "x" * 200
+    task = Task(
+        name="compact",
+        goal="g",
+        limits=TaskLimits(compaction_threshold_tokens=40, compaction_keep_last_messages=2),
+        decisions=[
+            Decision(kind="final", assistant_message=long_body),
+            Decision(kind="final", assistant_message="ok"),
+        ],
+        turns=[
+            TaskTurn(input="one"),
+            TaskTurn(input="two"),
+        ],
+        expected=TaskExpected(
+            events_include=[ExpectedEvent(event_type="compaction_started")],
+        ),
+    )
+    result = _result_of(task)
+    assert result.passed, result.failures
+
+
 # ---------- determinism ----------
 
 

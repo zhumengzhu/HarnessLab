@@ -60,6 +60,36 @@
         "denials": 0,
         "invalid_args": 0
       }
+    },
+    "grep_then_edit": {
+      "passed": true,
+      "metrics": {
+        "turns": 1,
+        "tool_calls": 3,
+        "tool_failures": 0,
+        "denials": 0,
+        "invalid_args": 0
+      }
+    },
+    "compaction_on_threshold": {
+      "passed": true,
+      "metrics": {
+        "turns": 2,
+        "tool_calls": 0,
+        "tool_failures": 0,
+        "denials": 0,
+        "invalid_args": 0
+      }
+    },
+    "session_resume_second_turn": {
+      "passed": true,
+      "metrics": {
+        "turns": 2,
+        "tool_calls": 2,
+        "tool_failures": 0,
+        "denials": 0,
+        "invalid_args": 0
+      }
     }
   }
 }

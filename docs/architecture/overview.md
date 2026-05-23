@@ -91,6 +91,12 @@ flowchart TD
 13. `core/context` (Phase 2.6)
    - `ContextSnapshot` published on every `model_call` event;
      surfaced through `harnesslab context` and `harnesslab metrics`
+14. `web` (Phase 3.2)
+   - Localhost HTTP server + static chat UI (`harnesslab serve`)
+   - Thin JSON API over the same `HarnessLoop` / SQLite sessions
+15. `core/title` (Phase 3.2)
+   - Placeholder titles from goals; optional `LiveTitleNamer` after
+     the first turn when using a live model backend
 
 ## Runtime Flow (Multi-step Session — Phase 2.1)
 
@@ -421,6 +427,41 @@ detector treats the `context` field as informational (token
 estimates depend on tool outputs that embed workspace paths), so
 adding `ContextSnapshot` did not break eval/replay round-trips.
 
+## Web Chat UI (Phase 3.2)
+
+`harnesslab serve` binds a **localhost-only** HTTP server that
+reuses the production runtime — no duplicate loop logic.
+
+```mermaid
+flowchart LR
+    Browser[Browser Chat UI] --> API[JSON API /api/sessions]
+    API --> Loop[HarnessLoop.run_session]
+    Loop --> Store[SqliteSessionStore]
+    Loop --> Trace[JsonlTraceRecorder]
+```
+
+Endpoints:
+
+- `GET /` — static chat page (`web/static/`)
+- `GET /api/sessions` — list sessions (newest first)
+- `GET /api/sessions/{id}` — session metadata + messages
+- `POST /api/sessions` — `start` + first `run_session`
+- `POST /api/sessions/{id}/messages` — continue conversation
+
+Security defaults: bind `127.0.0.1` only; refuse public hosts; per-session
+lock prevents concurrent double-posts to the same session.
+
+## Session auto-titles (Phase 3.2)
+
+Initial `Session.title` is derived from the goal string
+(`derive_title_from_text`). After the first completed turn, an optional
+`LiveTitleNamer` (enabled for DeepSeek) sends a **minimal** one-shot
+prompt (first user message + short assistant excerpt only) and replaces
+the title when the model returns a plain-text `final` reply. Failures
+are silent; a `session_titled` trace event records successful renames.
+The `simple` model path skips LLM naming so eval/replay stay
+deterministic.
+
 ## Planned Evolution
 
 1. Replace in-memory stores with SQLite-backed stores — DONE (Step 3)
@@ -434,5 +475,6 @@ adding `ContextSnapshot` did not break eval/replay round-trips.
 6. Real autonomous agent loop with prompt composer, persistent
    sessions, auto compaction, and context observability — DONE
    (Phase 2.1–2.6)
-7. Memory retrieval/writeback policy on top of the session
-   substrate — deferred (see `docs/roadmap.md` "Deferred")
+7. Web chat UI + LLM session auto-titles — IN PROGRESS (Phase 3.2)
+8. Memory retrieval/writeback policy on top of the session
+   substrate — planned (Phase 3.3)

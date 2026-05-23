@@ -1,7 +1,6 @@
-# HarnessLab eval workflow — superseded by eval.yml (active).
+# HarnessLab eval workflow
 #
-# This file is kept as reference. The live workflow is
-# `.github/workflows/eval.yml`.
+# Gates pull requests on baseline regressions. Exit code 3 = regression -> CI red.
 
 name: eval
 
@@ -27,6 +26,9 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --frozen
+
+      - name: Run unit tests
+        run: uv run pytest
 
       - name: Run eval suite
         run: uv run harnesslab eval

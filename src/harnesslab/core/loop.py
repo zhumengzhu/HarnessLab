@@ -32,6 +32,7 @@ from harnesslab.core.models import (
     TraceEvent,
 )
 from harnesslab.core.runtime import SystemClock, UuidIdProvider
+from harnesslab.core.title import TitleNamer, derive_title_from_text
 from harnesslab.tools.registry import ToolRegistry
 
 _TRACE_OUTPUT_PREVIEW_BYTES = 512
@@ -64,6 +65,7 @@ class HarnessLoop:
         ids: IdPort | None = None,
         limits: RuntimeLimits | None = None,
         summarizer: Summarizer | None = None,
+        title_namer: TitleNamer | None = None,
     ) -> None:
         self._model = model
         self._policy = policy
@@ -74,13 +76,14 @@ class HarnessLoop:
         self._ids: IdPort = ids or UuidIdProvider()
         self._limits: RuntimeLimits = limits or RuntimeLimits()
         self._summarizer: Summarizer | None = summarizer
+        self._title_namer: TitleNamer | None = title_namer
 
     def start(self, goal: str) -> Session:
         session = Session(
             id=self._ids.new_id("ses"),
             goal=goal,
             created_at=self._clock.now(),
-            title=_derive_title(goal),
+            title=derive_title_from_text(goal),
         )
         self._sessions.create(session)
         self._record(
@@ -117,7 +120,7 @@ class HarnessLoop:
             id=forked_id,
             goal=goal or parent.goal,
             created_at=self._clock.now(),
-            title=_derive_title(goal or parent.goal),
+            title=derive_title_from_text(goal or parent.goal),
             parent_session_id=parent.id,
             messages=copied_messages,
         )
@@ -253,8 +256,36 @@ class HarnessLoop:
             session.status = "waiting_user"
         # Hitting max_steps leaves status as "running" — the next
         # run_session call can extend the session.
+        self._maybe_auto_title(session)
         self._sessions.save(session)
         return last_response
+
+    def _maybe_auto_title(self, session: Session) -> None:
+        """Replace the placeholder title after the first user turn.
+
+        Runs at most once (``turn_count == 1``). Failures are silent;
+        the derived title from :func:`derive_title_from_text` remains.
+        """
+
+        if session.turn_count != 1 or self._title_namer is None:
+            return
+        previous = session.title
+        try:
+            proposed = self._title_namer(session)
+        except Exception:
+            return
+        if not proposed or proposed == previous:
+            return
+        session.title = proposed
+        self._record(
+            session=session,
+            event_type="session_titled",
+            payload={
+                "title": proposed,
+                "previous_title": previous,
+                "source": "llm",
+            },
+        )
 
     # ------------------------------------------------------------------
     # compaction
@@ -597,25 +628,3 @@ class HarnessLoop:
         if result.ok:
             return f"[tool:{call.name}] {result.output}"
         return f"[tool:{call.name}] failed: {result.error or 'unknown error'}"
-
-
-_TITLE_MAX_LEN = 60
-
-
-def _derive_title(text: str) -> str:
-    """Turn a goal or user input into a short, single-line label.
-
-    The first non-empty line is used; lines longer than
-    :data:`_TITLE_MAX_LEN` are truncated with an ellipsis. Empty input
-    yields the placeholder string ``"(no title)"`` so the
-    ``session ls`` CLI never has to render ``None``.
-    """
-
-    for line in (text or "").splitlines():
-        stripped = line.strip()
-        if not stripped:
-            continue
-        if len(stripped) <= _TITLE_MAX_LEN:
-            return stripped
-        return stripped[: _TITLE_MAX_LEN - 1].rstrip() + "…"
-    return "(no title)"

@@ -80,9 +80,9 @@ HarnessLab is no longer a one-turn MVP loop. The shipped runtime includes:
 - **DeepSeek provider** for `harnesslab run --model deepseek`
 - **Eval / replay / propose** unchanged as quality gates
 
-**Deferred:** cross-session memory retrieval/writeback, static HTML metrics
-dashboards, eval task expansion from production failures — see
-[Deferred (Reconsider After Phase 2 in Production)](#deferred-reconsider-after-phase-2-in-production).
+**Deferred:** cross-session memory retrieval/writeback (Phase 3.3),
+static HTML metrics dashboards, eval task expansion from production
+failures (Phase 3.1). See [Post-MVP Phase 3](#post-mvp-phase-3--usability--production-feedback-in-progress).
 
 ## MVP Deliverables (historical — Step 1 baseline)
 
@@ -499,19 +499,100 @@ the other way around".
   `overflow_recoveries`; pre-Phase-2.6 traces still aggregate
   cleanly (missing fields default to `0` / `None`).
 
-## Deferred (Reconsider After Phase 2 in Production)
+## Post-MVP Phase 3 — Usability & Production Feedback (in progress)
 
-- **Memory retrieval/writeback policy.** Wire `MemoryStorePort`
-  into `HarnessLoop` so turn-level inference can read/write
-  durable memory intentionally. Define extraction / eviction
-  policy and add explicit eval tasks. Deferred until the
-  Phase 2.3 session substrate is exercised by real workflows.
-- **Metrics dashboard artifact.** A static HTML report on top of
-  `harnesslab metrics` / `harnesslab context` for trend visibility
-  across many traces. Deferred — the JSON surfaces are already the
-  source of truth and external tooling can render them today.
-- **Eval task expansion from real failures.** Codify every
-  recurring real-world failure discovered by `harnesslab propose`
-  as a new eval task before merging the fix, so the Step 4
-  regression gate stays aligned with production reality. Will
-  start naturally as Phase 2 sees production use.
+Phase 2 delivered a working multi-step agent. Phase 3 turns it into
+something people actually use daily: browser chat, smarter session
+labels, and eval coverage that tracks real failures.
+
+```mermaid
+flowchart TD
+    P31[Phase 3.1<br/>Eval expansion from real tasks]
+    P32[Phase 3.2<br/>Web Chat UI + auto session titles]
+    P33[Phase 3.3<br/>Memory on Session]
+    P34[Phase 3.4<br/>Tool & edit enhancements]
+
+    P31 --> P32 --> P33 --> P34
+```
+
+### Phase 3.1 — Eval expansion from real tasks — DONE
+
+- Codify recurring `harnesslab propose` clusters as YAML eval tasks
+  before merging fixes — see `eval/README.md` (propose→eval workflow).
+- Shipped tasks: `grep_then_edit`, `compaction_on_threshold`,
+  `session_resume_second_turn` (nine tasks total).
+- Eval runner registers all six built-in tools; optional per-task
+  `limits:` overrides for compaction tests.
+- GitHub Actions workflow `.github/workflows/eval.yml` runs
+  `pytest` + `harnesslab eval` on pull requests.
+
+**Exit**: shipped eval tasks cover Phase 2 core paths; propose→eval
+workflow documented.
+
+### Phase 3.2 — Web Chat UI + session auto-titles — DONE
+
+**Web UI (`harnesslab serve`)**
+
+- Localhost-only HTTP server (`127.0.0.1:8787` by default).
+- Static chat page: message list, composer, session sidebar.
+- JSON API backed by the same `HarnessLoop` + SQLite session store
+  as the CLI (`GET/POST /api/sessions`, `POST .../messages`).
+- Default model: `deepseek` (requires `DEEPSEEK_API_KEY`); `--model
+  simple` for offline smoke tests.
+- No auth, no public bind — learning/dev tool, not a production web
+  service.
+
+**Auto LLM session titles (robust / fast / low token)**
+
+- After the **first** completed user turn (`turn_count == 1`), an
+  optional `LiveTitleNamer` replaces the placeholder title derived
+  from the goal string.
+- Prompt sends only the first user message + a short assistant
+  excerpt (no full transcript, no tool output).
+- Expects a plain-text `final` reply; tool decisions fall back silently.
+- Output sanitized (single line, 60-char cap); emits `session_titled`
+  trace event on success.
+- Wired automatically when `--model deepseek`; skipped for `simple`
+  (deterministic eval/replay path unchanged).
+
+**Deliverables (3.2.1 — shipped in this step)**
+
+- `src/harnesslab/web/` — stdlib `http.server` + static assets (no
+  new runtime dependencies).
+- `harnesslab serve [--port 8787] [--model deepseek|simple]`.
+- `src/harnesslab/core/title.py` — `derive_title_from_text`,
+  `LiveTitleNamer`, loop hook `_maybe_auto_title`.
+
+**Exit (3.2)**: browser chat completes a multi-step turn; session
+list shows LLM titles when using DeepSeek; CLI `session ls/show`
+sees the same SQLite rows.
+
+**Deferred within 3.2**: SSE streaming, tool-call inspector panel,
+fork button in UI (CLI `session fork` works today).
+
+### Phase 3.3 — Memory on Session — PLANNED
+
+- Wire `MemoryStorePort` read/write into `HarnessLoop` with explicit
+  policy (what to store, when to evict).
+- Eval tasks for memory-dependent behavior.
+- Build on session substrate from Phase 2.3 / 3.2 — not cross-session
+  RAG.
+
+### Phase 3.4 — Tool & edit enhancements — PLANNED
+
+- `apply_patch` / unified-diff editing.
+- Optional shell allowlist profiles.
+- UI affordances for tool output (when 3.2 inspector lands).
+
+---
+
+## Deferred (longer horizon)
+
+- **Memory retrieval/writeback policy** — now tracked as
+  [Phase 3.3](#phase-33--memory-on-session--planned); remains
+  deferred until session UX (Phase 3.2) is exercised in production.
+- **Metrics dashboard artifact.** Static HTML report on top of
+  `harnesslab metrics` / `harnesslab context`. The JSON CLI surfaces
+  are sufficient for now; external tooling can render trends.
+- **Eval task expansion from real failures** — now tracked as
+  [Phase 3.1](#phase-31--eval-expansion-from-real-tasks--planned).

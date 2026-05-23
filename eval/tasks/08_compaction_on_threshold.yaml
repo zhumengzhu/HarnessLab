@@ -1,0 +1,31 @@
+name: compaction_on_threshold
+goal: compaction when history exceeds budget
+description: |
+  Phase 2.4 compaction gate. A low ``limits.compaction_threshold_tokens``
+  forces ``compaction_started`` / ``compaction_completed`` before the
+  second user turn's model call.
+limits:
+  compaction_threshold_tokens: 40
+  compaction_keep_last_messages: 2
+decisions:
+  - kind: final
+    assistant_message: >-
+      xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+  - kind: final
+    assistant_message: done after compact
+turns:
+  - input: first long turn
+  - input: second turn
+expected:
+  final_reply_contains:
+    - done after compact
+  events_include:
+    - event_type: compaction_started
+      payload_contains:
+        trigger: threshold
+    - event_type: compaction_completed
+      payload_contains:
+        trigger: threshold
+  no_event_types:
+    - tool_denied
+    - tool_invalid_args

@@ -1,0 +1,47 @@
+name: grep_then_edit
+goal: find and fix a TODO marker
+description: |
+  Phase 2.5 coding path: seed a file, grep for a pattern, edit in place,
+  then finish. Exercises ``grep`` and ``edit_file`` in one multi-step turn.
+decisions:
+  - kind: tool
+    tool_name: write_file
+    tool_args:
+      path: src/app.py
+      content: |
+        def main():
+            pass  # TODO fix
+  - kind: tool
+    tool_name: grep
+    tool_args:
+      pattern: TODO
+  - kind: tool
+    tool_name: edit_file
+    tool_args:
+      path: src/app.py
+      old: "# TODO fix"
+      new: "# done"
+  - kind: final
+    assistant_message: Removed the TODO marker.
+turns:
+  - input: fix the TODO in app.py
+    max_steps: 4
+expected:
+  final_reply_contains:
+    - Removed the TODO
+  events_include:
+    - event_type: tool_executed
+      payload_contains:
+        tool: grep
+        ok: true
+    - event_type: tool_executed
+      payload_contains:
+        tool: edit_file
+        ok: true
+    - event_type: session_finished
+      payload_contains:
+        reason: final
+        steps: 4
+  no_event_types:
+    - tool_denied
+    - tool_invalid_args

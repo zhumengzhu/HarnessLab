@@ -35,4 +35,7 @@ def test_shipped_tasks_cover_expected_paths() -> None:
         "invalid_args_schema",
         "shell_denylist_blocks",
         "multi_step_tool_then_final",
+        "grep_then_edit",
+        "compaction_on_threshold",
+        "session_resume_second_turn",
     } <= names

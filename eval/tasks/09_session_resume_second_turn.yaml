@@ -1,0 +1,23 @@
+name: session_resume_second_turn
+goal: resume session on turn two
+description: |
+  Phase 2.3 session resume: turn 2 on the same ``session_id`` must see
+  filesystem state from turn 1 and record ``user_input_received`` with
+  ``turn_index: 1``.
+turns:
+  - input: '/tool write_file {"path":"state.txt","content":"persisted"}'
+  - input: '/tool read_file {"path":"state.txt"}'
+expected:
+  final_reply_contains:
+    - persisted
+  events_include:
+    - event_type: user_input_received
+      payload_contains:
+        turn_index: 1
+    - event_type: tool_executed
+      payload_contains:
+        tool: read_file
+        ok: true
+  no_event_types:
+    - tool_denied
+    - tool_invalid_args
