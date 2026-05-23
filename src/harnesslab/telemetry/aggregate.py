@@ -52,6 +52,15 @@ class Metrics(BaseModel):
     model_request_tokens: int
     model_response_tokens: int
     model_total_tokens: int
+    # Phase 2.6: context-window observability.
+    # These come from ``model_call.payload.context`` (the
+    # ``ContextSnapshot`` written by the loop) and from the
+    # compaction trace events. ``None``/``0`` is the right default
+    # for traces produced before Phase 2.6.
+    max_conversation_tokens: int
+    peak_usage_ratio: float | None
+    compactions: int
+    overflow_recoveries: int
 
 
 def aggregate(events: list[TraceEvent]) -> Metrics:
@@ -67,6 +76,10 @@ def aggregate(events: list[TraceEvent]) -> Metrics:
     model_request_tokens = 0
     model_response_tokens = 0
     model_total_tokens = 0
+    max_conversation_tokens = 0
+    peak_usage_ratio: float | None = None
+    compactions = 0
+    overflow_recoveries = 0
 
     for e in events:
         if e.event_type == "model_call":
@@ -83,6 +96,20 @@ def aggregate(events: list[TraceEvent]) -> Metrics:
                 model_response_tokens += resp
             if isinstance(total, int):
                 model_total_tokens += total
+            ctx = e.payload.get("context")
+            if isinstance(ctx, dict):
+                conv = ctx.get("conversation_tokens")
+                if isinstance(conv, int) and conv > max_conversation_tokens:
+                    max_conversation_tokens = conv
+                ratio = ctx.get("usage_ratio")
+                if isinstance(ratio, int | float):
+                    if peak_usage_ratio is None or ratio > peak_usage_ratio:
+                        peak_usage_ratio = float(ratio)
+            continue
+        if e.event_type == "compaction_started":
+            compactions += 1
+            if e.payload.get("trigger") == "overflow":
+                overflow_recoveries += 1
             continue
         if e.event_type != "tool_executed":
             continue
@@ -116,6 +143,10 @@ def aggregate(events: list[TraceEvent]) -> Metrics:
         model_request_tokens=model_request_tokens,
         model_response_tokens=model_response_tokens,
         model_total_tokens=model_total_tokens,
+        max_conversation_tokens=max_conversation_tokens,
+        peak_usage_ratio=peak_usage_ratio,
+        compactions=compactions,
+        overflow_recoveries=overflow_recoveries,
     )
 
 
@@ -188,6 +219,13 @@ def render_metrics(metrics: Metrics) -> str:
         )
     else:
         lines.append("  model_latency_ms: (no samples)")
+    lines.append(
+        "  context:         "
+        f"max_tokens={metrics.max_conversation_tokens} "
+        f"peak_usage={_fmt_rate(metrics.peak_usage_ratio)} "
+        f"compactions={metrics.compactions} "
+        f"overflow_recoveries={metrics.overflow_recoveries}"
+    )
     return "\n".join(lines)
 
 

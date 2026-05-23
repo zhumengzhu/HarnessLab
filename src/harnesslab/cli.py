@@ -63,7 +63,15 @@ DEFAULT_REPORTS_DIR = "eval/reports"
 DEFAULT_PROPOSALS_DIR = "proposals"
 DEFAULT_MIN_OCCURRENCES = 2
 
-SUBCOMMANDS = ("run", "eval", "replay", "metrics", "propose", "session")
+SUBCOMMANDS = (
+    "run",
+    "eval",
+    "replay",
+    "metrics",
+    "propose",
+    "session",
+    "context",
+)
 
 EXIT_OK = 0
 EXIT_UNREPLAYABLE = 2
@@ -413,6 +421,55 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Override the goal/title of the new session (defaults to parent's).",
     )
 
+    # ----- context -----
+    ctx = sub.add_parser(
+        "context",
+        help="Inspect ContextSnapshots emitted by the loop.",
+        description=(
+            "Read a JSONL trace and surface the per-call ContextSnapshot "
+            "data that the Phase 2.6 loop writes into model_call events. "
+            "Useful for spotting context-window pressure before it "
+            "triggers an emergency compaction."
+        ),
+    )
+    ctx.add_argument("trace", help="Path to a JSONL trace file.")
+    ctx_sub = ctx.add_subparsers(
+        dest="context_action",
+        required=True,
+        metavar="ACTION",
+    )
+
+    cshow = ctx_sub.add_parser(
+        "show",
+        help="Show the latest snapshot in the trace (peak figures + last call).",
+    )
+    cshow.add_argument(
+        "--session-id",
+        default=None,
+        help="Restrict to one session id (default: all sessions in the file).",
+    )
+    cshow.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit machine-readable JSON instead of the human summary.",
+    )
+
+    cseries = ctx_sub.add_parser(
+        "series",
+        help="Print one row per model_call snapshot (chronological).",
+    )
+    cseries.add_argument(
+        "--session-id",
+        default=None,
+        help="Restrict to one session id (default: all sessions).",
+    )
+    cseries.add_argument(
+        "--limit",
+        type=int,
+        default=20,
+        help="Number of rows to print (newest last). Default 20.",
+    )
+
     return parser
 
 
@@ -453,6 +510,8 @@ def main() -> None:
         sys.exit(_cmd_propose(args))
     if args.command == "session":
         sys.exit(_cmd_session(args))
+    if args.command == "context":
+        sys.exit(_cmd_context(args))
 
     parser.print_help(sys.stderr)
     sys.exit(EXIT_USAGE)
@@ -783,6 +842,155 @@ def _format_session_detail(session, *, include_messages: bool) -> str:
         for i, msg in enumerate(session.messages):
             preview = msg.content if len(msg.content) <= 120 else msg.content[:117] + "..."
             lines.append(f"  [{i}] {msg.role}: {preview}")
+    return "\n".join(lines)
+
+
+# ---------------------------------------------------------------------------
+# context subcommand: surface ContextSnapshot data from a trace
+# ---------------------------------------------------------------------------
+
+
+def _cmd_context(args: argparse.Namespace) -> int:
+    if args.context_action == "show":
+        return _cmd_context_show(args)
+    if args.context_action == "series":
+        return _cmd_context_series(args)
+    print(f"unknown context action: {args.context_action}", file=sys.stderr)
+    return EXIT_USAGE
+
+
+def _cmd_context_show(args: argparse.Namespace) -> int:
+    events = _read_trace_or_exit(args.trace)
+    snapshots = _collect_context_snapshots(events, args.session_id)
+    if not snapshots:
+        msg = "(no model_call events with context found"
+        if args.session_id:
+            msg += f" for session {args.session_id!r}"
+        print(msg + ")")
+        return EXIT_OK
+
+    last = snapshots[-1]
+    peak_conv = max(s["conversation_tokens"] for s in snapshots)
+    peak_usage = max(s["usage_ratio"] for s in snapshots)
+    summary = {
+        "session_filter": args.session_id,
+        "model_calls_with_context": len(snapshots),
+        "peak_conversation_tokens": peak_conv,
+        "peak_usage_ratio": round(peak_usage, 4),
+        "latest": last,
+    }
+    if args.json:
+        print(json.dumps(summary, indent=2, sort_keys=True))
+    else:
+        print(_format_context_show(summary))
+    return EXIT_OK
+
+
+def _cmd_context_series(args: argparse.Namespace) -> int:
+    events = _read_trace_or_exit(args.trace)
+    snapshots = _collect_context_snapshots(events, args.session_id)
+    if not snapshots:
+        print("(no model_call events with context found)")
+        return EXIT_OK
+    rows = snapshots[-max(1, args.limit) :]
+    print(_format_context_series(rows))
+    return EXIT_OK
+
+
+def _read_trace_or_exit(trace_arg: str) -> list:
+    trace_path = Path(trace_arg)
+    if not trace_path.exists():
+        raise SystemExit(f"trace file not found: {trace_path}")
+    try:
+        return read_trace(trace_path)
+    except json.JSONDecodeError as exc:
+        print(f"invalid JSONL trace: {exc}", file=sys.stderr)
+        raise SystemExit(EXIT_USAGE) from exc
+
+
+def _collect_context_snapshots(
+    events: list,
+    session_id: str | None,
+) -> list[dict]:
+    """Return one ``{session_id, created_at, **snapshot}`` row per call.
+
+    Snapshots are ordered by ``created_at`` so ``[-1]`` is the latest
+    and ``[-N:]`` is the most recent window.
+    """
+
+    rows: list[dict] = []
+    for ev in events:
+        if ev.event_type != "model_call":
+            continue
+        if session_id and ev.session_id != session_id:
+            continue
+        ctx = ev.payload.get("context")
+        if not isinstance(ctx, dict):
+            continue
+        rows.append(
+            {
+                "session_id": ev.session_id,
+                "created_at": ev.created_at.isoformat(),
+                **ctx,
+            }
+        )
+    rows.sort(key=lambda r: r["created_at"])
+    return rows
+
+
+def _format_context_show(summary: dict) -> str:
+    last = summary["latest"]
+    lines = [
+        "ContextSnapshot summary:",
+        f"  session_filter:           {summary['session_filter'] or '(all)'}",
+        f"  model_calls_with_context: {summary['model_calls_with_context']}",
+        f"  peak_conversation_tokens: {summary['peak_conversation_tokens']}",
+        f"  peak_usage_ratio:         {summary['peak_usage_ratio'] * 100:.1f}%",
+        "  latest:",
+        f"    session_id:             {last['session_id']}",
+        f"    at:                     {last['created_at']}",
+        f"    conversation_tokens:    {last['conversation_tokens']}",
+        f"    message_count:          {last['message_count']}",
+        f"    limit_tokens:           {last['limit_tokens']}",
+        f"    compaction_threshold:   {last['compaction_threshold_tokens']}",
+        f"    usage_ratio:            {last['usage_ratio'] * 100:.1f}%",
+        f"    threshold_ratio:        {last['threshold_ratio'] * 100:.1f}%",
+    ]
+    if "prompt_tokens_estimate" in last:
+        lines.extend(
+            [
+                f"    prompt_tokens_estimate: {last['prompt_tokens_estimate']}",
+                f"    static_block_tokens:    {last.get('static_block_tokens')}",
+                f"    dynamic_block_tokens:   {last.get('dynamic_block_tokens')}",
+            ]
+        )
+        names = last.get("prompt_block_names")
+        if names:
+            lines.append(f"    prompt_blocks:          {', '.join(names)}")
+    return "\n".join(lines)
+
+
+def _format_context_series(rows: list[dict]) -> str:
+    header = ("#", "at", "session", "conv_tok", "msgs", "usage%", "thr%")
+    widths = [len(h) for h in header]
+    table_rows: list[tuple[str, ...]] = []
+    for i, row in enumerate(rows, 1):
+        cells = (
+            str(i),
+            row["created_at"][:19],
+            row["session_id"][:18],
+            str(row["conversation_tokens"]),
+            str(row["message_count"]),
+            f"{row['usage_ratio'] * 100:.1f}",
+            f"{row['threshold_ratio'] * 100:.1f}",
+        )
+        widths = [max(w, len(c)) for w, c in zip(widths, cells, strict=True)]
+        table_rows.append(cells)
+    fmt = "  ".join("{:<%d}" % w for w in widths)
+    lines = [fmt.format(*header).rstrip()]
+    lines.append("  ".join("-" * w for w in widths))
+    for cells in table_rows:
+        lines.append(fmt.format(*cells).rstrip())
     return "\n".join(lines)
 
 
