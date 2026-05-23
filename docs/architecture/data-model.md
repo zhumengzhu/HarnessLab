@@ -155,10 +155,55 @@ Suggested fields:
 
 ## Storage Evolution Plan
 
-1. In-memory stores for MVP
-2. SQLite persistence for sessions/messages/traces
-3. Optional vector index or retrieval index for memory records
-4. Artifact storage references for large outputs
+1. In-memory stores for MVP — shipped (Step 1)
+2. SQLite persistence for sessions/messages/memory — shipped (Step 3)
+3. Optional vector index or retrieval index for memory records — planned
+4. Artifact storage references for large outputs — planned
+
+### Current SQLite Schema (managed by `storage.sqlite.MIGRATIONS`)
+
+```sql
+CREATE TABLE schema_version (
+    version INTEGER NOT NULL PRIMARY KEY,
+    applied_at TEXT NOT NULL
+);
+
+CREATE TABLE sessions (
+    id TEXT PRIMARY KEY,
+    goal TEXT NOT NULL,
+    status TEXT NOT NULL,
+    turn_count INTEGER NOT NULL,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE messages (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    tool_call_id TEXT,
+    ord INTEGER NOT NULL
+);
+
+CREATE INDEX idx_messages_session_ord ON messages(session_id, ord);
+
+CREATE TABLE memory_kv (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+);
+```
+
+Notes:
+
+- `messages.ord` preserves intra-session ordering; events are not relied
+  on timestamps alone (see "ID and Timestamp Conventions" above).
+- `memory_kv` is the MVP key/value table that backs `MemoryStorePort`.
+  The richer `MemoryRecord` model above will be added in its own table
+  when retrieval/writeback policy lands, without breaking `memory_kv`.
+- `traces` are still emitted to JSONL and not yet persisted to SQLite;
+  that wiring is part of the Step 5 replay work.
 
 ## Compatibility Guidance
 

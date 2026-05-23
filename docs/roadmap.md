@@ -130,16 +130,28 @@ Stable interfaces reduce migration risk from Python to TypeScript.
   and tested; resource limits are configurable; every Port has at least one
   compliance test; replay stubs satisfy the existing Port contracts.
 
-### Step 3 — Session/Memory Persistence
+### Step 3 — Session/Memory Persistence — IN PROGRESS
 - **Entry**: Step 2 exit criteria met.
 - **Deliverables**:
-  - SQLite-backed `SessionStorePort` adapter
-  - SQLite-backed `MemoryStorePort` adapter with retrieval/writeback policy
-  - Storage schema + migration scripts
-  - Contract tests reused unchanged against the SQLite adapter (proving the
-    Port abstraction holds)
+  - SQLite-backed `SessionStorePort` adapter — DONE
+    (`src/harnesslab/session/sqlite_store.py`).
+  - SQLite-backed `MemoryStorePort` adapter — DONE
+    (`src/harnesslab/memory/sqlite_store.py`). Retrieval/writeback policy
+    is deferred to Step 4 where eval tasks need it.
+  - Storage schema + migration mechanism — DONE
+    (`src/harnesslab/storage/sqlite.py::MIGRATIONS` + `apply_migrations`).
+    Migrations are tracked in a `schema_version` table for future
+    incremental versions.
+  - Contract tests reused unchanged against the SQLite adapter — DONE
+    (`tests/test_port_contracts.py` parametrizes the store fixtures over
+    `[in_memory, sqlite]`).
+  - CLI surface — DONE (`harnesslab --storage sqlite [--sqlite-path PATH]`).
 - **Exit**: in-memory and SQLite adapters pass the same Port contract suite;
-  a session survives process restart.
+  a session survives process restart (covered by
+  `tests/test_cli_storage.py::test_session_persists_via_cli_with_sqlite` and
+  `tests/test_sqlite_storage.py::test_session_persists_across_store_instances`).
+- **Remaining for full DONE**: memory retrieval/writeback policy, once the
+  Step 4 eval runner shows what the loop actually needs to read/write.
 
 ### Step 4 — Eval Tasks + Regression Runner
 - **Entry**: Step 3 exit criteria met; `ReplayModel` available.

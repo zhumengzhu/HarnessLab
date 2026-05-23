@@ -25,6 +25,23 @@ uv run harnesslab "list files in this workspace"
 uv run pytest
 ```
 
+### Storage backends
+
+By default the CLI uses in-memory session and memory stores (state is
+lost when the process exits). To persist state across runs use the
+SQLite backend:
+
+```bash
+uv run harnesslab "hello" --storage sqlite
+# default DB path: <workspace-root>/.harnesslab/state.sqlite
+
+uv run harnesslab "again" --storage sqlite \
+    --sqlite-path ./my-runs/state.sqlite
+```
+
+The same Port contract suite (`tests/test_port_contracts.py`) runs
+against both backends, so they are behaviorally interchangeable.
+
 ## Quality Gate
 
 Before every commit, both `uv run pytest` and `uv run ruff check` must
