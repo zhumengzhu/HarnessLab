@@ -158,5 +158,7 @@ class TaskRunner:
 def _drive_turns(loop: HarnessLoop, session_id: str, turns: Iterable[Any]) -> list[str]:
     replies: list[str] = []
     for turn in turns:
-        replies.append(loop.run_turn(session_id, turn.input))
+        replies.append(
+            loop.run_session(session_id, turn.input, max_steps=turn.max_steps)
+        )
     return replies

@@ -1,0 +1,35 @@
+name: multi_step_tool_then_final
+goal: write a note then summarize what happened
+description: |
+  Exercises the Phase 2.1 autonomous loop. The pre-recorded decisions
+  drive a single turn through two model decisions: a tool call and a
+  terminal "final" message. The eval gate proves that
+  ``loop.run_session(..., max_steps=2)`` (1) executes the tool, (2)
+  calls the model again, (3) terminates on ``final`` — and emits the
+  expected ``session_finished{reason: final, steps: 2}`` event.
+decisions:
+  - kind: tool
+    tool_name: write_file
+    tool_args:
+      path: notes/summary.txt
+      content: hello agentic loop
+  - kind: final
+    assistant_message: Wrote the summary note.
+turns:
+  - input: write a one-line summary
+    max_steps: 2
+expected:
+  final_reply_contains:
+    - Wrote the summary note.
+  events_include:
+    - event_type: tool_executed
+      payload_contains:
+        tool: write_file
+        ok: true
+    - event_type: session_finished
+      payload_contains:
+        reason: final
+        steps: 2
+  no_event_types:
+    - tool_denied
+    - tool_invalid_args

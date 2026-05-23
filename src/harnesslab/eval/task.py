@@ -23,6 +23,10 @@ class ExpectedEvent(BaseModel):
 
 class TaskTurn(BaseModel):
     input: str
+    # Inner-loop step budget for this turn. Defaults to 1 to preserve the
+    # original single-step contract used by existing eval tasks; raise to
+    # let the model react to tool results inside the same turn.
+    max_steps: int = 1
 
 
 class TaskExpected(BaseModel):

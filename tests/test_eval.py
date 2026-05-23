@@ -280,7 +280,7 @@ def test_runner_uses_replay_model_when_decisions_present() -> None:
         name="replay",
         goal="replay-driven",
         decisions=[
-            Decision(kind="assistant", assistant_message="canned reply"),
+            Decision(kind="final", assistant_message="canned reply"),
         ],
         turns=[TaskTurn(input="ignored because ReplayModel ignores input")],
         expected=TaskExpected(final_reply_contains=["canned reply"]),
@@ -288,6 +288,42 @@ def test_runner_uses_replay_model_when_decisions_present() -> None:
     result = _result_of(task)
     assert result.passed, result.failures
     assert result.final_reply == "canned reply"
+
+
+def test_runner_drives_multi_step_turn_via_max_steps() -> None:
+    """Phase 2.1: a single turn with max_steps>1 must consume multiple
+    pre-recorded decisions and terminate on the terminal one."""
+    from harnesslab.core.models import Decision
+
+    task = Task(
+        name="multi_step",
+        goal="multi-step",
+        decisions=[
+            Decision(
+                kind="tool",
+                tool_name="write_file",
+                tool_args={"path": "a.txt", "content": "x"},
+            ),
+            Decision(kind="final", assistant_message="all wrapped up"),
+        ],
+        turns=[TaskTurn(input="go", max_steps=2)],
+        expected=TaskExpected(
+            final_reply_contains=["all wrapped up"],
+            events_include=[
+                ExpectedEvent(
+                    event_type="tool_executed",
+                    payload_contains={"tool": "write_file", "ok": True},
+                ),
+                ExpectedEvent(
+                    event_type="session_finished",
+                    payload_contains={"reason": "final", "steps": 2},
+                ),
+            ],
+        ),
+    )
+    result = _result_of(task)
+    assert result.passed, result.failures
+    assert result.metrics.tool_calls == 1
 
 
 # ---------- determinism ----------

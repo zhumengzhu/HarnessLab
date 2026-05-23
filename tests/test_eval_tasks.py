@@ -34,4 +34,5 @@ def test_shipped_tasks_cover_expected_paths() -> None:
         "policy_denied_path",
         "invalid_args_schema",
         "shell_denylist_blocks",
+        "multi_step_tool_then_final",
     } <= names

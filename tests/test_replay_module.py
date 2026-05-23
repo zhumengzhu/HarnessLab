@@ -58,7 +58,7 @@ def _capture_task_trace(task: Task) -> list[TraceEvent]:
     )
     session = loop.start(goal=task.goal)
     for turn in task.turns:
-        loop.run_turn(session.id, turn.input)
+        loop.run_session(session.id, turn.input, max_steps=turn.max_steps)
     return recorder.events
 
 
@@ -111,6 +111,28 @@ def test_replay_matches_eval_task_traces() -> None:
         assert report.matched, (
             f"{task.name} diverged after replay:\n{report.render()}"
         )
+
+
+def test_replay_round_trips_multi_step_turn() -> None:
+    """A single user turn that spans multiple model decisions (tool
+    then final, Phase 2.1) must round-trip cleanly: the replayer
+    collects every decision_made between consecutive
+    user_input_received events and re-drives the loop with
+    ``max_steps=len(decisions)`` so step ordering and outcomes
+    remain stable."""
+    suite = load_suite(TASKS_DIR)
+    task = next(t for t in suite.tasks if t.name == "multi_step_tool_then_final")
+    original = _capture_task_trace(task)
+
+    # Sanity: the captured trace genuinely contains 2 decisions in 1 turn.
+    decisions_per_turn = sum(1 for e in original if e.event_type == "decision_made")
+    user_inputs = sum(1 for e in original if e.event_type == "user_input_received")
+    assert user_inputs == 1
+    assert decisions_per_turn == 2
+
+    replayed = replay_session(original)
+    report = detect_divergence(original, replayed)
+    assert report.matched, report.render()
 
 
 def test_replay_returns_session_started_only_when_no_turns() -> None:
