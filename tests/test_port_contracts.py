@@ -31,8 +31,10 @@ from harnesslab.core.models import (
 from harnesslab.core.runtime import SystemClock, UuidIdProvider
 from harnesslab.core.simple_model import SimpleModel
 from harnesslab.memory.in_memory import InMemoryMemoryStore
+from harnesslab.memory.sqlite_store import SqliteMemoryStore
 from harnesslab.policy.default_policy import DefaultPolicy
 from harnesslab.session.in_memory import InMemorySessionStore
+from harnesslab.session.sqlite_store import SqliteSessionStore
 from harnesslab.telemetry.jsonl_recorder import JsonlTraceRecorder
 from harnesslab.tools.file_tools import ReadFileTool, WriteFileTool
 from harnesslab.tools.shell_tool import RunShellSafeTool
@@ -72,23 +74,23 @@ def test_tool_port_contract_shell_tool(tmp_path: Path) -> None:
     assert isinstance(result.ok, bool)
 
 
-@pytest.fixture(params=["in_memory"])
+@pytest.fixture(params=["in_memory", "sqlite"])
 def session_store(request: pytest.FixtureRequest, tmp_path: Path) -> SessionStorePort:
-    """Parametrized factory; Step 3 will add a 'sqlite' param here."""
-
     backend = request.param
     if backend == "in_memory":
         return InMemorySessionStore()
+    if backend == "sqlite":
+        return SqliteSessionStore(tmp_path / "sessions.sqlite")
     raise ValueError(f"unknown session store backend: {backend}")
 
 
-@pytest.fixture(params=["in_memory"])
+@pytest.fixture(params=["in_memory", "sqlite"])
 def memory_store(request: pytest.FixtureRequest, tmp_path: Path) -> MemoryStorePort:
-    """Parametrized factory; Step 3 will add a 'sqlite' param here."""
-
     backend = request.param
     if backend == "in_memory":
         return InMemoryMemoryStore()
+    if backend == "sqlite":
+        return SqliteMemoryStore(tmp_path / "memory.sqlite")
     raise ValueError(f"unknown memory store backend: {backend}")
 
 
