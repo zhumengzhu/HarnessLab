@@ -15,7 +15,12 @@ from harnesslab.eval.baseline import compare, load_baseline, save_baseline
 from harnesslab.eval.loader import load_suite, load_task
 from harnesslab.eval.report import render_stdout, write_json
 from harnesslab.eval.runner import TaskRunner
-from harnesslab.eval.task import TaskSuite
+from harnesslab.eval.task import TaskResult, TaskSuite
+from harnesslab.improve import (
+    dedupe_against_existing,
+    generate,
+    write_proposal,
+)
 from harnesslab.memory.in_memory import InMemoryMemoryStore
 from harnesslab.memory.sqlite_store import SqliteMemoryStore
 from harnesslab.policy.default_policy import DefaultPolicy
@@ -40,8 +45,10 @@ DEFAULT_SQLITE_PATH = ".harnesslab/state.sqlite"
 DEFAULT_TASKS_DIR = "eval/tasks"
 DEFAULT_BASELINE_PATH = "eval/baseline.json"
 DEFAULT_REPORTS_DIR = "eval/reports"
+DEFAULT_PROPOSALS_DIR = "proposals"
+DEFAULT_MIN_OCCURRENCES = 2
 
-SUBCOMMANDS = ("run", "eval", "replay", "metrics")
+SUBCOMMANDS = ("run", "eval", "replay", "metrics", "propose")
 
 EXIT_OK = 0
 EXIT_UNREPLAYABLE = 2
@@ -214,6 +221,54 @@ def _build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Emit machine-readable JSON instead of the human summary.",
     )
+
+    # ----- propose -----
+    pp = sub.add_parser(
+        "propose",
+        help="Generate advisory improvement proposals from failure clusters.",
+        description=(
+            "Build clusters from trace failures and/or eval failures, "
+            "then write one markdown proposal per cluster. Proposals are "
+            "advisory and are deduped against any open proposal already "
+            "on disk."
+        ),
+    )
+    pp.add_argument(
+        "--trace",
+        default=None,
+        help="Path to a JSONL trace file to mine for failure events.",
+    )
+    pp.add_argument(
+        "--eval-report",
+        default=None,
+        help=(
+            "Path to an eval report JSON (e.g. eval/reports/latest.json) "
+            "to mine for failed tasks."
+        ),
+    )
+    pp.add_argument(
+        "--out",
+        default=DEFAULT_PROPOSALS_DIR,
+        help=f"Directory to write proposals into (default: {DEFAULT_PROPOSALS_DIR}).",
+    )
+    pp.add_argument(
+        "--min-occurrences",
+        type=int,
+        default=DEFAULT_MIN_OCCURRENCES,
+        help=(
+            f"Minimum occurrences per cluster to emit a proposal "
+            f"(default: {DEFAULT_MIN_OCCURRENCES})."
+        ),
+    )
+    pp.add_argument(
+        "--format",
+        default="md",
+        choices=["md", "json"],
+        help=(
+            "md (default): write one markdown file per proposal under --out. "
+            "json: emit a JSON array on stdout instead of touching disk."
+        ),
+    )
     return parser
 
 
@@ -250,6 +305,8 @@ def main() -> None:
         sys.exit(_cmd_replay(args))
     if args.command == "metrics":
         sys.exit(_cmd_metrics(args))
+    if args.command == "propose":
+        sys.exit(_cmd_propose(args))
 
     parser.print_help(sys.stderr)
     sys.exit(EXIT_USAGE)
@@ -363,6 +420,78 @@ def _cmd_metrics(args: argparse.Namespace) -> int:
     else:
         print(render_metrics(metrics))
     return EXIT_OK
+
+
+def _cmd_propose(args: argparse.Namespace) -> int:
+    if not args.trace and not args.eval_report:
+        print(
+            "propose requires at least one of --trace or --eval-report",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    events = []
+    if args.trace:
+        trace_path = Path(args.trace)
+        if not trace_path.exists():
+            raise SystemExit(f"trace file not found: {trace_path}")
+        try:
+            events = read_trace(trace_path)
+        except json.JSONDecodeError as exc:
+            print(f"invalid JSONL trace: {exc}", file=sys.stderr)
+            return EXIT_USAGE
+
+    eval_results: list[TaskResult] | None = None
+    if args.eval_report:
+        report_path = Path(args.eval_report)
+        if not report_path.exists():
+            raise SystemExit(f"eval report not found: {report_path}")
+        eval_results = _load_eval_results(report_path)
+
+    out_dir = Path(args.out)
+    proposals = generate(
+        events,
+        eval_results=eval_results,
+        min_occurrences=args.min_occurrences,
+    )
+
+    if args.format == "md":
+        proposals = dedupe_against_existing(proposals, out_dir)
+
+    if not proposals:
+        print(
+            "no new proposals "
+            "(no clusters reached --min-occurrences, "
+            "or all signatures already have an open proposal on disk)"
+        )
+        return EXIT_OK
+
+    if args.format == "json":
+        print(
+            json.dumps(
+                [p.model_dump(mode="json") for p in proposals],
+                indent=2,
+                ensure_ascii=False,
+            )
+        )
+        return EXIT_OK
+
+    for proposal in proposals:
+        path = write_proposal(proposal, out_dir)
+        print(f"wrote {path}  [{proposal.kind} x{proposal.occurrences}]")
+    return EXIT_OK
+
+
+def _load_eval_results(report_path: Path) -> list[TaskResult]:
+    """Parse the JSON written by harnesslab.eval.report.write_json."""
+
+    data = json.loads(report_path.read_text(encoding="utf-8"))
+    raw_results = data.get("results", [])
+    if not isinstance(raw_results, list):
+        raise SystemExit(
+            f"eval report missing 'results' list: {report_path}"
+        )
+    return [TaskResult.model_validate(r) for r in raw_results]
 
 
 if __name__ == "__main__":
