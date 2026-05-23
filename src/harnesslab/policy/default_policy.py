@@ -47,8 +47,11 @@ class DefaultPolicy:
         )
 
     def allow_tool(self, call: ToolCall) -> tuple[bool, str]:
-        if call.name in {"read_file", "write_file"}:
+        if call.name in {"read_file", "write_file", "edit_file"}:
             return self._check_path(call)
+
+        if call.name in {"grep", "glob"}:
+            return self._check_optional_path(call)
 
         if call.name == "run_shell_safe":
             return self._check_shell(call)
@@ -59,6 +62,24 @@ class DefaultPolicy:
         raw_path = str(call.args.get("path", ""))
         if not raw_path:
             return False, "missing file path"
+        candidate = (self._workspace_root / raw_path).resolve()
+        try:
+            candidate.relative_to(self._workspace_root)
+        except ValueError:
+            return False, "path out of workspace"
+        return True, "ok"
+
+    def _check_optional_path(self, call: ToolCall) -> tuple[bool, str]:
+        """For tools where ``path`` is optional (defaults to workspace root).
+
+        When provided, it must still resolve inside the workspace —
+        the same out-of-workspace check applies, just lifted past the
+        empty-string case.
+        """
+
+        raw_path = str(call.args.get("path", "") or "").strip()
+        if not raw_path:
+            return True, "ok"
         candidate = (self._workspace_root / raw_path).resolve()
         try:
             candidate.relative_to(self._workspace_root)

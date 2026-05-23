@@ -43,7 +43,13 @@ from harnesslab.session.in_memory import InMemorySessionStore
 from harnesslab.session.sqlite_store import SqliteSessionStore
 from harnesslab.telemetry.aggregate import aggregate, render_metrics
 from harnesslab.telemetry.jsonl_recorder import JsonlTraceRecorder
-from harnesslab.tools.file_tools import ReadFileTool, WriteFileTool
+from harnesslab.tools.file_tools import (
+    EditFileTool,
+    GlobTool,
+    GrepTool,
+    ReadFileTool,
+    WriteFileTool,
+)
 from harnesslab.tools.registry import ToolRegistry
 from harnesslab.tools.shell_tool import RunShellSafeTool
 
@@ -122,6 +128,9 @@ def build_runtime(
     tools = ToolRegistry()
     tools.register(ReadFileTool(workspace_root, limits=limits))
     tools.register(WriteFileTool(workspace_root, limits=limits))
+    tools.register(EditFileTool(workspace_root, limits=limits))
+    tools.register(GrepTool(workspace_root, limits=limits))
+    tools.register(GlobTool(workspace_root, limits=limits))
     tools.register(RunShellSafeTool(workspace_root, limits=limits))
     trace = JsonlTraceRecorder(workspace_root / ".harnesslab" / "trace.jsonl")
     if model_backend == "deepseek":
