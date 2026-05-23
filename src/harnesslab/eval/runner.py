@@ -9,8 +9,7 @@ from __future__ import annotations
 
 import tempfile
 from collections.abc import Iterable
-from datetime import UTC, datetime, timedelta
-from itertools import count
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +17,7 @@ from harnesslab.core.config import RuntimeLimits
 from harnesslab.core.loop import HarnessLoop
 from harnesslab.core.models import TraceEvent
 from harnesslab.core.replay import ReplayModel, ReplayTraceRecorder
+from harnesslab.core.runtime import DEFAULT_REPLAY_CLOCK_START, FrozenClock, SeqIdProvider
 from harnesslab.core.simple_model import SimpleModel
 from harnesslab.eval.task import (
     ExpectedEvent,
@@ -31,27 +31,6 @@ from harnesslab.session.in_memory import InMemorySessionStore
 from harnesslab.tools.file_tools import ReadFileTool, WriteFileTool
 from harnesslab.tools.registry import ToolRegistry
 from harnesslab.tools.shell_tool import RunShellSafeTool
-
-
-class _FrozenClock:
-    def __init__(self, start: datetime, step: timedelta = timedelta(milliseconds=1)) -> None:
-        self._t = start
-        self._step = step
-
-    def now(self) -> datetime:
-        current = self._t
-        self._t = self._t + self._step
-        return current
-
-
-class _SeqIdProvider:
-    def __init__(self) -> None:
-        self._counters: dict[str, count[int]] = {}
-
-    def new_id(self, prefix: str) -> str:
-        if prefix not in self._counters:
-            self._counters[prefix] = count(1)
-        return f"{prefix}_{next(self._counters[prefix]):06d}"
 
 
 def _payload_contains(actual: dict[str, Any], expected: dict[str, Any]) -> bool:
@@ -135,7 +114,7 @@ class TaskRunner:
     """Drive HarnessLoop end-to-end for each task, in isolation."""
 
     def __init__(self, clock_start: datetime | None = None) -> None:
-        self._clock_start = clock_start or datetime(2026, 1, 1, tzinfo=UTC)
+        self._clock_start = clock_start or DEFAULT_REPLAY_CLOCK_START
 
     def run(self, suite: TaskSuite) -> list[TaskResult]:
         return [self.run_one(t) for t in suite.tasks]
@@ -166,8 +145,8 @@ class TaskRunner:
             sessions=InMemorySessionStore(),
             tools=tools,
             trace=recorder,
-            clock=_FrozenClock(start=self._clock_start),
-            ids=_SeqIdProvider(),
+            clock=FrozenClock(start=self._clock_start),
+            ids=SeqIdProvider(),
         )
 
         session = loop.start(goal=task.goal)
