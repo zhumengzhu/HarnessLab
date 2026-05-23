@@ -39,4 +39,5 @@ def test_shipped_tasks_cover_expected_paths() -> None:
         "compaction_on_threshold",
         "session_resume_second_turn",
         "session_memory_persists",
+        "apply_patch_unified_diff",
     } <= names

@@ -588,10 +588,10 @@ sees the same SQLite rows; streaming turn shows tool/step events.
 - **Not in scope:** cross-session RAG, vector index, LLM memory
   extraction.
 
-### Phase 3.4 — Tool & edit enhancements — PLANNED
+### Phase 3.4 — Tool & edit enhancements — IN PROGRESS
 
-- `apply_patch` / unified-diff editing.
-- Optional shell allowlist profiles.
+- `apply_patch` unified-diff editing — **shipped** (`src/harnesslab/tools/patch.py`).
+- Optional shell allowlist profiles — planned.
 - UI affordances for tool output — partial (3.2.2 inspector panel;
   richer inline tool cards remain optional).
 

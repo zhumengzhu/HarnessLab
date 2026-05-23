@@ -51,6 +51,7 @@ from harnesslab.tools.file_tools import (
     ReadFileTool,
     WriteFileTool,
 )
+from harnesslab.tools.patch import ApplyPatchTool
 from harnesslab.tools.registry import ToolRegistry
 from harnesslab.tools.shell_tool import RunShellSafeTool
 from harnesslab.web.server import WebRuntime, serve
@@ -140,6 +141,7 @@ def build_runtime(
     tools.register(ReadFileTool(workspace_root, limits=limits))
     tools.register(WriteFileTool(workspace_root, limits=limits))
     tools.register(EditFileTool(workspace_root, limits=limits))
+    tools.register(ApplyPatchTool(workspace_root, limits=limits))
     tools.register(GrepTool(workspace_root, limits=limits))
     tools.register(GlobTool(workspace_root, limits=limits))
     tools.register(RunShellSafeTool(workspace_root, limits=limits))

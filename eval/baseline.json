@@ -100,6 +100,16 @@
         "denials": 0,
         "invalid_args": 0
       }
+    },
+    "apply_patch_unified_diff": {
+      "passed": true,
+      "metrics": {
+        "turns": 1,
+        "tool_calls": 2,
+        "tool_failures": 0,
+        "denials": 0,
+        "invalid_args": 0
+      }
     }
   }
 }

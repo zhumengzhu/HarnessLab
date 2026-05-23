@@ -63,3 +63,4 @@ When `harnesslab propose` surfaces a recurring failure cluster:
 | `compaction_on_threshold` | context compaction |
 | `session_resume_second_turn` | session resume / turn index |
 | `session_memory_persists` | session-scoped memory read/write |
+| `apply_patch_unified_diff` | unified-diff patch tool |

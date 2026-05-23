@@ -37,6 +37,7 @@ from harnesslab.tools.file_tools import (
     ReadFileTool,
     WriteFileTool,
 )
+from harnesslab.tools.patch import ApplyPatchTool
 from harnesslab.tools.registry import ToolRegistry
 from harnesslab.tools.shell_tool import RunShellSafeTool
 
@@ -53,6 +54,7 @@ def _build_tool_registry(workspace: Path, limits: RuntimeLimits) -> ToolRegistry
     tools.register(ReadFileTool(workspace, limits=limits))
     tools.register(WriteFileTool(workspace, limits=limits))
     tools.register(EditFileTool(workspace, limits=limits))
+    tools.register(ApplyPatchTool(workspace, limits=limits))
     tools.register(GrepTool(workspace, limits=limits))
     tools.register(GlobTool(workspace, limits=limits))
     tools.register(RunShellSafeTool(workspace, limits=limits))

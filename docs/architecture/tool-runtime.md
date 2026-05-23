@@ -70,7 +70,7 @@ Responsibilities:
 
 Current checks:
 
-- `read_file` / `write_file` / `edit_file`: path must resolve
+- `read_file` / `write_file` / `edit_file` / `apply_patch`: path must resolve
   inside workspace root (`_check_path`).
 - `grep` / `glob`: path is optional; when provided, must resolve
   inside workspace root (`_check_optional_path`).
@@ -146,6 +146,7 @@ stateDiagram-v2
 | `read_file` | Read a workspace-relative text file | `_check_path` |
 | `write_file` | Create/overwrite a workspace-relative text file | `_check_path` |
 | `edit_file` | In-place string replacement (Phase 2.5); `old` must be present, must be unique unless `replace_all=True` | `_check_path` |
+| `apply_patch` | Unified-diff hunk application (Phase 3.4); context must match exactly | `_check_path` |
 | `grep` | UTF-8 regex search across the workspace, returns `path:lineno: line` matches with `glob` filter; default `max_matches=50`, hard cap `1000`; binary files and noise dirs skipped (Phase 2.5) | `_check_optional_path` |
 | `glob` | Workspace-relative glob match returning sorted relative paths; default `max_results=100`, hard cap `5000`; same noise-dir skip list (Phase 2.5) | `_check_optional_path` |
 | `run_shell_safe` | Argv shell invocation against the expanded allowlist + git subcommand gate (Phase 2.5) | `_check_shell` |

@@ -60,7 +60,7 @@ uv run harnesslab run "find all Python files and summarize structure"
 uv run harnesslab run "hello" --max-steps 3
 ```
 
-Built-in tools: `read_file`, `write_file`, `edit_file`, `grep`, `glob`,
+Built-in tools: `read_file`, `write_file`, `edit_file`, `apply_patch`, `grep`, `glob`,
 `run_shell_safe`. See `docs/architecture/tool-runtime.md` for policy
 details.
 
@@ -172,7 +172,7 @@ Each task declares its expected trace shape (ordered event subset,
 forbidden event types, and `final_reply` substring), so the eval suite
 doubles as living documentation of the loop's invariants. See
 [`eval/README.md`](eval/README.md) for the propose→eval workflow and
-task authoring guide (ten shipped tasks as of Phase 3.3).
+task authoring guide (eleven shipped tasks as of Phase 3.4).
 
 ### Replay, Metrics & Context
 

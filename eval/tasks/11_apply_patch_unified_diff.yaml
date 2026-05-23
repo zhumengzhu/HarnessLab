@@ -1,0 +1,42 @@
+name: apply_patch_unified_diff
+goal: patch a file with unified diff
+description: |
+  Phase 3.4 ``apply_patch`` tool. Seeds a file then applies a unified-diff
+  hunk to replace one line in place.
+decisions:
+  - kind: tool
+    tool_name: write_file
+    tool_args:
+      path: src/note.txt
+      content: |
+        alpha
+        beta
+        gamma
+  - kind: tool
+    tool_name: apply_patch
+    tool_args:
+      path: src/note.txt
+      patch: |
+        @@ -2,1 +2,1 @@
+        -beta
+        +BETA
+  - kind: final
+    assistant_message: Patched note.txt.
+turns:
+  - input: uppercase beta in note.txt
+    max_steps: 3
+expected:
+  final_reply_contains:
+    - Patched
+  events_include:
+    - event_type: tool_executed
+      payload_contains:
+        tool: apply_patch
+        ok: true
+    - event_type: session_finished
+      payload_contains:
+        reason: final
+        steps: 3
+  no_event_types:
+    - tool_denied
+    - tool_invalid_args

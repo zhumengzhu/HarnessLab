@@ -119,7 +119,7 @@ class DefaultPolicy:
         )
 
     def allow_tool(self, call: ToolCall) -> tuple[bool, str]:
-        if call.name in {"read_file", "write_file", "edit_file"}:
+        if call.name in {"read_file", "write_file", "edit_file", "apply_patch"}:
             return self._check_path(call)
 
         if call.name in {"grep", "glob"}:
