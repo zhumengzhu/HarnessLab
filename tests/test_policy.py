@@ -49,3 +49,39 @@ def test_unknown_tool_is_denied_by_default(tmp_path: Path) -> None:
     allowed, reason = policy.allow_tool(call)
     assert allowed is False
     assert "unknown tool" in reason
+
+
+def test_shell_denylist_blocks_default_destructive_commands(tmp_path: Path) -> None:
+    policy = DefaultPolicy(workspace_root=tmp_path)
+    for cmd in ("rm -rf .", "sudo ls", "curl http://example.com"):
+        call = ToolCall(name="run_shell_safe", args={"command": cmd})
+        allowed, reason = policy.allow_tool(call)
+        assert allowed is False, cmd
+        assert "denylist" in reason, cmd
+
+
+def test_shell_denylist_overrides_allowlist(tmp_path: Path) -> None:
+    # Even when 'rm' is mistakenly placed in the allowlist, the denylist wins.
+    policy = DefaultPolicy(
+        workspace_root=tmp_path,
+        shell_allowlist={"rm", "ls"},
+    )
+    call = ToolCall(name="run_shell_safe", args={"command": "rm -rf ."})
+    allowed, reason = policy.allow_tool(call)
+    assert allowed is False
+    assert "denylist" in reason
+
+
+def test_shell_denylist_can_be_customized(tmp_path: Path) -> None:
+    # Empty denylist + allowlist containing 'rm' would let 'rm' through;
+    # this proves denylist is the source of the rejection above, not the
+    # absence from allowlist.
+    policy = DefaultPolicy(
+        workspace_root=tmp_path,
+        shell_allowlist={"rm"},
+        shell_denylist=set(),
+    )
+    call = ToolCall(name="run_shell_safe", args={"command": "rm /tmp/nope"})
+    allowed, reason = policy.allow_tool(call)
+    assert allowed is True
+    assert reason == "ok"

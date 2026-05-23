@@ -3,9 +3,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from harnesslab.core.config import RuntimeLimits
 from harnesslab.core.models import ToolCall, ToolResult
-
-_MAX_OUTPUT_BYTES = 65536
 
 
 class ReadFileTool:
@@ -20,14 +19,15 @@ class ReadFileTool:
         "additionalProperties": False,
     }
 
-    def __init__(self, workspace_root: Path) -> None:
+    def __init__(self, workspace_root: Path, limits: RuntimeLimits | None = None) -> None:
         self._workspace_root = workspace_root
+        self._limits = limits or RuntimeLimits()
 
     def execute(self, call: ToolCall) -> ToolResult:
         try:
             path = (self._workspace_root / str(call.args["path"])).resolve()
             content = path.read_text(encoding="utf-8")
-            return ToolResult(ok=True, output=content[:_MAX_OUTPUT_BYTES])
+            return ToolResult(ok=True, output=content[: self._limits.output_bytes_cap])
         except Exception as exc:
             return ToolResult(ok=False, output="", error=str(exc))
 
@@ -45,8 +45,9 @@ class WriteFileTool:
         "additionalProperties": False,
     }
 
-    def __init__(self, workspace_root: Path) -> None:
+    def __init__(self, workspace_root: Path, limits: RuntimeLimits | None = None) -> None:
         self._workspace_root = workspace_root
+        self._limits = limits or RuntimeLimits()
 
     def execute(self, call: ToolCall) -> ToolResult:
         try:

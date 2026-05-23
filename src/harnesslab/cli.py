@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from harnesslab.core.config import RuntimeLimits
 from harnesslab.core.loop import HarnessLoop
 from harnesslab.core.runtime import SystemClock, UuidIdProvider
 from harnesslab.core.simple_model import SimpleModel
@@ -14,13 +15,17 @@ from harnesslab.tools.registry import ToolRegistry
 from harnesslab.tools.shell_tool import RunShellSafeTool
 
 
-def build_runtime(workspace_root: Path) -> HarnessLoop:
+def build_runtime(
+    workspace_root: Path,
+    limits: RuntimeLimits | None = None,
+) -> HarnessLoop:
+    limits = limits or RuntimeLimits()
     sessions = InMemorySessionStore()
     policy = DefaultPolicy(workspace_root=workspace_root)
     tools = ToolRegistry()
-    tools.register(ReadFileTool(workspace_root))
-    tools.register(WriteFileTool(workspace_root))
-    tools.register(RunShellSafeTool(workspace_root))
+    tools.register(ReadFileTool(workspace_root, limits=limits))
+    tools.register(WriteFileTool(workspace_root, limits=limits))
+    tools.register(RunShellSafeTool(workspace_root, limits=limits))
     trace = JsonlTraceRecorder(workspace_root / ".harnesslab" / "trace.jsonl")
     model = SimpleModel()
     return HarnessLoop(

@@ -71,7 +71,15 @@ Responsibilities:
 Current checks:
 
 - `read_file` and `write_file`: path must resolve inside workspace root
-- `run_shell_safe`: first command token must be in allowlist
+- `run_shell_safe`: command must contain no shell metacharacters
+  (`& | ; < > \` $ ( ) \n \r`); after `shlex` parsing, `argv[0]` must not be
+  on the denylist (`rm`, `sudo`, `curl`, `wget`, `dd`, `mkfs`, `mount`,
+  `umount`, `chmod`, `chown`, `kill`, `killall`, `shutdown`, `reboot`,
+  `scp`, `ssh`), and must appear in the allowlist
+  (`ls`, `pwd`, `echo`, `cat` by default).
+
+The denylist is consulted before the allowlist so that a destructive
+command stays rejected even if it is mistakenly added to the allowlist.
 
 ### Tool Executor
 
@@ -109,8 +117,10 @@ MVP uses process-level restrictions through policy checks and safe defaults.
 It is intentionally simple:
 
 - Controlled working directory
-- Allowlisted shell commands
-- Basic timeout for shell execution
+- Allowlisted shell commands plus a destructive-command denylist
+- Configurable shell execution timeout (`RuntimeLimits.shell_timeout_seconds`)
+- Configurable per-call output cap (`RuntimeLimits.output_bytes_cap`),
+  applied uniformly to `read_file`, `write_file`, and `run_shell_safe`
 
 ## Recommended Hardening Path
 

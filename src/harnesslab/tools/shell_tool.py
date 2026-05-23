@@ -5,9 +5,8 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from harnesslab.core.config import RuntimeLimits
 from harnesslab.core.models import ToolCall, ToolResult
-
-_MAX_OUTPUT_BYTES = 65536
 
 
 class RunShellSafeTool:
@@ -28,9 +27,13 @@ class RunShellSafeTool:
         "additionalProperties": False,
     }
 
-    def __init__(self, workspace_root: Path, timeout_seconds: int = 5) -> None:
+    def __init__(
+        self,
+        workspace_root: Path,
+        limits: RuntimeLimits | None = None,
+    ) -> None:
         self._workspace_root = workspace_root
-        self._timeout_seconds = timeout_seconds
+        self._limits = limits or RuntimeLimits()
 
     def execute(self, call: ToolCall) -> ToolResult:
         command = str(call.args.get("command", "")).strip()
@@ -51,11 +54,13 @@ class RunShellSafeTool:
                 shell=False,
                 capture_output=True,
                 text=True,
-                timeout=self._timeout_seconds,
+                timeout=self._limits.shell_timeout_seconds,
                 check=False,
             )
             merged = (proc.stdout + proc.stderr).strip()
-            output = merged[:_MAX_OUTPUT_BYTES] if merged else "(no output)"
+            output = (
+                merged[: self._limits.output_bytes_cap] if merged else "(no output)"
+            )
             if proc.returncode != 0:
                 return ToolResult(
                     ok=False,
