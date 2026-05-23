@@ -563,12 +563,18 @@ workflow documented.
 - `src/harnesslab/core/title.py` — `derive_title_from_text`,
   `LiveTitleNamer`, loop hook `_maybe_auto_title`.
 
+**Deliverables (3.2.2 — Web UX polish)**
+
+- SSE streaming on `POST .../messages` (`Accept: text/event-stream`
+  or `"stream": true`); live `trace` events via `TraceHub`.
+- Tool/run inspector panel (`GET /api/sessions/{id}/trace`).
+- Fork button + `POST /api/sessions/{id}/fork`.
+- `/remember` affordance in composer; session detail exposes
+  `memory_notes`.
+
 **Exit (3.2)**: browser chat completes a multi-step turn; session
 list shows LLM titles when using DeepSeek; CLI `session ls/show`
-sees the same SQLite rows.
-
-**Deferred within 3.2**: SSE streaming, tool-call inspector panel,
-fork button in UI (CLI `session fork` works today).
+sees the same SQLite rows; streaming turn shows tool/step events.
 
 ### Phase 3.3 — Memory on Session — DONE
 
@@ -586,7 +592,8 @@ fork button in UI (CLI `session fork` works today).
 
 - `apply_patch` / unified-diff editing.
 - Optional shell allowlist profiles.
-- UI affordances for tool output (when 3.2 inspector lands).
+- UI affordances for tool output — partial (3.2.2 inspector panel;
+  richer inline tool cards remain optional).
 
 ---
 

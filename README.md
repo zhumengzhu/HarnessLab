@@ -76,6 +76,9 @@ The browser UI shares the SQLite session store with the CLI — sessions
 created in the web UI appear in `harnesslab session ls`, and vice versa.
 When using DeepSeek, session titles in the sidebar are auto-generated
 after the first message (short LLM call, low token; falls back silently).
+The UI streams turn progress over SSE, shows tool/step events in a
+side panel, supports session fork, and exposes `/remember` for
+session-scoped memory notes.
 
 Use `--model simple` for offline smoke tests without network access.
 Only `127.0.0.1` is allowed; the server refuses public bind addresses.

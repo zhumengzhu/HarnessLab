@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Literal
 
 from harnesslab.core.config import RuntimeLimits
-from harnesslab.core.contracts import MemoryStorePort, SessionStorePort
+from harnesslab.core.contracts import MemoryStorePort, SessionStorePort, TraceRecorderPort
 from harnesslab.core.loop import DEFAULT_MAX_STEPS, HarnessLoop
 from harnesslab.core.models import Session
 from harnesslab.core.prompt import (
@@ -54,6 +54,7 @@ from harnesslab.tools.file_tools import (
 from harnesslab.tools.registry import ToolRegistry
 from harnesslab.tools.shell_tool import RunShellSafeTool
 from harnesslab.web.server import WebRuntime, serve
+from harnesslab.web.trace_hub import TraceHub
 
 StorageBackend = Literal["memory", "sqlite"]
 ModelBackend = Literal["simple", "deepseek"]
@@ -129,6 +130,7 @@ def build_runtime(
     storage_backend: StorageBackend = "memory",
     sqlite_path: Path | None = None,
     model_backend: ModelBackend = "simple",
+    trace: TraceRecorderPort | None = None,
 ) -> HarnessLoop:
     limits = limits or RuntimeLimits()
     # Memory store is wired into the loop for session-scoped notes (Phase 3.3).
@@ -141,7 +143,8 @@ def build_runtime(
     tools.register(GrepTool(workspace_root, limits=limits))
     tools.register(GlobTool(workspace_root, limits=limits))
     tools.register(RunShellSafeTool(workspace_root, limits=limits))
-    trace = JsonlTraceRecorder(workspace_root / ".harnesslab" / "trace.jsonl")
+    if trace is None:
+        trace = JsonlTraceRecorder(workspace_root / ".harnesslab" / "trace.jsonl")
     if model_backend == "deepseek":
         model = DeepSeekModel(
             tool_specs_provider=lambda: tool_specs_from_registry(tools.list()),
@@ -608,12 +611,15 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         return EXIT_USAGE
     workspace_root = Path(args.workspace_root).resolve()
     sqlite_path = Path(args.sqlite_path) if args.sqlite_path else None
+    trace_path = workspace_root / ".harnesslab" / "trace.jsonl"
+    trace_hub = TraceHub(JsonlTraceRecorder(trace_path))
     try:
         loop = build_runtime(
             workspace_root=workspace_root,
             storage_backend="sqlite",
             sqlite_path=sqlite_path,
             model_backend=args.model,
+            trace=trace_hub,
         )
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
@@ -623,6 +629,8 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         model_backend=args.model,
         workspace_root=workspace_root,
         default_max_steps=args.max_steps,
+        trace_hub=trace_hub,
+        trace_path=trace_path,
     )
     serve(runtime, host=args.host, port=args.port)
     return EXIT_OK

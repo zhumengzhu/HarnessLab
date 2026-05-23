@@ -18,14 +18,29 @@
     <main class="chat">
       <header class="chat-header">
         <h2 id="chat-title">新对话</h2>
-        <span id="chat-status" class="status-pill"></span>
+        <div class="header-actions">
+          <button type="button" id="fork-btn" class="ghost-btn" disabled title="复制会话分支">Fork</button>
+          <button type="button" id="remember-btn" class="ghost-btn" disabled title="下一条以 /remember 发送">记住</button>
+          <span id="chat-status" class="status-pill"></span>
+        </div>
       </header>
+      <div id="memory-notes" class="memory-notes hidden"></div>
       <div id="messages" class="messages"></div>
       <form id="composer" class="composer">
         <textarea id="input" rows="2" placeholder="输入消息… (Enter 发送, Shift+Enter 换行)"></textarea>
-        <button type="submit" id="send-btn">发送</button>
+        <div class="composer-actions">
+          <button type="button" id="remember-inline" class="ghost-btn small" title="插入 /remember ">📝 记住</button>
+          <button type="submit" id="send-btn">发送</button>
+        </div>
       </form>
     </main>
+    <aside class="tool-panel" id="tool-panel">
+      <header class="tool-panel-header">
+        <h3>运行轨迹</h3>
+        <button type="button" id="clear-trace" class="ghost-btn small">清空</button>
+      </header>
+      <ul id="trace-list" class="trace-list"></ul>
+    </aside>
   </div>
   <script src="/static/app.js"></script>
 </body>

@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import mimetypes
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -13,9 +14,28 @@ from typing import Any
 from urllib.parse import parse_qs, urlparse
 
 from harnesslab.core.loop import DEFAULT_MAX_STEPS, HarnessLoop
-from harnesslab.core.models import Session
+from harnesslab.core.memory_policy import session_memory_key
+from harnesslab.core.models import Session, TraceEvent
+from harnesslab.replay.trace_reader import read_trace
+from harnesslab.web.trace_hub import TraceHub
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
+
+TOOL_PANEL_EVENT_TYPES = frozenset(
+    {
+        "step_started",
+        "step_completed",
+        "decision_made",
+        "tool_executed",
+        "tool_denied",
+        "tool_invalid_args",
+        "memory_read",
+        "memory_written",
+        "compaction_started",
+        "compaction_completed",
+        "session_titled",
+    }
+)
 
 
 @dataclass
@@ -24,6 +44,8 @@ class WebRuntime:
     model_backend: str
     workspace_root: Path
     default_max_steps: int = DEFAULT_MAX_STEPS
+    trace_hub: TraceHub | None = None
+    trace_path: Path | None = None
     _locks: dict[str, threading.Lock] = field(default_factory=dict)
     _global: threading.Lock = field(default_factory=threading.Lock)
 
@@ -34,8 +56,8 @@ class WebRuntime:
             return self._locks[session_id]
 
 
-def _session_json(session: Session) -> dict[str, Any]:
-    return {
+def _session_json(session: Session, *, memory_notes: str | None = None) -> dict[str, Any]:
+    payload: dict[str, Any] = {
         "id": session.id,
         "goal": session.goal,
         "title": session.title,
@@ -47,6 +69,9 @@ def _session_json(session: Session) -> dict[str, Any]:
         "parent_session_id": session.parent_session_id,
         "message_count": len(session.messages),
     }
+    if memory_notes is not None:
+        payload["memory_notes"] = memory_notes
+    return payload
 
 
 def _message_json(msg) -> dict[str, Any]:  # type: ignore[no-untyped-def]
@@ -56,6 +81,17 @@ def _message_json(msg) -> dict[str, Any]:  # type: ignore[no-untyped-def]
         "content": msg.content,
         "created_at": msg.created_at.isoformat(),
     }
+
+
+def _trace_event_json(event: TraceEvent) -> dict[str, Any]:
+    return event.model_dump(mode="json")
+
+
+def _memory_notes_for(loop: HarnessLoop, session_id: str) -> str | None:
+    memory = getattr(loop, "_memory", None)
+    if memory is None:
+        return None
+    return memory.get(session_memory_key(session_id))
 
 
 def _read_json(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
@@ -72,11 +108,17 @@ def _read_json(handler: BaseHTTPRequestHandler) -> dict[str, Any]:
     return data
 
 
+def _wants_sse(handler: BaseHTTPRequestHandler, body: dict[str, Any]) -> bool:
+    accept = handler.headers.get("Accept", "")
+    if "text/event-stream" in accept:
+        return True
+    return bool(body.get("stream"))
+
+
 class _Handler(BaseHTTPRequestHandler):
     runtime: WebRuntime
 
     def log_message(self, fmt: str, *args: object) -> None:
-        # Quiet default access log; CLI users see their own prints.
         return
 
     def do_GET(self) -> None:  # noqa: N802
@@ -84,6 +126,8 @@ class _Handler(BaseHTTPRequestHandler):
             self._dispatch_get()
         except ValueError as exc:
             self._json_error(HTTPStatus.BAD_REQUEST, str(exc))
+        except KeyError as exc:
+            self._json_error(HTTPStatus.NOT_FOUND, str(exc))
 
     def do_POST(self) -> None:  # noqa: N802
         try:
@@ -120,16 +164,29 @@ class _Handler(BaseHTTPRequestHandler):
             return self._json_ok({"sessions": [_session_json(s) for s in rows]})
 
         if path.startswith("/api/sessions/"):
-            session_id = path[len("/api/sessions/") :].strip("/")
-            if not session_id or "/" in session_id:
-                raise ValueError("invalid session path")
-            session = self.runtime.loop._sessions.get(session_id)  # noqa: SLF001
-            return self._json_ok(
-                {
-                    "session": _session_json(session),
-                    "messages": [_message_json(m) for m in session.messages],
-                }
-            )
+            remainder = path[len("/api/sessions/") :].strip("/")
+            if not remainder or "/" not in remainder:
+                session_id = remainder
+                if not session_id:
+                    raise ValueError("invalid session path")
+                session = self.runtime.loop._sessions.get(session_id)  # noqa: SLF001
+                notes = _memory_notes_for(self.runtime.loop, session_id)
+                return self._json_ok(
+                    {
+                        "session": _session_json(session, memory_notes=notes),
+                        "messages": [_message_json(m) for m in session.messages],
+                    }
+                )
+            session_id, action = remainder.split("/", 1)
+            if action == "trace":
+                events = self._trace_events_for(session_id)
+                filtered = [
+                    _trace_event_json(e)
+                    for e in events
+                    if e.event_type in TOOL_PANEL_EVENT_TYPES
+                ]
+                return self._json_ok({"session_id": session_id, "events": filtered})
+            raise ValueError("invalid session path")
 
         self._json_error(HTTPStatus.NOT_FOUND, "not found")
 
@@ -137,6 +194,7 @@ class _Handler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         body = _read_json(self)
+        stream = _wants_sse(self, body)
 
         if path == "/api/sessions":
             message = str(body.get("message", "")).strip()
@@ -144,42 +202,127 @@ class _Handler(BaseHTTPRequestHandler):
                 raise ValueError("message is required")
             max_steps = int(body.get("max_steps", self.runtime.default_max_steps))
             session = self.runtime.loop.start(goal=message)
+            if stream:
+                return self._run_turn_sse(
+                    session_id=session.id,
+                    message=message,
+                    max_steps=max_steps,
+                    is_new=True,
+                )
             lock = self.runtime.lock_for(session.id)
             with lock:
                 reply = self.runtime.loop.run_session(session.id, message, max_steps=max_steps)
                 session = self.runtime.loop._sessions.get(session.id)  # noqa: SLF001
-            return self._json_ok(
-                {
-                    "session": _session_json(session),
-                    "reply": reply,
-                    "messages": [_message_json(m) for m in session.messages],
-                }
-            )
+            return self._json_ok(self._turn_payload(session, reply))
 
-        if path.startswith("/api/sessions/") and path.endswith("/messages"):
-            session_id = path[len("/api/sessions/") : -len("/messages")].strip("/")
-            if not session_id:
-                raise ValueError("session id required")
-            message = str(body.get("message", "")).strip()
-            if not message:
-                raise ValueError("message is required")
-            max_steps = int(body.get("max_steps", self.runtime.default_max_steps))
-            lock = self.runtime.lock_for(session_id)
+        if path.startswith("/api/sessions/"):
+            remainder = path[len("/api/sessions/") :].strip("/")
+            if remainder.endswith("/messages"):
+                session_id = remainder[: -len("/messages")].strip("/")
+                if not session_id:
+                    raise ValueError("session id required")
+                message = str(body.get("message", "")).strip()
+                if not message:
+                    raise ValueError("message is required")
+                max_steps = int(body.get("max_steps", self.runtime.default_max_steps))
+                if stream:
+                    return self._run_turn_sse(
+                        session_id=session_id,
+                        message=message,
+                        max_steps=max_steps,
+                        is_new=False,
+                    )
+                lock = self.runtime.lock_for(session_id)
+                with lock:
+                    self.runtime.loop._sessions.get(session_id)  # noqa: SLF001
+                    reply = self.runtime.loop.run_session(
+                        session_id, message, max_steps=max_steps
+                    )
+                    session = self.runtime.loop._sessions.get(session_id)  # noqa: SLF001
+                return self._json_ok(self._turn_payload(session, reply))
+
+            if remainder.endswith("/fork"):
+                session_id = remainder[: -len("/fork")].strip("/")
+                if not session_id:
+                    raise ValueError("session id required")
+                goal = body.get("goal")
+                goal_str = str(goal).strip() if goal is not None else None
+                lock = self.runtime.lock_for(session_id)
+                with lock:
+                    self.runtime.loop._sessions.get(session_id)  # noqa: SLF001
+                    forked = self.runtime.loop.fork(
+                        session_id,
+                        goal=goal_str or None,
+                    )
+                return self._json_ok({"session": _session_json(forked)})
+
+        self._json_error(HTTPStatus.NOT_FOUND, "not found")
+
+    def _turn_payload(self, session: Session, reply: str) -> dict[str, Any]:
+        notes = _memory_notes_for(self.runtime.loop, session.id)
+        return {
+            "session": _session_json(session, memory_notes=notes),
+            "reply": reply,
+            "messages": [_message_json(m) for m in session.messages],
+        }
+
+    def _run_turn_sse(
+        self,
+        *,
+        session_id: str,
+        message: str,
+        max_steps: int,
+        is_new: bool,
+    ) -> None:
+        self.send_response(HTTPStatus.OK)
+        self.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        self.send_header("Cache-Control", "no-cache")
+        self.send_header("Connection", "close")
+        self.end_headers()
+        self.close_connection = True
+
+        write = self._sse_writer()
+        hub = self.runtime.trace_hub
+
+        def on_event(event: TraceEvent) -> None:
+            if event.session_id != session_id:
+                return
+            if event.event_type not in TOOL_PANEL_EVENT_TYPES:
+                return
+            write("trace", _trace_event_json(event))
+
+        if hub is not None:
+            hub.subscribe(on_event)
+        lock = self.runtime.lock_for(session_id)
+        try:
             with lock:
-                self.runtime.loop._sessions.get(session_id)  # noqa: SLF001 — KeyError
+                if not is_new:
+                    self.runtime.loop._sessions.get(session_id)  # noqa: SLF001
                 reply = self.runtime.loop.run_session(
                     session_id, message, max_steps=max_steps
                 )
                 session = self.runtime.loop._sessions.get(session_id)  # noqa: SLF001
-            return self._json_ok(
-                {
-                    "session": _session_json(session),
-                    "reply": reply,
-                    "messages": [_message_json(m) for m in session.messages],
-                }
-            )
+            write("done", self._turn_payload(session, reply))
+        except Exception as exc:  # noqa: BLE001 — surface to browser
+            write("error", {"message": str(exc)})
+        finally:
+            if hub is not None:
+                hub.unsubscribe(on_event)
 
-        self._json_error(HTTPStatus.NOT_FOUND, "not found")
+    def _sse_writer(self) -> Callable[[str, dict[str, Any]], None]:
+        def write(event: str, data: dict[str, Any]) -> None:
+            payload = json.dumps(data, ensure_ascii=True)
+            chunk = f"event: {event}\ndata: {payload}\n\n".encode("utf-8")
+            self.wfile.write(chunk)
+            self.wfile.flush()
+
+        return write
+
+    def _trace_events_for(self, session_id: str) -> list[TraceEvent]:
+        path = self.runtime.trace_path
+        if path is None or not path.is_file():
+            return []
+        return [e for e in read_trace(path) if e.session_id == session_id]
 
     def _serve_static(self, rel: str) -> None:
         safe = Path(rel)

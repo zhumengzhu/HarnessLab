@@ -437,22 +437,28 @@ reuses the production runtime — no duplicate loop logic.
 
 ```mermaid
 flowchart LR
-    Browser[Browser Chat UI] --> API[JSON API /api/sessions]
+    Browser[Browser Chat UI] --> API[JSON + SSE API]
     API --> Loop[HarnessLoop.run_session]
     Loop --> Store[SqliteSessionStore]
-    Loop --> Trace[JsonlTraceRecorder]
+    Loop --> Trace[TraceHub → JSONL]
+    Browser --> Panel[Tool trace panel]
+    Panel --> API
 ```
 
 Endpoints:
 
 - `GET /` — static chat page (`web/static/`)
 - `GET /api/sessions` — list sessions (newest first)
-- `GET /api/sessions/{id}` — session metadata + messages
+- `GET /api/sessions/{id}` — session metadata, messages, `memory_notes`
+- `GET /api/sessions/{id}/trace` — tool/step events for inspector panel
 - `POST /api/sessions` — `start` + first `run_session`
-- `POST /api/sessions/{id}/messages` — continue conversation
+- `POST /api/sessions/{id}/messages` — continue conversation (JSON or SSE)
+- `POST /api/sessions/{id}/fork` — fork session branch
 
-Security defaults: bind `127.0.0.1` only; refuse public hosts; per-session
-lock prevents concurrent double-posts to the same session.
+The default browser client uses **SSE** (`Accept: text/event-stream`)
+so tool/step trace events stream live into the right-hand inspector
+panel during each turn. Composer buttons expose **Fork** and
+**`/remember`** (session-scoped memory writes).
 
 ## Session auto-titles (Phase 3.2)
 
