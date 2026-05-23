@@ -71,6 +71,9 @@ flowchart TD
    - Failure fingerprinting, clustering, advisory proposal generation
    - `harnesslab propose` CLI subcommand; proposals committed under
      `proposals/` with explicit accept/reject lifecycle
+10. `providers`
+   - External `ModelPort` adapters (e.g. DeepSeek)
+   - Runtime-selectable backend for `harnesslab run --model ...`
 
 ## Runtime Flow (Single Turn)
 
@@ -155,6 +158,8 @@ should be replaceable behind these contracts.
   full `decision_made` payload (`kind`, `tool_name`, `tool_args`,
   `assistant_message`) is sufficient to rebuild a `ReplayModel` without
   consulting the original Session or model
+- Model invocation is now auditable via `model_call` trace events
+  (decision kind, latency, and optional token counters/provider meta)
 
 ## Replay & Divergence Model (Step 5)
 
@@ -181,8 +186,10 @@ Two comparison modes:
 - **Semantic (default).** Normalizes prefix ids (`ses_*`, `msg_*`,
   `tool_*`, `run_*`) to `<prefix>_NNN` in first-appearance order, and
   scrubs volatile fields: timestamps (`created_at`, `started_at`,
-  `ended_at`, `duration_ms`) and tool output text (`output_preview`,
-  `output_size`, `output_truncated`). What remains — event order, event
+  `ended_at`, `duration_ms`, `latency_ms`), tool output text
+  (`output_preview`, `output_size`, `output_truncated`), and provider
+  telemetry (`model_name`, `provider`, `request_tokens`,
+  `response_tokens`, `total_tokens`). What remains — event order, event
   types, tool name, args, policy decision, `ok` / `error` — must match
   exactly. This is the right mode for any trace produced by `SystemClock`
   + `UuidIdProvider`.
@@ -240,6 +247,21 @@ by cluster `kind`. The project does not call an LLM here:
   artifacts of `(trace, eval_report)` plus version-pinned templates.
 - It would muddy the AGENTS.md guarantee that proposals are advisory
   and never self-modify the codebase.
+
+## Provider Integration (Post-MVP Phase 1)
+
+`ModelPort` remains the stable contract. Concrete providers now live
+under `src/harnesslab/providers/`:
+
+- `SimpleModel`: deterministic parser model for eval/replay and offline
+  workflows.
+- `DeepSeekModel`: networked provider for `harnesslab run --model deepseek`.
+
+This split keeps deterministic quality gates intact:
+
+- `run --model deepseek` can be non-deterministic by design.
+- `eval`, `replay`, and contract tests continue to rely on deterministic
+  clocks/ids/models so baseline and divergence behavior stay stable.
 
 ## Planned Evolution
 

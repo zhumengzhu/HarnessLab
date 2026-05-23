@@ -38,6 +38,25 @@ The CLI exposes five subcommands:
 
 Run `harnesslab --help` for the full surface.
 
+### Model backends (`run`)
+
+`harnesslab run` supports two model backends:
+
+- `--model simple` (default): deterministic local parser model (no network).
+- `--model deepseek`: calls DeepSeek Chat Completions (networked).
+
+DeepSeek requires `DEEPSEEK_API_KEY` in the environment.
+
+```bash
+export DEEPSEEK_API_KEY="***"
+uv run harnesslab run "summarize current workspace safety posture" --model deepseek
+```
+
+Optional env overrides:
+
+- `DEEPSEEK_BASE_URL` (default: `https://api.deepseek.com/v1`)
+- `DEEPSEEK_MODEL` (default: `deepseek-chat`)
+
 ### Storage backends
 
 By default `harnesslab run` uses in-memory session and memory stores
@@ -123,13 +142,14 @@ uv run harnesslab metrics .harnesslab/trace.jsonl --json
 `metrics` always exits 0; it is an observation tool, not a gate.
 
 Semantic divergence ignores: timestamps (`created_at`, `started_at`,
-`ended_at`, `duration_ms`), id renaming (`ses_*`, `msg_*`, `tool_*`,
+`ended_at`, `duration_ms`, `latency_ms`), id renaming (`ses_*`, `msg_*`, `tool_*`,
 `run_*` are normalized to `<prefix>_NNN` in first-appearance order),
 and tool output text (`output_preview`, `output_size`,
-`output_truncated`) because those reflect IO side effects rather than
-loop behavior. Everything else — the sequence of event types, the
-tool name and args, the policy decision, the `ok` / `error` outcome —
-must match.
+`output_truncated`) and model telemetry (`model_name`, `provider`,
+`request_tokens`, `response_tokens`, `total_tokens`) because those
+reflect provider/runtime variability rather than loop behavior.
+Everything else — the sequence of event types, the tool name and args,
+the policy decision, the `ok` / `error` outcome — must match.
 
 ### Improvement Proposals
 

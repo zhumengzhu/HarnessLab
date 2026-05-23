@@ -143,13 +143,16 @@ shapes are what `harnesslab metrics` aggregates.
 | --- | --- |
 | `session_started` | `goal: str` |
 | `user_input_received` | `turn_index: int`, `user_input: str` |
+| `model_call` | `decision_kind`, `latency_ms`, optional: `model_name`, `provider`, `request_tokens`, `response_tokens`, `total_tokens` |
 | `decision_made` | `kind: "assistant" \| "tool"`, `tool_name: str \| null`, `tool_args: dict`, `assistant_message: str \| null` |
 | `tool_invalid_args` | `tool_call_id`, `tool`, `args`, `error` |
 | `tool_denied` | `tool_call_id`, `tool`, `args`, `policy_decision`, `reason` |
 | `tool_executed` | `tool_call_id`, `tool`, `args`, `policy_decision`, `started_at`, `ended_at`, `duration_ms`, `ok`, `error`, `output_size`, `output_preview`, `output_truncated` |
 
-`tool_executed`'s `output_*` fields and the four timestamp fields are
-considered "volatile" by the divergence detector (see
+`tool_executed`'s `output_*` fields, model telemetry fields
+(`model_name`, `provider`, token counters), and timing fields
+(`created_at`, `started_at`, `ended_at`, `duration_ms`, `latency_ms`)
+are considered "volatile" by the divergence detector (see
 `docs/architecture/overview.md`, Replay & Divergence Model).
 
 ## MemoryRecord (Planned)

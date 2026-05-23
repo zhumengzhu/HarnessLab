@@ -156,6 +156,15 @@ Each tool call emits exactly one of the following trace events:
 `tool_invalid_args` carries `tool_call_id`, `tool`, `args`, and `error`
 (the schema violation message).
 
+Separately, the loop emits one `model_call` event per turn before
+`decision_made`; this is outside tool runtime but often correlated in
+analysis. `model_call` includes:
+
+- `decision_kind`
+- `latency_ms`
+- optional provider metadata: `model_name`, `provider`,
+  `request_tokens`, `response_tokens`, `total_tokens`
+
 These records should be correlated by run/session IDs for replay and debugging.
 All timestamps must come from the injected `ClockPort` and IDs from `IdPort`
 so that replay runs can reproduce the exact same trace.

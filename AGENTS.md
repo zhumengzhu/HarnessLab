@@ -106,6 +106,24 @@ When behavior changes, keep docs synchronized in the same PR.
 - Do not introduce new dependencies without clear need.
 - Preserve naming consistency across code, docs, and diagrams.
 
+## Provider Layer (Post-MVP)
+
+External LLMs are integrated only via `ModelPort` adapters under
+`src/harnesslab/providers/`.
+
+Rules:
+
+1. Keep `ModelPort` stable; do not leak provider-specific response
+   shapes into `core`.
+2. `harnesslab run` may use non-deterministic providers (e.g.
+   DeepSeek), but `eval` / `replay` paths must remain deterministic.
+3. Provider secrets come from environment variables; never commit keys
+   or key-like fixtures.
+4. Provider failures must degrade to normalized assistant responses, not
+   unhandled exceptions that break the loop.
+5. Provider telemetry belongs in `model_call` trace payload; treat
+   token counters/model names as volatile in semantic replay compare.
+
 ## Proposal Handling
 
 HarnessLab generates improvement proposals via `harnesslab propose`.

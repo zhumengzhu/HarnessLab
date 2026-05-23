@@ -207,10 +207,11 @@ Stable interfaces reduce migration risk from Python to TypeScript.
   - Telemetry aggregation — DONE
     (`src/harnesslab/telemetry/aggregate.py`). `Metrics` covers
     sessions, turns, tool_calls / successes / failures, denials,
-    invalid_args, `tool_success_rate`, `denial_rate`, and
-    `LatencyStats` (min / p50 / p95 / max, linear-interpolation,
-    stdlib-only). No "session pass rate" — production traces lack a
-    pass/fail signal; that lives in `harnesslab eval`.
+    invalid_args, `tool_success_rate`, `denial_rate`, tool latency,
+    model-call latency, and model token counters (`request` /
+    `response` / `total`) from the `model_call` event.
+    No "session pass rate" — production traces lack a pass/fail
+    signal; that lives in `harnesslab eval`.
   - Replay-vs-original divergence detector — DONE
     (`replay/divergence.py::detect_divergence`). Semantic mode
     (default) normalizes prefix ids (ses/msg/tool/run_<…> →
@@ -279,3 +280,39 @@ Stable interfaces reduce migration risk from Python to TypeScript.
   every shipped proposal's Acceptance checklist requires
   `uv run harnesslab eval`, satisfying the "gated by the Step 4
   regression runner" Exit criterion.
+
+## Post-MVP Phase 1 (Current)
+
+MVP Steps 1-6 are complete. The next phase focuses on real-model
+integration while preserving the existing eval/replay safety net.
+
+### Phase 1.1 — Provider integration (`deepseek`) — DONE
+
+- Added `DeepSeekModel` (`src/harnesslab/providers/deepseek.py`) as a
+  `ModelPort` implementation over DeepSeek's OpenAI-compatible API.
+- `harnesslab run` now accepts `--model {simple,deepseek}` (default:
+  `simple`). DeepSeek reads credentials from `DEEPSEEK_API_KEY`.
+- Added `model_call` trace event to record model latency and token
+  usage (`request_tokens`, `response_tokens`, `total_tokens`), and
+  wired telemetry aggregation to include those metrics.
+
+### Phase 1.2 — Memory retrieval/writeback policy — PLANNED
+
+- Wire `MemoryStorePort` into `HarnessLoop` so turn-level inference can
+  read/write durable memory intentionally (not passively).
+- Define extraction policy (what to store, when to evict, how to avoid
+  unbounded growth) and add explicit eval tasks for memory-dependent
+  behaviors.
+
+### Phase 1.3 — Metrics dashboard artifact — PLANNED
+
+- Keep `harnesslab metrics` as the data source and add an optional
+  static HTML report for trend visibility across multiple traces
+  (latency, denial rate, failure signatures).
+
+### Phase 1.4 — Eval task expansion from real failures — PLANNED
+
+- Every recurring real-world failure discovered by `harnesslab propose`
+  should be codified as a new eval task before the corresponding fix is
+  merged, so Step 4's regression gate stays aligned with production
+  reality.
