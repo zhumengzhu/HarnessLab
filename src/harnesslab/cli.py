@@ -141,6 +141,7 @@ def build_runtime(
         trace=trace,
         clock=SystemClock(),
         ids=UuidIdProvider(),
+        limits=limits,
     )
 
 

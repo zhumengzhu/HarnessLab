@@ -2,6 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime
 
+from harnesslab.core.compaction import (
+    Summarizer,
+    compact_messages,
+    estimate_messages_tokens,
+    should_compact,
+)
+from harnesslab.core.config import RuntimeLimits
 from harnesslab.core.contracts import (
     ClockPort,
     IdPort,
@@ -50,6 +57,8 @@ class HarnessLoop:
         trace: TraceRecorderPort,
         clock: ClockPort | None = None,
         ids: IdPort | None = None,
+        limits: RuntimeLimits | None = None,
+        summarizer: Summarizer | None = None,
     ) -> None:
         self._model = model
         self._policy = policy
@@ -58,6 +67,8 @@ class HarnessLoop:
         self._trace = trace
         self._clock: ClockPort = clock or SystemClock()
         self._ids: IdPort = ids or UuidIdProvider()
+        self._limits: RuntimeLimits = limits or RuntimeLimits()
+        self._summarizer: Summarizer | None = summarizer
 
     def start(self, goal: str) -> Session:
         session = Session(
@@ -174,6 +185,8 @@ class HarnessLoop:
                 },
             )
 
+            self._maybe_compact(session, trigger="threshold")
+
             step_input = user_input if step_index == 0 else ""
             decision, decision_started, decision_ended = self._call_model(
                 session, step_input
@@ -236,6 +249,56 @@ class HarnessLoop:
         # run_session call can extend the session.
         self._sessions.save(session)
         return last_response
+
+    # ------------------------------------------------------------------
+    # compaction
+    # ------------------------------------------------------------------
+
+    def _maybe_compact(self, session: Session, *, trigger: str) -> None:
+        """Compact older messages when the conversation exceeds the budget.
+
+        Emits ``compaction_started`` and ``compaction_completed`` trace
+        events around the work. The summary is produced by the
+        loop-level summarizer when supplied (Phase 2.4 commit 2 wires
+        the live model); otherwise the deterministic fallback in
+        :mod:`harnesslab.core.compaction` is used so eval and replay
+        stay reproducible.
+        """
+
+        threshold = self._limits.compaction_threshold_tokens
+        if not should_compact(session.messages, threshold_tokens=threshold):
+            return
+
+        estimated = estimate_messages_tokens(session.messages)
+        self._record(
+            session=session,
+            event_type="compaction_started",
+            payload={
+                "trigger": trigger,
+                "message_count": len(session.messages),
+                "estimated_tokens": estimated,
+                "threshold_tokens": threshold,
+            },
+        )
+
+        new_messages, stats = compact_messages(
+            session.messages,
+            keep_last=self._limits.compaction_keep_last_messages,
+            summarizer=self._summarizer,
+            now=self._clock.now(),
+            new_id=self._ids.new_id,
+        )
+        session.messages = new_messages
+
+        self._record(
+            session=session,
+            event_type="compaction_completed",
+            payload={
+                "trigger": trigger,
+                **stats,
+                "estimated_tokens_after": estimate_messages_tokens(new_messages),
+            },
+        )
 
     # ------------------------------------------------------------------
     # model + decision helpers
