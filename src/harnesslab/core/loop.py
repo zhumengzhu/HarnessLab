@@ -10,6 +10,10 @@ from harnesslab.core.compaction import (
     should_compact,
 )
 from harnesslab.core.config import RuntimeLimits
+from harnesslab.core.context import (
+    make_conversation_snapshot,
+    merge_adapter_breakdown,
+)
 from harnesslab.core.contracts import (
     ClockPort,
     IdPort,
@@ -199,6 +203,7 @@ class HarnessLoop:
                     decision=decision,
                     started_at=decision_started,
                     ended_at=decision_ended,
+                    session=session,
                 ),
             )
             self._record(
@@ -381,21 +386,31 @@ class HarnessLoop:
         decision: Decision,
         started_at: datetime,
         ended_at: datetime,
+        session: Session,
     ) -> dict:
+        raw_meta = self._model_raw_meta()
         payload: dict = {
             "model_name": type(self._model).__name__,
             "decision_kind": decision.kind,
             "latency_ms": (ended_at - started_at).total_seconds() * 1000.0,
         }
-        payload.update(self._model_metadata())
+        payload.update(self._model_metadata(raw_meta))
+
+        snapshot = make_conversation_snapshot(session.messages, self._limits)
+        snapshot = merge_adapter_breakdown(snapshot, raw_meta)
+        payload["context"] = snapshot.model_dump(exclude_none=True)
         return payload
 
-    def _model_metadata(self) -> dict:
+    def _model_raw_meta(self) -> dict | None:
         getter = getattr(self._model, "last_call_meta", None)
         if not callable(getter):
-            return {}
+            return None
         raw = getter()
-        if not isinstance(raw, dict):
+        return raw if isinstance(raw, dict) else None
+
+    @staticmethod
+    def _model_metadata(raw: dict | None) -> dict:
+        if not raw:
             return {}
         allowed = {
             "model_name",

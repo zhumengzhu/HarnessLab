@@ -9,7 +9,7 @@ from typing import Any
 
 import httpx
 
-from harnesslab.core.compaction import ModelOverflowError
+from harnesslab.core.compaction import ModelOverflowError, estimate_tokens
 from harnesslab.core.models import Decision, Session
 from harnesslab.core.prompt import ComposedPrompt, PromptBlock, PromptComposer
 
@@ -74,29 +74,28 @@ class DeepSeekModel:
 
     def decide(self, session: Session, user_input: str) -> Decision:
         body = self._request_body(session)
+        prompt_meta = _prompt_meta(self._last_prompt)
+        base_meta = {
+            "provider": "deepseek",
+            "model_name": self._model_name,
+            **prompt_meta,
+        }
         try:
             response = self._client.post("/chat/completions", json=body)
             if _is_context_overflow(response):
-                self._last_call_meta = {
-                    "provider": "deepseek",
-                    "model_name": self._model_name,
-                }
+                self._last_call_meta = dict(base_meta)
                 raise ModelOverflowError(_overflow_message(response))
             response.raise_for_status()
             payload = response.json()
         except httpx.HTTPError as exc:
-            self._last_call_meta = {
-                "provider": "deepseek",
-                "model_name": self._model_name,
-            }
+            self._last_call_meta = dict(base_meta)
             return Decision(
                 kind="final",
                 assistant_message=f"DeepSeek request failed: {type(exc).__name__}: {exc}",
             )
 
         self._last_call_meta = {
-            "provider": "deepseek",
-            "model_name": self._model_name,
+            **base_meta,
             **_usage_meta(payload.get("usage")),
         }
         return _decision_from_payload(payload)
@@ -235,6 +234,38 @@ def _overflow_message(response: httpx.Response) -> str:
     if isinstance(error, dict) and error.get("message"):
         return f"DeepSeek context length exceeded: {error['message']}"
     return "DeepSeek context length exceeded"
+
+
+def _prompt_meta(prompt: ComposedPrompt | None) -> dict[str, Any]:
+    """Summarize a composed prompt for the ``model_call.context`` snapshot.
+
+    Static blocks live above the conversation; dynamic blocks
+    (env / agents_md / tool_guide / etc.) are the runtime layer
+    contributed per-call; everything else (the rendered messages
+    themselves) is accounted for separately by the loop via
+    ``estimate_messages_tokens``.
+    """
+
+    if prompt is None:
+        return {}
+    static_tokens = 0
+    dynamic_tokens = 0
+    prompt_total = 0
+    names: list[str] = []
+    for block in prompt.blocks:
+        block_tokens = estimate_tokens(block.content)
+        prompt_total += block_tokens
+        names.append(block.name)
+        if block.origin == "static":
+            static_tokens += block_tokens
+        elif block.origin == "dynamic":
+            dynamic_tokens += block_tokens
+    return {
+        "prompt_tokens_estimate": prompt_total,
+        "static_block_tokens": static_tokens,
+        "dynamic_block_tokens": dynamic_tokens,
+        "prompt_block_names": names,
+    }
 
 
 def _usage_meta(raw_usage: Any) -> dict[str, int]:

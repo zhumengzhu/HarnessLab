@@ -58,13 +58,18 @@ def test_returns_final_decision_when_no_tool_calls() -> None:
     decision = model.decide(_session(), "hello")
     assert decision.kind == "final"
     assert decision.assistant_message == "hi from deepseek"
-    assert model.last_call_meta() == {
-        "provider": "deepseek",
-        "model_name": "deepseek-chat",
-        "request_tokens": 10,
-        "response_tokens": 2,
-        "total_tokens": 12,
-    }
+    meta = model.last_call_meta()
+    # Provider + usage are exact; prompt_meta is best-effort and
+    # asserted as "present, non-negative".
+    assert meta["provider"] == "deepseek"
+    assert meta["model_name"] == "deepseek-chat"
+    assert meta["request_tokens"] == 10
+    assert meta["response_tokens"] == 2
+    assert meta["total_tokens"] == 12
+    assert meta["prompt_tokens_estimate"] >= 0
+    assert meta["static_block_tokens"] >= 0
+    assert meta["dynamic_block_tokens"] >= 0
+    assert isinstance(meta["prompt_block_names"], list)
 
 
 def test_returns_tool_decision() -> None:
@@ -127,10 +132,17 @@ def test_http_error_falls_back_to_final() -> None:
     decision = model.decide(_session(), "hello")
     assert decision.kind == "final"
     assert "DeepSeek request failed" in (decision.assistant_message or "")
-    assert model.last_call_meta() == {
-        "provider": "deepseek",
-        "model_name": "deepseek-chat",
-    }
+    meta = model.last_call_meta()
+    assert meta["provider"] == "deepseek"
+    assert meta["model_name"] == "deepseek-chat"
+    # Prompt-side fields are recorded even on transport failure so
+    # operators can see how big the rejected request was.
+    assert "prompt_tokens_estimate" in meta
+    assert "prompt_block_names" in meta
+    # Usage fields are absent because no successful response was parsed.
+    assert "request_tokens" not in meta
+    assert "response_tokens" not in meta
+    assert "total_tokens" not in meta
 
 
 def test_tool_specs_from_registry_extracts_schema() -> None:

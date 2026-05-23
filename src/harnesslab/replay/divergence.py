@@ -50,6 +50,12 @@ _VOLATILE_FIELDS = (
     "output_preview",
     "output_size",
     "output_truncated",
+    # The Phase 2.6 ContextSnapshot is informational telemetry: it
+    # captures conversation/prompt token estimates that vary with
+    # workspace paths embedded in tool outputs (e.g. tmp dirs). It is
+    # not a behavioral signal so the replay/divergence detector
+    # ignores it.
+    "context",
 )
 
 
