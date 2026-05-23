@@ -9,6 +9,7 @@ from typing import Any
 
 import httpx
 
+from harnesslab.core.compaction import ModelOverflowError
 from harnesslab.core.models import Decision, Session
 from harnesslab.core.prompt import ComposedPrompt, PromptBlock, PromptComposer
 
@@ -75,6 +76,12 @@ class DeepSeekModel:
         body = self._request_body(session)
         try:
             response = self._client.post("/chat/completions", json=body)
+            if _is_context_overflow(response):
+                self._last_call_meta = {
+                    "provider": "deepseek",
+                    "model_name": self._model_name,
+                }
+                raise ModelOverflowError(_overflow_message(response))
             response.raise_for_status()
             payload = response.json()
         except httpx.HTTPError as exc:
@@ -185,6 +192,49 @@ def _decision_from_payload(payload: dict[str, Any]) -> Decision:
         kind="final",
         assistant_message="DeepSeek returned an empty response.",
     )
+
+
+_OVERFLOW_HINTS = (
+    "context_length_exceeded",
+    "context length exceeded",
+    "maximum context length",
+    "too many tokens",
+)
+
+
+def _is_context_overflow(response: httpx.Response) -> bool:
+    """Detect OpenAI / DeepSeek context-overflow responses.
+
+    These come back as HTTP 400 with an ``error.code`` of
+    ``context_length_exceeded`` (or a similar phrase in
+    ``error.message``). We treat any 400 whose body mentions one of
+    the hint strings as an overflow so the loop can run emergency
+    compaction instead of bubbling the error to the user.
+    """
+
+    if response.status_code != 400:
+        return False
+    try:
+        body = response.json()
+    except ValueError:
+        return False
+    error = body.get("error") if isinstance(body, dict) else None
+    if not isinstance(error, dict):
+        return False
+    code = (error.get("code") or "").lower()
+    msg = (error.get("message") or "").lower()
+    return any(hint in code or hint in msg for hint in _OVERFLOW_HINTS)
+
+
+def _overflow_message(response: httpx.Response) -> str:
+    try:
+        body = response.json()
+    except ValueError:
+        return "DeepSeek context length exceeded"
+    error = body.get("error") if isinstance(body, dict) else None
+    if isinstance(error, dict) and error.get("message"):
+        return f"DeepSeek context length exceeded: {error['message']}"
+    return "DeepSeek context length exceeded"
 
 
 def _usage_meta(raw_usage: Any) -> dict[str, int]:

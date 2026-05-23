@@ -2,11 +2,10 @@
 
 When ``session.messages`` would push the next model call past the
 configured threshold, the loop calls :func:`compact_messages` to
-replace older messages with a single summary message. The summary
-either comes from a caller-supplied summarizer (Phase 2.4 commit 2,
-which wires the live model) or from the deterministic fallback in
-this module so the unit tests, eval suite, and replayer all stay
-LLM-free and reproducible.
+replace older messages with a single summary message. If the model
+itself reports overflow (via :class:`ModelOverflowError`), the loop
+runs an emergency compaction with a much smaller ``keep_last`` and
+retries the call once.
 
 Concepts:
 
@@ -19,6 +18,13 @@ Concepts:
 - :func:`compact_messages` performs the compaction: keep the last
   ``keep_last`` messages verbatim, replace the rest with one summary
   ``system`` message whose body is produced by ``summarizer``.
+- :class:`ModelOverflowError` is the contract between adapters and
+  the loop for "the API rejected this request because the context
+  window is too small for what we sent".
+- :class:`LiveSummarizer` is an opt-in wrapper that sends a
+  summarization prompt to a real :class:`ModelPort` and returns the
+  resulting assistant text. CLI surfaces wire it in when running
+  against a live model.
 """
 
 from __future__ import annotations
@@ -27,9 +33,23 @@ from collections.abc import Callable
 from datetime import UTC, datetime
 from typing import Iterable
 
-from harnesslab.core.models import Message
+from harnesslab.core.models import Message, Session
 
 Summarizer = Callable[[list[Message]], str]
+
+
+class ModelOverflowError(Exception):
+    """Raised by a model adapter when the API rejected the request
+    because the context window is full.
+
+    Carries an optional ``estimated_tokens`` so the loop can record
+    "how much did we ask for" in the overflow-triggered
+    ``compaction_started`` event.
+    """
+
+    def __init__(self, message: str, *, estimated_tokens: int | None = None) -> None:
+        super().__init__(message)
+        self.estimated_tokens = estimated_tokens
 
 
 def estimate_tokens(text: str) -> int:
@@ -164,3 +184,58 @@ def _fallback_summarizer(older: list[Message]) -> str:
 
 def _default_id(prefix: str) -> str:
     return f"{prefix}_compaction"
+
+
+# ---------------------------------------------------------------------------
+# live summarizer (opt-in)
+# ---------------------------------------------------------------------------
+
+
+_SUMMARIZER_PROMPT = (
+    "<system-reminder>\n"
+    "You are summarizing a long agent conversation so the agent can "
+    "continue in a fresh, shorter context. Produce a faithful, neutral "
+    "summary in 8 short bullet points or fewer. Capture: the user's goal, "
+    "the decisions made, the tools called and their key results, and any "
+    "open questions or pending TODOs. Do not invent facts; do not editorialise.\n"
+    "</system-reminder>"
+)
+
+
+class LiveSummarizer:
+    """Summarize older messages via a live :class:`ModelPort`.
+
+    Wraps the model in a short prompt that asks for a faithful
+    bullet-point summary. The result is fenced in ``<system-reminder>``
+    markers so the next model call can tell the summary apart from
+    real conversation.
+    """
+
+    def __init__(self, model) -> None:  # type: ignore[no-untyped-def]
+        self._model = model
+
+    def __call__(self, older: list[Message]) -> str:
+        transcript = "\n".join(
+            f"[{m.role}] {m.content}" for m in older if m.content
+        )
+        # Build an ephemeral session whose only message is the
+        # summarization prompt + transcript. The model never sees the
+        # real session; this keeps summarization side-effect free.
+        scratch = Session(goal="(compaction-summary)")
+        scratch.messages.append(
+            Message(
+                role="user",
+                content=f"{_SUMMARIZER_PROMPT}\n\nTranscript:\n{transcript}",
+                session_id=scratch.id,
+            )
+        )
+        decision = self._model.decide(scratch, _SUMMARIZER_PROMPT)
+        body = (decision.assistant_message or "").strip()
+        if not body:
+            return _fallback_summarizer(older)
+        return (
+            "<system-reminder>\n"
+            f"[Compacted earlier conversation: {len(older)} messages]\n"
+            f"{body}\n"
+            "</system-reminder>"
+        )

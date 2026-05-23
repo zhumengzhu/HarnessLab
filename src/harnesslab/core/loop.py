@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 
 from harnesslab.core.compaction import (
+    ModelOverflowError,
     Summarizer,
     compact_messages,
     estimate_messages_tokens,
@@ -188,7 +189,7 @@ class HarnessLoop:
             self._maybe_compact(session, trigger="threshold")
 
             step_input = user_input if step_index == 0 else ""
-            decision, decision_started, decision_ended = self._call_model(
+            decision, decision_started, decision_ended = self._call_model_with_overflow(
                 session, step_input
             )
             self._record(
@@ -259,17 +260,33 @@ class HarnessLoop:
 
         Emits ``compaction_started`` and ``compaction_completed`` trace
         events around the work. The summary is produced by the
-        loop-level summarizer when supplied (Phase 2.4 commit 2 wires
-        the live model); otherwise the deterministic fallback in
-        :mod:`harnesslab.core.compaction` is used so eval and replay
-        stay reproducible.
+        loop-level summarizer when supplied; otherwise the
+        deterministic fallback in :mod:`harnesslab.core.compaction`
+        is used so eval and replay stay reproducible.
         """
 
         threshold = self._limits.compaction_threshold_tokens
         if not should_compact(session.messages, threshold_tokens=threshold):
             return
+        self._do_compact(
+            session,
+            trigger=trigger,
+            keep_last=self._limits.compaction_keep_last_messages,
+        )
 
-        estimated = estimate_messages_tokens(session.messages)
+    def _do_compact(
+        self,
+        session: Session,
+        *,
+        trigger: str,
+        keep_last: int,
+        estimated_tokens_override: int | None = None,
+    ) -> None:
+        estimated = (
+            estimated_tokens_override
+            if estimated_tokens_override is not None
+            else estimate_messages_tokens(session.messages)
+        )
         self._record(
             session=session,
             event_type="compaction_started",
@@ -277,13 +294,14 @@ class HarnessLoop:
                 "trigger": trigger,
                 "message_count": len(session.messages),
                 "estimated_tokens": estimated,
-                "threshold_tokens": threshold,
+                "threshold_tokens": self._limits.compaction_threshold_tokens,
+                "keep_last": keep_last,
             },
         )
 
         new_messages, stats = compact_messages(
             session.messages,
-            keep_last=self._limits.compaction_keep_last_messages,
+            keep_last=keep_last,
             summarizer=self._summarizer,
             now=self._clock.now(),
             new_id=self._ids.new_id,
@@ -299,6 +317,50 @@ class HarnessLoop:
                 "estimated_tokens_after": estimate_messages_tokens(new_messages),
             },
         )
+
+    def _call_model_with_overflow(
+        self,
+        session: Session,
+        step_input: str,
+    ) -> tuple[Decision, datetime, datetime]:
+        """Call the model; on overflow, force-compact and retry once.
+
+        Adapters signal overflow by raising
+        :class:`ModelOverflowError`. The first retry uses
+        ``keep_last=max(1, configured // 2)`` so the next request
+        is materially smaller. If the second call also overflows,
+        the error propagates as a terminal ``final`` decision so
+        the loop ends cleanly with a recognizable message instead
+        of crashing the CLI.
+        """
+
+        try:
+            return self._call_model(session, step_input)
+        except ModelOverflowError as overflow:
+            emergency_keep_last = max(
+                1, self._limits.compaction_keep_last_messages // 2
+            )
+            self._do_compact(
+                session,
+                trigger="overflow",
+                keep_last=emergency_keep_last,
+                estimated_tokens_override=overflow.estimated_tokens,
+            )
+            try:
+                return self._call_model(session, step_input)
+            except ModelOverflowError as second:
+                started = self._clock.now()
+                ended = self._clock.now()
+                msg = (
+                    "Context window exceeded even after emergency compaction "
+                    f"(keep_last={emergency_keep_last}). "
+                    f"Reason: {second}"
+                )
+                return (
+                    Decision(kind="final", assistant_message=msg),
+                    started,
+                    ended,
+                )
 
     # ------------------------------------------------------------------
     # model + decision helpers
