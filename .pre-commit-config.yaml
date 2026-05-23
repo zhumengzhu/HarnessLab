@@ -15,3 +15,14 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-commit]
+      - id: eval
+        name: harnesslab eval (manual)
+        entry: uv run harnesslab eval
+        language: system
+        pass_filenames: false
+        always_run: true
+        # Manual stage only: run with `pre-commit run --hook-stage manual eval`.
+        # Kept out of pre-commit to keep per-commit latency low while the
+        # `pytest tests/test_eval_tasks.py` integration test still guards
+        # baseline correctness on every commit.
+        stages: [manual]

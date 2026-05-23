@@ -1,0 +1,43 @@
+# HarnessLab eval workflow — template, not active.
+#
+# Drop the `.template` suffix to enable. Kept disabled by default while the
+# eval suite is still small enough to be enforced locally via pre-commit
+# (manual stage) and `pytest tests/test_eval_tasks.py`.
+#
+# Once the eval surface stabilizes (Step 5+), enable this workflow to gate
+# pull requests on baseline regressions. Exit code 3 = regression -> CI red.
+
+name: eval
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  eval:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Run eval suite
+        run: uv run harnesslab eval
+
+      - name: Upload report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: eval-report
+          path: eval/reports/latest.json

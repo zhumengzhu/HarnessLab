@@ -153,14 +153,38 @@ Stable interfaces reduce migration risk from Python to TypeScript.
 - **Remaining for full DONE**: memory retrieval/writeback policy, once the
   Step 4 eval runner shows what the loop actually needs to read/write.
 
-### Step 4 — Eval Tasks + Regression Runner
+### Step 4 — Eval Tasks + Regression Runner — DONE
 - **Entry**: Step 3 exit criteria met; `ReplayModel` available.
 - **Deliverables**:
-  - A small, versioned eval task set (input + expected outcome)
-  - Baseline comparison + regression runner
-  - Compact run-quality report (pass rate, tool success rate, latency)
-- **Exit**: a known-good baseline exists; CI gate fails when pass rate
-  regresses against the baseline.
+  - A small, versioned eval task set (input + expected outcome) — DONE
+    (`eval/tasks/*.yaml`: 5 starter tasks covering assistant fallback,
+    write+read round-trip, path-escape denial, schema gate, shell
+    denylist). YAML is loaded into Pydantic `Task` models, and a task
+    may pre-record `Decision`s to drive `ReplayModel` instead of
+    `SimpleModel`.
+  - Baseline comparison + regression runner — DONE
+    (`src/harnesslab/eval/{runner,baseline}.py`). `TaskRunner` executes
+    each task in an isolated tmp workspace with `FrozenClock` +
+    `SeqIdProvider` for byte-stable traces. Baseline regressions cover
+    pass→fail flips and growth in `tool_failures` / `invalid_args`;
+    other metric drift is informational.
+  - Compact run-quality report — DONE (`src/harnesslab/eval/report.py`).
+    `render_stdout` prints PASS/FAIL with metrics and regressions;
+    `write_json` produces `<reports-dir>/latest.json` for downstream
+    tooling. Reports dir is ignored from git (`eval/reports/`).
+  - CLI subcommand surface — DONE. `harnesslab run <input>` and
+    `harnesslab eval [--task STEM] [--update-baseline]` replace the
+    single-positional CLI. Exit codes: 0 pass, 2 task failure, 3
+    baseline regression, 64 usage error.
+- **Exit**: a known-good baseline exists at `eval/baseline.json`; every
+  shipped task passes against the live loop
+  (`tests/test_eval_tasks.py`); the CLI returns exit code 3 when the
+  current run regresses against the baseline
+  (`tests/test_cli_subcommands.py::test_eval_regression_exit_code`).
+- **Deferred to later steps**: memory retrieval/writeback policy (no
+  shipped task currently requires it; revisit alongside Step 5
+  telemetry aggregation), GitHub Actions integration
+  (template-only in this step, wired up after the workflow stabilizes).
 
 ### Step 5 — Replay + Telemetry Metrics
 - **Entry**: Step 4 exit criteria met.

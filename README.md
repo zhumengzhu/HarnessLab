@@ -21,26 +21,64 @@ HarnessLab is a learning-first agent harness project.
 cd /Users/zmz/Github/HarnessLab
 uv sync
 uv run pre-commit install   # one-time: enables local quality-gate hook
-uv run harnesslab "list files in this workspace"
+uv run harnesslab run "list files in this workspace"
 uv run pytest
 ```
 
+The CLI exposes two subcommands:
+
+- `harnesslab run <input>` — run one turn of the loop.
+- `harnesslab eval` — run the YAML eval suite (see below).
+
+Run `harnesslab --help` for the full surface.
+
 ### Storage backends
 
-By default the CLI uses in-memory session and memory stores (state is
-lost when the process exits). To persist state across runs use the
-SQLite backend:
+By default `harnesslab run` uses in-memory session and memory stores
+(state is lost when the process exits). To persist state across runs
+use the SQLite backend:
 
 ```bash
-uv run harnesslab "hello" --storage sqlite
+uv run harnesslab run "hello" --storage sqlite
 # default DB path: <workspace-root>/.harnesslab/state.sqlite
 
-uv run harnesslab "again" --storage sqlite \
+uv run harnesslab run "again" --storage sqlite \
     --sqlite-path ./my-runs/state.sqlite
 ```
 
 The same Port contract suite (`tests/test_port_contracts.py`) runs
 against both backends, so they are behaviorally interchangeable.
+
+### Eval suite
+
+`harnesslab eval` drives a small, versioned set of YAML tasks
+(`eval/tasks/*.yaml`) against the live loop, then compares results to
+`eval/baseline.json` and writes a JSON report to
+`eval/reports/latest.json`.
+
+```bash
+# Run every task, compare against baseline, write the latest report.
+uv run harnesslab eval
+
+# Run a single task by filename stem.
+uv run harnesslab eval --task 02_write_then_read
+
+# Refresh the baseline after an intentional, reviewed behavior change.
+uv run harnesslab eval --update-baseline
+```
+
+Exit codes:
+
+| Code | Meaning |
+| --- | --- |
+| 0 | All tasks passed, no baseline regression. |
+| 2 | At least one task failed (no baseline to compare against, or new failure not in baseline). |
+| 3 | Baseline regression detected (was passing, now failing — or `tool_failures` / `invalid_args` increased). |
+| 64 | Usage error (missing subcommand or unknown task). |
+
+Each task declares its expected trace shape (ordered event subset,
+forbidden event types, and `final_reply` substring), so the eval suite
+doubles as living documentation of the loop's invariants.
 
 ## Quality Gate
 
