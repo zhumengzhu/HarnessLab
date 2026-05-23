@@ -45,6 +45,25 @@ MIGRATIONS: list[tuple[int, str]] = [
         );
         """,
     ),
+    (
+        2,
+        # Phase 2.3: first-class session lifecycle. ADD COLUMN with a
+        # default applies retroactively to existing rows in SQLite, so
+        # older sessions adopt step_count=0 and NULL for the new
+        # optional fields.
+        """
+        ALTER TABLE sessions ADD COLUMN step_count INTEGER NOT NULL DEFAULT 0;
+        ALTER TABLE sessions ADD COLUMN last_step_at TEXT;
+        ALTER TABLE sessions ADD COLUMN parent_session_id TEXT
+            REFERENCES sessions(id);
+        ALTER TABLE sessions ADD COLUMN title TEXT;
+
+        CREATE INDEX IF NOT EXISTS idx_sessions_created_at
+            ON sessions(created_at);
+        CREATE INDEX IF NOT EXISTS idx_sessions_parent
+            ON sessions(parent_session_id);
+        """,
+    ),
 ]
 
 

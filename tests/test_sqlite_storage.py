@@ -39,7 +39,9 @@ def test_apply_migrations_is_idempotent(tmp_path: Path) -> None:
         v2 = apply_migrations(conn1)
         assert v1 == v2 == MIGRATIONS[-1][0]
         rows = conn1.execute("SELECT COUNT(*) AS c FROM schema_version;").fetchone()
-        assert rows["c"] == 1, "migration applied twice"
+        # Each shipped migration writes exactly one row; re-running
+        # apply_migrations must not duplicate those rows.
+        assert rows["c"] == len(MIGRATIONS), "migration applied twice"
     finally:
         conn1.close()
 

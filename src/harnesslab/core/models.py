@@ -20,13 +20,46 @@ class Message(BaseModel):
     tool_call_id: str | None = None
 
 
+SessionStatus = Literal[
+    "running",
+    "waiting_user",
+    "done",
+    "failed",
+    "aborted",
+]
+
+
 class Session(BaseModel):
+    """A live or persisted agent session.
+
+    Lifecycle fields (Phase 2.3):
+
+    - ``status`` advances ``running → waiting_user`` when the model
+      returns ``ask_user``, and ``running → done`` when it returns
+      ``final``. ``failed`` and ``aborted`` are reserved for the loop
+      and CLI to set explicitly (later phases).
+    - ``turn_count`` counts user inputs the loop has processed; it
+      moves forward exactly once per ``run_session`` call.
+    - ``step_count`` counts inner-loop iterations (model decisions)
+      across the entire session.
+    - ``last_step_at`` is refreshed at the end of every step so the
+      ``harnesslab session ls`` CLI can show recency.
+    - ``parent_session_id`` is set when the session was created by
+      forking another session; ``None`` for top-level sessions.
+    - ``title`` is a short human-readable label derived from the
+      initial goal so ``session ls`` can be skimmed.
+    """
+
     id: str = Field(default_factory=lambda: _new_id("ses"))
     goal: str
-    status: Literal["running", "done", "failed"] = "running"
+    status: SessionStatus = "running"
     messages: list[Message] = Field(default_factory=list)
     turn_count: int = 0
+    step_count: int = 0
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    last_step_at: datetime | None = None
+    parent_session_id: str | None = None
+    title: str | None = None
 
 
 class ToolCall(BaseModel):

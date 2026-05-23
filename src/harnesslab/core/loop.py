@@ -64,6 +64,7 @@ class HarnessLoop:
             id=self._ids.new_id("ses"),
             goal=goal,
             created_at=self._clock.now(),
+            title=_derive_title(goal),
         )
         self._sessions.create(session)
         self._record(
@@ -72,6 +73,32 @@ class HarnessLoop:
             payload={"goal": goal},
         )
         return session
+
+    def fork(self, source_id: str, *, goal: str | None = None) -> Session:
+        """Create a new session seeded from ``source_id``'s messages.
+
+        The forked session keeps a pointer back to its source via
+        ``parent_session_id`` so the ``session show --history`` view
+        can walk the lineage. The conversation is copied by value so
+        edits to the fork do not mutate the parent.
+        """
+
+        parent = self._sessions.get(source_id)
+        forked = Session(
+            id=self._ids.new_id("ses"),
+            goal=goal or parent.goal,
+            created_at=self._clock.now(),
+            title=_derive_title(goal or parent.goal),
+            parent_session_id=parent.id,
+            messages=[m.model_copy() for m in parent.messages],
+        )
+        self._sessions.create(forked)
+        self._record(
+            session=forked,
+            event_type="session_started",
+            payload={"goal": forked.goal, "parent_session_id": parent.id},
+        )
+        return forked
 
     def run_turn(self, session_id: str, user_input: str) -> str:
         """Run exactly one decision step.
@@ -104,6 +131,7 @@ class HarnessLoop:
             raise ValueError(f"max_steps must be >= 1, got {max_steps}")
 
         session = self._sessions.get(session_id)
+        session.status = "running"
         self._record(
             session=session,
             event_type="user_input_received",
@@ -161,6 +189,8 @@ class HarnessLoop:
             last_response = step_response
             prev_terminal = step_outcome
             steps_used = step_index + 1
+            session.step_count += 1
+            session.last_step_at = self._clock.now()
 
             self._record(
                 session=session,
@@ -185,6 +215,12 @@ class HarnessLoop:
         )
 
         session.turn_count += 1
+        if terminal_reason == "final":
+            session.status = "done"
+        elif terminal_reason == "ask_user":
+            session.status = "waiting_user"
+        # Hitting max_steps leaves status as "running" — the next
+        # run_session call can extend the session.
         self._sessions.save(session)
         return last_response
 
@@ -408,3 +444,25 @@ class HarnessLoop:
         if result.ok:
             return f"[tool:{call.name}] {result.output}"
         return f"[tool:{call.name}] failed: {result.error or 'unknown error'}"
+
+
+_TITLE_MAX_LEN = 60
+
+
+def _derive_title(text: str) -> str:
+    """Turn a goal or user input into a short, single-line label.
+
+    The first non-empty line is used; lines longer than
+    :data:`_TITLE_MAX_LEN` are truncated with an ellipsis. Empty input
+    yields the placeholder string ``"(no title)"`` so the
+    ``session ls`` CLI never has to render ``None``.
+    """
+
+    for line in (text or "").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        if len(stripped) <= _TITLE_MAX_LEN:
+            return stripped
+        return stripped[: _TITLE_MAX_LEN - 1].rstrip() + "…"
+    return "(no title)"
