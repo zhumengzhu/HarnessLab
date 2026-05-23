@@ -77,6 +77,30 @@ class HarnessLoop:
             name=decision.tool_name or "",
             args=decision.tool_args,
         )
+
+        schema_ok, schema_error = self._tools.validate_args(call)
+        if not schema_ok:
+            invalid_msg = f"Tool args invalid: {schema_error}"
+            session.messages.append(
+                self._make_message(
+                    role="tool",
+                    content=invalid_msg,
+                    session=session,
+                    tool_call_id=call.id,
+                )
+            )
+            self._record(
+                session=session,
+                event_type="tool_invalid_args",
+                payload={
+                    "tool_call_id": call.id,
+                    "tool": call.name,
+                    "args": call.args,
+                    "error": schema_error,
+                },
+            )
+            return invalid_msg
+
         allowed, reason = self._policy.allow_tool(call)
         call.policy_decision = f"{'allow' if allowed else 'deny'}:{reason}"
 

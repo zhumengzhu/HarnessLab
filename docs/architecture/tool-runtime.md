@@ -9,7 +9,9 @@ audited in HarnessLab.
 
 ```mermaid
 flowchart LR
-    ToolCallRequest[Tool Call Request] --> PolicyCheck[Policy Validation]
+    ToolCallRequest[Tool Call Request] --> SchemaCheck[Args Schema Validation]
+    SchemaCheck -->|invalid| InvalidArgsResult[Invalid Args Result]
+    SchemaCheck -->|valid| PolicyCheck[Policy Validation]
     PolicyCheck -->|deny| DeniedResult[Denied Result]
     PolicyCheck -->|allow| ToolLookup[Tool Lookup]
     ToolLookup --> ToolFound{Tool Exists}
@@ -18,6 +20,11 @@ flowchart LR
     ExecuteTool --> NormalizeResult[Normalize Output]
     NormalizeResult --> AuditTrace[Audit + Trace Record]
 ```
+
+Schema validation runs before the policy layer so that policy checks can
+trust the shape of `call.args`. Unknown tools intentionally pass through
+the schema gate and are denied by the policy layer instead, keeping the
+"unknown tool" responsibility in exactly one place.
 
 ## Design Objectives
 
@@ -37,6 +44,10 @@ Responsibilities:
 - Registration (`name -> implementation`)
 - Lookup and dispatch
 - Standardized error behavior for unknown tools
+- `validate_args(call) -> (bool, error)`: validate `call.args` against the
+  registered tool's `args_schema`; unknown tools fall through (deferred to
+  the policy layer) so the "unknown tool" responsibility lives in exactly
+  one place
 - Normalize any exception raised by a tool into `ToolResult(ok=False, error="crashed: ...")`
   so that the loop never observes raw exceptions
 
@@ -112,8 +123,13 @@ It is intentionally simple:
 
 ## Auditing and Observability
 
-Each tool call must emit a `tool_executed` (or `tool_denied`) trace event whose
-payload carries the following fields:
+Each tool call emits exactly one of the following trace events:
+
+- `tool_invalid_args` — schema validation failed; policy and tool were not run
+- `tool_denied` — schema passed but policy denied; tool was not run
+- `tool_executed` — schema passed, policy allowed, tool ran (ok=true/false)
+
+`tool_executed` (and `tool_denied`) carry the following payload fields:
 
 - `tool_call_id`: stable ID linking back to `ToolCall.id`
 - `tool`: tool name
@@ -126,6 +142,9 @@ payload carries the following fields:
 - `output_size`: byte length of the full tool output
 - `output_preview`: first N bytes of `ToolResult.output` (current preview cap: 512)
 - `output_truncated`: whether `output_preview` is shorter than `output_size`
+
+`tool_invalid_args` carries `tool_call_id`, `tool`, `args`, and `error`
+(the schema violation message).
 
 These records should be correlated by run/session IDs for replay and debugging.
 All timestamps must come from the injected `ClockPort` and IDs from `IdPort`

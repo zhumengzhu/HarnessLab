@@ -67,3 +67,36 @@ def test_tool_path_appends_single_tool_message(tmp_path: Path) -> None:
     assert len(assistant_messages) == 0
     assert tool_messages[0].tool_call_id is not None
     assert tool_messages[0].tool_call_id.startswith("tool_")
+
+
+def test_invalid_args_short_circuit_before_policy(tmp_path: Path) -> None:
+    loop = build_runtime(tmp_path)
+    session = loop.start(goal="schema gate")
+    reply = loop.run_turn(session.id, '/tool write_file {}')
+
+    assert "Tool args invalid" in reply
+    events = _read_trace(tmp_path)
+    invalid = [e for e in events if e["event_type"] == "tool_invalid_args"]
+    assert len(invalid) == 1
+    payload = invalid[0]["payload"]
+    assert payload["tool"] == "write_file"
+    assert payload["args"] == {}
+    assert "error" in payload and payload["error"]
+
+    # The schema gate must run *before* policy: no tool_denied / tool_executed
+    # event should be emitted for this turn.
+    assert not any(e["event_type"] == "tool_denied" for e in events)
+    assert not any(e["event_type"] == "tool_executed" for e in events)
+
+
+def test_invalid_args_writes_only_one_tool_message(tmp_path: Path) -> None:
+    loop = build_runtime(tmp_path)
+    session = loop.start(goal="schema msg")
+    loop.run_turn(session.id, '/tool write_file {"path":123}')
+
+    tool_messages = [m for m in session.messages if m.role == "tool"]
+    assistant_messages = [m for m in session.messages if m.role == "assistant"]
+    assert len(tool_messages) == 1
+    assert len(assistant_messages) == 0
+    assert "Tool args invalid" in tool_messages[0].content
+    assert tool_messages[0].tool_call_id is not None
