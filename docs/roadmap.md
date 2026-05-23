@@ -85,7 +85,7 @@ Stable interfaces reduce migration risk from Python to TypeScript.
 
 ## Steps
 
-### Step 1 — Scaffold + One-Turn Loop
+### Step 1 — Scaffold + One-Turn Loop — DONE
 - **Entry**: empty repository, AGENTS.md and architecture docs in place.
 - **Deliverables**:
   - Package layout (`core`, `policy`, `tools`, `session`, `memory`, `telemetry`)
@@ -105,21 +105,30 @@ Stable interfaces reduce migration risk from Python to TypeScript.
   runs of a canonical scenario produce byte-identical JSONL traces under
   `FrozenClock` + `SeqIdProvider`.
 
-### Step 2 — Tool Runtime + Policy Hardening
+### Step 2 — Tool Runtime + Policy Hardening — DONE
 - **Entry**: Step 1 exit criteria met.
 - **Deliverables**:
   - Wire `ToolPort.args_schema` into runtime validation (reject malformed
-    arguments before the policy layer)
+    arguments before the policy layer) — `ToolRegistry.validate_args`
+    enforced in `HarnessLoop` before the policy check; emits a new
+    `tool_invalid_args` trace event.
   - Add a shell-command denylist (e.g. `rm`, `sudo`, `curl`) layered on top
-    of the existing allowlist
+    of the existing allowlist — `DefaultPolicy.shell_denylist` consulted
+    before the allowlist so destructive commands stay rejected even if
+    accidentally allowlisted.
   - Parameterize resource limits (`output_bytes_cap`, `timeout_seconds`) via
-    policy configuration rather than hardcoded constants
+    policy configuration rather than hardcoded constants —
+    `core.config.RuntimeLimits` injected into every tool from a single
+    construction point in `cli.build_runtime`.
   - Contract tests covering each stable Port (one minimal compliance test
-    per Port)
-  - `ReplayModel` and `ReplayTraceRecorder` stubs to unblock Step 4
+    per Port) — `tests/test_port_contracts.py` exercises all 8 Ports
+    against their production default implementations.
+  - `ReplayModel` and `ReplayTraceRecorder` stubs to unblock Step 4 —
+    `core.replay` provides both, and the loop drives them end-to-end in
+    `tests/test_replay.py`.
 - **Exit**: malformed args never reach a tool; shell denylist is enforced
   and tested; resource limits are configurable; every Port has at least one
-  compliance test.
+  compliance test; replay stubs satisfy the existing Port contracts.
 
 ### Step 3 — Session/Memory Persistence
 - **Entry**: Step 2 exit criteria met.
