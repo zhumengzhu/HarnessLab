@@ -11,6 +11,8 @@ What's measured (Step 5 scope):
   - invalid_args (tool_invalid_args events)
   - tool_success_rate, denial_rate (None when denominators are zero)
   - tool_latency: min / p50 / p95 / max from tool_executed.duration_ms
+  - model_calls + model_call_latency from model_call.latency_ms
+  - token counters from model_call.{request,response,total}_tokens
 
 What's intentionally NOT measured: "session pass rate". Production
 sessions have no built-in pass/fail signal; that lives in the eval
@@ -45,6 +47,11 @@ class Metrics(BaseModel):
     tool_success_rate: float | None
     denial_rate: float | None
     tool_latency: LatencyStats | None
+    model_calls: int
+    model_call_latency: LatencyStats | None
+    model_request_tokens: int
+    model_response_tokens: int
+    model_total_tokens: int
 
 
 def aggregate(events: list[TraceEvent]) -> Metrics:
@@ -55,8 +62,28 @@ def aggregate(events: list[TraceEvent]) -> Metrics:
     tool_successes = 0
     tool_failures = 0
     latencies: list[float] = []
+    model_calls = 0
+    model_latencies: list[float] = []
+    model_request_tokens = 0
+    model_response_tokens = 0
+    model_total_tokens = 0
 
     for e in events:
+        if e.event_type == "model_call":
+            model_calls += 1
+            lat = e.payload.get("latency_ms")
+            if isinstance(lat, int | float):
+                model_latencies.append(float(lat))
+            req = e.payload.get("request_tokens")
+            resp = e.payload.get("response_tokens")
+            total = e.payload.get("total_tokens")
+            if isinstance(req, int):
+                model_request_tokens += req
+            if isinstance(resp, int):
+                model_response_tokens += resp
+            if isinstance(total, int):
+                model_total_tokens += total
+            continue
         if e.event_type != "tool_executed":
             continue
         tool_calls += 1
@@ -84,6 +111,11 @@ def aggregate(events: list[TraceEvent]) -> Metrics:
             denials / (denials + tool_calls) if (denials + tool_calls) else None
         ),
         tool_latency=_latency_stats(latencies),
+        model_calls=model_calls,
+        model_call_latency=_latency_stats(model_latencies),
+        model_request_tokens=model_request_tokens,
+        model_response_tokens=model_response_tokens,
+        model_total_tokens=model_total_tokens,
     )
 
 
@@ -130,6 +162,11 @@ def render_metrics(metrics: Metrics) -> str:
         f"  invalid_args:    {metrics.invalid_args}",
         f"  tool_success:    {_fmt_rate(metrics.tool_success_rate)}",
         f"  denial_rate:     {_fmt_rate(metrics.denial_rate)}",
+        f"  model_calls:     {metrics.model_calls}",
+        f"  model_tokens:    "
+        f"req={metrics.model_request_tokens} "
+        f"resp={metrics.model_response_tokens} "
+        f"total={metrics.model_total_tokens}",
     ]
     if metrics.tool_latency:
         lat = metrics.tool_latency
@@ -141,6 +178,16 @@ def render_metrics(metrics: Metrics) -> str:
         )
     else:
         lines.append("  tool_latency_ms: (no samples)")
+    if metrics.model_call_latency:
+        lat = metrics.model_call_latency
+        lines.append(
+            "  model_latency_ms:"
+            f" min={lat.min_ms:.2f} p50={lat.p50_ms:.2f} "
+            f"p95={lat.p95_ms:.2f} max={lat.max_ms:.2f} "
+            f"(n={lat.samples})"
+        )
+    else:
+        lines.append("  model_latency_ms: (no samples)")
     return "\n".join(lines)
 
 

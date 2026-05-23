@@ -116,8 +116,10 @@ def test_user_input_event_is_recorded_before_decision(tmp_path: Path) -> None:
 
     events = _read_trace(tmp_path)
     user_inputs = [e for e in events if e["event_type"] == "user_input_received"]
+    model_calls = [e for e in events if e["event_type"] == "model_call"]
     decisions = [e for e in events if e["event_type"] == "decision_made"]
     assert len(user_inputs) == 2
+    assert len(model_calls) == 2
     assert len(decisions) == 2
 
     assert user_inputs[0]["payload"] == {"turn_index": 0, "user_input": "hello"}
@@ -126,12 +128,14 @@ def test_user_input_event_is_recorded_before_decision(tmp_path: Path) -> None:
         "user_input": '/tool read_file {"path":"a.txt"}',
     }
 
-    keep = {"user_input_received", "decision_made"}
+    keep = {"user_input_received", "model_call", "decision_made"}
     types_in_order = [e["event_type"] for e in events if e["event_type"] in keep]
     assert types_in_order == [
         "user_input_received",
+        "model_call",
         "decision_made",
         "user_input_received",
+        "model_call",
         "decision_made",
     ]
 
@@ -159,3 +163,17 @@ def test_decision_made_payload_is_replay_complete(tmp_path: Path) -> None:
         "tool_args": {"path": "x.txt", "content": "y"},
         "assistant_message": None,
     }
+
+
+def test_model_call_event_contains_latency_and_kind(tmp_path: Path) -> None:
+    loop = build_runtime(tmp_path)
+    session = loop.start(goal="model call event")
+    loop.run_turn(session.id, "hello")
+
+    events = _read_trace(tmp_path)
+    model_calls = [e for e in events if e["event_type"] == "model_call"]
+    assert len(model_calls) == 1
+    payload = model_calls[0]["payload"]
+    assert payload["model_name"] == "SimpleModel"
+    assert payload["decision_kind"] == "assistant"
+    assert payload["latency_ms"] >= 0

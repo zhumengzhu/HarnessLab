@@ -68,14 +68,20 @@ def _extract_turns(
             raise UnreplayableTraceError(
                 f"user_input_received event #{i} missing user_input payload"
             )
-        if i + 1 >= len(events) or events[i + 1].event_type != "decision_made":
+        decision_index = i + 1
+        if decision_index < len(events) and events[decision_index].event_type == "model_call":
+            decision_index += 1
+        if decision_index >= len(events) or events[decision_index].event_type != "decision_made":
             raise UnreplayableTraceError(
                 f"user_input_received at #{i} not followed by decision_made"
             )
-        decision = _decision_from_payload(events[i + 1].payload, index=i + 1)
+        decision = _decision_from_payload(
+            events[decision_index].payload,
+            index=decision_index,
+        )
         inputs.append(user_input)
         decisions.append(decision)
-        i += 2
+        i = decision_index + 1
     return inputs, decisions
 
 

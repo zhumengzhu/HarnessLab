@@ -36,12 +36,26 @@ def test_aggregate_empty_trace_returns_zeros() -> None:
     assert m.tool_success_rate is None
     assert m.denial_rate is None
     assert m.tool_latency is None
+    assert m.model_calls == 0
+    assert m.model_call_latency is None
+    assert m.model_request_tokens == 0
+    assert m.model_response_tokens == 0
+    assert m.model_total_tokens == 0
 
 
 def test_aggregate_counts_basic_events() -> None:
     events = [
         _evt("session_started"),
         _evt("user_input_received"),
+        _evt(
+            "model_call",
+            payload={
+                "latency_ms": 4.0,
+                "request_tokens": 10,
+                "response_tokens": 5,
+                "total_tokens": 15,
+            },
+        ),
         _evt("decision_made"),
         _evt("tool_executed", payload={"ok": True, "duration_ms": 5.0}),
         _evt("user_input_received"),
@@ -57,6 +71,10 @@ def test_aggregate_counts_basic_events() -> None:
     assert m.tool_failures == 0
     assert m.denials == 1
     assert m.invalid_args == 1
+    assert m.model_calls == 1
+    assert m.model_request_tokens == 10
+    assert m.model_response_tokens == 5
+    assert m.model_total_tokens == 15
 
 
 def test_aggregate_counts_distinct_sessions() -> None:
@@ -138,11 +156,25 @@ def test_render_metrics_handles_zero_samples() -> None:
     out = render_metrics(aggregate([]))
     assert "sessions:        0" in out
     assert "tool_latency_ms: (no samples)" in out
+    assert "model_latency_ms: (no samples)" in out
     assert "tool_success:    n/a" in out
 
 
 def test_render_metrics_includes_percentiles() -> None:
-    events = [_evt("tool_executed", payload={"ok": True, "duration_ms": 4.2})]
+    events = [
+        _evt("tool_executed", payload={"ok": True, "duration_ms": 4.2}),
+        _evt(
+            "model_call",
+            payload={
+                "latency_ms": 8.1,
+                "request_tokens": 100,
+                "response_tokens": 20,
+                "total_tokens": 120,
+            },
+        ),
+    ]
     out = render_metrics(aggregate(events))
     assert "tool_success:    100.0%" in out
     assert "min=4.20 p50=4.20 p95=4.20 max=4.20 (n=1)" in out
+    assert "model_tokens:    req=100 resp=20 total=120" in out
+    assert "model_latency_ms: min=8.10 p50=8.10 p95=8.10 max=8.10 (n=1)" in out

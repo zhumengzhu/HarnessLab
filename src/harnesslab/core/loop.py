@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from harnesslab.core.contracts import (
     ClockPort,
     IdPort,
@@ -61,7 +63,18 @@ class HarnessLoop:
         session.messages.append(
             self._make_message(role="user", content=user_input, session=session)
         )
+        model_started = self._clock.now()
         decision = self._model.decide(session, user_input)
+        model_ended = self._clock.now()
+        self._record(
+            session=session,
+            event_type="model_call",
+            payload=self._model_call_payload(
+                decision=decision,
+                started_at=model_started,
+                ended_at=model_ended,
+            ),
+        )
         self._record(
             session=session,
             event_type="decision_made",
@@ -76,6 +89,36 @@ class HarnessLoop:
         session.turn_count += 1
         self._sessions.save(session)
         return response
+
+    def _model_call_payload(
+        self,
+        decision: Decision,
+        started_at: datetime,
+        ended_at: datetime,
+    ) -> dict:
+        payload: dict = {
+            "model_name": type(self._model).__name__,
+            "decision_kind": decision.kind,
+            "latency_ms": (ended_at - started_at).total_seconds() * 1000.0,
+        }
+        payload.update(self._model_metadata())
+        return payload
+
+    def _model_metadata(self) -> dict:
+        getter = getattr(self._model, "last_call_meta", None)
+        if not callable(getter):
+            return {}
+        raw = getter()
+        if not isinstance(raw, dict):
+            return {}
+        allowed = {
+            "model_name",
+            "request_tokens",
+            "response_tokens",
+            "total_tokens",
+            "provider",
+        }
+        return {k: raw[k] for k in allowed if k in raw}
 
     def _apply_decision(self, session: Session, decision: Decision) -> str:
         if decision.kind == "assistant":
