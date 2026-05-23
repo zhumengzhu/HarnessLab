@@ -4,28 +4,34 @@ from __future__ import annotations
 
 import json
 import os
-from typing import Any, Callable
+from collections.abc import Callable
+from typing import Any
 
 import httpx
 
 from harnesslab.core.models import Decision, Session
+from harnesslab.core.prompt import ComposedPrompt, PromptBlock, PromptComposer
 
 DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
 DEFAULT_MODEL = "deepseek-chat"
 DEFAULT_TIMEOUT_SECONDS = 30.0
 
-_SYSTEM_PROMPT = (
-    "You are HarnessLab's model adapter. "
-    "Prefer tool calls when tools are needed. "
-    "Tool calls happen one at a time; the harness will feed the tool "
-    "result back to you in the next step. Once you have enough information "
-    "to answer, respond with plain assistant text (no tool calls) — that "
-    "ends the session."
-)
+DynamicBlocksProvider = Callable[[Session], list[PromptBlock]]
+
+
+def _no_dynamic_blocks(_session: Session) -> list[PromptBlock]:
+    return []
 
 
 class DeepSeekModel:
-    """ModelPort implementation backed by DeepSeek Chat Completions."""
+    """ModelPort implementation backed by DeepSeek Chat Completions.
+
+    The prompt sent to DeepSeek is assembled by :class:`PromptComposer`:
+    packaged static blocks, optional dynamic blocks supplied per call
+    (env / agents_md / tool_guide — wired by the CLI), then the
+    session's conversation messages. The model_name placeholder in the
+    identity block is substituted with the live model name.
+    """
 
     def __init__(
         self,
@@ -36,6 +42,8 @@ class DeepSeekModel:
         model_name: str | None = None,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         transport: httpx.BaseTransport | None = None,
+        composer: PromptComposer | None = None,
+        dynamic_blocks_provider: DynamicBlocksProvider | None = None,
     ) -> None:
         api_key = api_key or os.getenv("DEEPSEEK_API_KEY")
         if not api_key:
@@ -55,10 +63,13 @@ class DeepSeekModel:
             },
             transport=transport,
         )
+        self._composer = composer or PromptComposer()
+        self._dynamic_blocks_provider = dynamic_blocks_provider or _no_dynamic_blocks
         self._last_call_meta: dict[str, Any] = {
             "provider": "deepseek",
             "model_name": self._model_name,
         }
+        self._last_prompt: ComposedPrompt | None = None
 
     def decide(self, session: Session, user_input: str) -> Decision:
         body = self._request_body(session)
@@ -86,10 +97,25 @@ class DeepSeekModel:
     def last_call_meta(self) -> dict[str, Any]:
         return dict(self._last_call_meta)
 
+    def last_prompt(self) -> ComposedPrompt | None:
+        """Return the most recently composed prompt for inspection.
+
+        The Phase 2.6 context inspector calls this so the CLI can show
+        the exact block breakdown that produced the last model call.
+        """
+
+        return self._last_prompt
+
     def _request_body(self, session: Session) -> dict[str, Any]:
+        composed = self._composer.build(
+            session,
+            dynamic_blocks=self._dynamic_blocks_provider(session),
+            variables={"model_name": self._model_name},
+        )
+        self._last_prompt = composed
         body: dict[str, Any] = {
             "model": self._model_name,
-            "messages": _to_openai_messages(session),
+            "messages": composed.as_openai_messages(),
             "temperature": 0,
         }
         tools = self._tool_specs_provider()
@@ -159,13 +185,6 @@ def _decision_from_payload(payload: dict[str, Any]) -> Decision:
         kind="final",
         assistant_message="DeepSeek returned an empty response.",
     )
-
-
-def _to_openai_messages(session: Session) -> list[dict[str, str]]:
-    messages: list[dict[str, str]] = [{"role": "system", "content": _SYSTEM_PROMPT}]
-    for msg in session.messages:
-        messages.append({"role": msg.role, "content": msg.content})
-    return messages
 
 
 def _usage_meta(raw_usage: Any) -> dict[str, int]:

@@ -22,11 +22,19 @@ from harnesslab.core.prompt.composer import (
     PromptComposer,
     load_default_static_blocks,
 )
+from harnesslab.core.prompt.dynamic import (
+    build_agents_md_block,
+    build_env_block,
+    build_tool_guide_block,
+)
 
 __all__ = [
     "ComposedPrompt",
     "DEFAULT_STATIC_BLOCKS",
     "PromptBlock",
     "PromptComposer",
+    "build_agents_md_block",
+    "build_env_block",
+    "build_tool_guide_block",
     "load_default_static_blocks",
 ]

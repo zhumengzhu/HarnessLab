@@ -9,6 +9,13 @@ from typing import Literal
 from harnesslab.core.config import RuntimeLimits
 from harnesslab.core.contracts import MemoryStorePort, SessionStorePort
 from harnesslab.core.loop import DEFAULT_MAX_STEPS, HarnessLoop
+from harnesslab.core.models import Session
+from harnesslab.core.prompt import (
+    PromptBlock,
+    build_agents_md_block,
+    build_env_block,
+    build_tool_guide_block,
+)
 from harnesslab.core.runtime import SystemClock, UuidIdProvider
 from harnesslab.core.simple_model import SimpleModel
 from harnesslab.eval.baseline import compare, load_baseline, save_baseline
@@ -60,6 +67,29 @@ EXIT_DIVERGED = 4
 EXIT_USAGE = 64
 
 
+def _make_dynamic_blocks_provider(
+    workspace_root: Path,
+    tools: ToolRegistry,
+):
+    """Build the per-call dynamic prompt blocks for DeepSeek.
+
+    The provider is called once per model decision (inside
+    :meth:`DeepSeekModel._request_body`). ``env`` and ``tool_guide``
+    are always emitted; ``agents_md`` is only emitted when the
+    workspace actually ships one.
+    """
+
+    def provider(_session: Session) -> list[PromptBlock]:
+        blocks: list[PromptBlock] = [build_env_block(workspace_root)]
+        agents = build_agents_md_block(workspace_root)
+        if agents is not None:
+            blocks.append(agents)
+        blocks.append(build_tool_guide_block(tools.list()))
+        return blocks
+
+    return provider
+
+
 def _build_stores(
     backend: StorageBackend,
     workspace_root: Path,
@@ -97,6 +127,9 @@ def build_runtime(
     if model_backend == "deepseek":
         model = DeepSeekModel(
             tool_specs_provider=lambda: tool_specs_from_registry(tools.list()),
+            dynamic_blocks_provider=_make_dynamic_blocks_provider(
+                workspace_root, tools
+            ),
         )
     else:
         model = SimpleModel()

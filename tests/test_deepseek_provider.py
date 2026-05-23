@@ -178,3 +178,102 @@ def test_request_body_includes_tools_spec() -> None:
     assert captured["model"] == "deepseek-chat"
     assert captured["tool_choice"] == "auto"
     assert captured["tools"][0]["function"]["name"] == "read_file"
+
+
+# ----- prompt composer wiring (Phase 2.2 commit 2) -----
+
+
+def test_request_body_uses_prompt_composer_system_prompt() -> None:
+    """The system message must come from the packaged static blocks
+    (identity / harness / safety / style / engineering) and have the
+    ``${model_name}`` placeholder filled in."""
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content.decode("utf-8")))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    model = DeepSeekModel(
+        tool_specs_provider=lambda: [],
+        api_key="x",
+        transport=httpx.MockTransport(handler),
+    )
+    model.decide(_session(), "hello")
+
+    messages = captured["messages"]
+    assert messages[0]["role"] == "system"
+    system_text = messages[0]["content"]
+    assert "HarnessLab's agent" in system_text
+    assert "deepseek-chat" in system_text  # ${model_name} interpolated
+    assert "${model_name}" not in system_text
+    assert "# Harness" in system_text
+    assert "# Safety" in system_text
+
+
+def test_request_body_appends_dynamic_blocks_from_provider() -> None:
+    from harnesslab.core.prompt import PromptBlock
+
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content.decode("utf-8")))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    env_block = PromptBlock(
+        name="env",
+        content="# Environment\n\n- cwd: /demo",
+        origin="dynamic:env",
+    )
+
+    model = DeepSeekModel(
+        tool_specs_provider=lambda: [],
+        api_key="x",
+        transport=httpx.MockTransport(handler),
+        dynamic_blocks_provider=lambda _s: [env_block],
+    )
+    model.decide(_session(), "hi")
+
+    system_text = captured["messages"][0]["content"]
+    assert "cwd: /demo" in system_text
+    # Dynamic blocks come AFTER static ones in the composer order.
+    assert system_text.index("# Harness") < system_text.index("cwd: /demo")
+
+
+def test_request_body_preserves_session_conversation() -> None:
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content.decode("utf-8")))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    model = DeepSeekModel(
+        tool_specs_provider=lambda: [],
+        api_key="x",
+        transport=httpx.MockTransport(handler),
+    )
+    model.decide(_session(), "hi")
+
+    messages = captured["messages"]
+    # One system message + one user message (from _session()'s "hello").
+    assert len(messages) == 2
+    assert messages[1] == {"role": "user", "content": "hello"}
+
+
+def test_last_prompt_exposes_block_snapshot() -> None:
+    def handler(_request: httpx.Request) -> httpx.Response:
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    model = DeepSeekModel(
+        tool_specs_provider=lambda: [],
+        api_key="x",
+        transport=httpx.MockTransport(handler),
+    )
+    assert model.last_prompt() is None
+    model.decide(_session(), "hi")
+    composed = model.last_prompt()
+    assert composed is not None
+    snapshot = composed.snapshot()
+    names = [r["name"] for r in snapshot]
+    # Static blocks land first; the session's single message is appended last.
+    assert names[:5] == ["identity", "harness", "safety", "style", "engineering"]
+    assert names[-1] == "conversation"
