@@ -131,10 +131,8 @@ def build_runtime(
     model_backend: ModelBackend = "simple",
 ) -> HarnessLoop:
     limits = limits or RuntimeLimits()
-    # Memory store is constructed for parity with the SessionStore but is
-    # not yet consumed by the loop; the retrieval/writeback wiring is
-    # deferred past Step 4.
-    sessions, _ = _build_stores(storage_backend, workspace_root, sqlite_path)
+    # Memory store is wired into the loop for session-scoped notes (Phase 3.3).
+    sessions, memory = _build_stores(storage_backend, workspace_root, sqlite_path)
     policy = DefaultPolicy(workspace_root=workspace_root)
     tools = ToolRegistry()
     tools.register(ReadFileTool(workspace_root, limits=limits))
@@ -165,6 +163,7 @@ def build_runtime(
         ids=UuidIdProvider(),
         limits=limits,
         title_namer=title_namer,
+        memory=memory,
     )
 
 

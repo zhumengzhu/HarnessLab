@@ -27,6 +27,7 @@ from harnesslab.eval.task import (
     TaskResult,
     TaskSuite,
 )
+from harnesslab.memory.in_memory import InMemoryMemoryStore
 from harnesslab.policy.default_policy import DefaultPolicy
 from harnesslab.session.in_memory import InMemorySessionStore
 from harnesslab.tools.file_tools import (
@@ -155,6 +156,7 @@ class TaskRunner:
     ) -> tuple[list[TraceEvent], str]:
         limits = _limits_for_task(task)
         tools = _build_tool_registry(workspace, limits)
+        memory = InMemoryMemoryStore()
 
         recorder = ReplayTraceRecorder()
         model: Any = (
@@ -170,6 +172,7 @@ class TaskRunner:
             clock=FrozenClock(start=self._clock_start),
             ids=SeqIdProvider(),
             limits=limits,
+            memory=memory,
         )
 
         session = loop.start(goal=task.goal)

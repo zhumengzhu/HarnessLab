@@ -9,14 +9,15 @@ from pathlib import Path
 
 import pytest
 
-from harnesslab.core.config import RuntimeLimits
 from harnesslab.core.loop import HarnessLoop
 from harnesslab.core.models import TraceEvent
 from harnesslab.core.replay import ReplayModel, ReplayTraceRecorder
 from harnesslab.core.runtime import DEFAULT_REPLAY_CLOCK_START, FrozenClock, SeqIdProvider
 from harnesslab.core.simple_model import SimpleModel
 from harnesslab.eval.loader import load_suite
+from harnesslab.eval.runner import _build_tool_registry, _limits_for_task
 from harnesslab.eval.task import Task
+from harnesslab.memory.in_memory import InMemoryMemoryStore
 from harnesslab.policy.default_policy import DefaultPolicy
 from harnesslab.replay import (
     UnreplayableTraceError,
@@ -26,9 +27,6 @@ from harnesslab.replay import (
     replay_session,
 )
 from harnesslab.session.in_memory import InMemorySessionStore
-from harnesslab.tools.file_tools import ReadFileTool, WriteFileTool
-from harnesslab.tools.registry import ToolRegistry
-from harnesslab.tools.shell_tool import RunShellSafeTool
 
 TASKS_DIR = Path(__file__).resolve().parents[1] / "eval" / "tasks"
 
@@ -40,11 +38,8 @@ def _capture_task_trace(task: Task) -> list[TraceEvent]:
     don't depend on the runner's private surface."""
 
     workspace = Path(tempfile.mkdtemp(prefix="hl-replay-trace-"))
-    limits = RuntimeLimits()
-    tools = ToolRegistry()
-    tools.register(ReadFileTool(workspace, limits=limits))
-    tools.register(WriteFileTool(workspace, limits=limits))
-    tools.register(RunShellSafeTool(workspace, limits=limits))
+    limits = _limits_for_task(task)
+    tools = _build_tool_registry(workspace, limits)
     recorder = ReplayTraceRecorder()
     model = ReplayModel(decisions=task.decisions) if task.decisions else SimpleModel()
     loop = HarnessLoop(
@@ -55,6 +50,8 @@ def _capture_task_trace(task: Task) -> list[TraceEvent]:
         trace=recorder,
         clock=FrozenClock(start=DEFAULT_REPLAY_CLOCK_START),
         ids=SeqIdProvider(),
+        limits=limits,
+        memory=InMemoryMemoryStore(),
     )
     session = loop.start(goal=task.goal)
     for turn in task.turns:

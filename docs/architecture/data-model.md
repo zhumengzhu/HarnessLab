@@ -175,6 +175,8 @@ shapes are what `harnesslab metrics` aggregates.
 | `compaction_completed` | `after_messages: int`, `after_tokens: int` |
 | `session_finished` | `reason: "final" \| "ask_user" \| "max_steps" \| "overflow"`, `steps: int` |
 | `session_titled` | `title: str`, `previous_title: str \| null`, `source: "llm"` |
+| `memory_read` | `key: str`, `line_count: int` |
+| `memory_written` | `key: str`, `line: str`, `line_count: int`, `source: "remember"` |
 
 `tool_executed`'s `output_*` fields, model telemetry fields
 (`model_name`, `provider`, token counters), timing fields

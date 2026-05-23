@@ -1,0 +1,30 @@
+name: session_memory_persists
+goal: session-scoped memory across turns
+description: |
+  Phase 3.3 memory-on-session. ``/remember <text>`` appends an explicit
+  note to ``MemoryStorePort`` under ``session:{session_id}:notes`` without
+  calling the model. The next turn injects those notes as a system message
+  and emits ``memory_read`` / ``memory_written`` events.
+decisions:
+  - kind: final
+    assistant_message: saw prior notes
+turns:
+  - input: '/remember api prefers json'
+  - input: follow up
+expected:
+  final_reply_contains:
+    - saw prior notes
+  events_include:
+    - event_type: memory_written
+      payload_contains:
+        line_count: 1
+        source: remember
+    - event_type: session_finished
+      payload_contains:
+        reason: remember
+    - event_type: memory_read
+      payload_contains:
+        line_count: 1
+  no_event_types:
+    - tool_denied
+    - tool_invalid_args

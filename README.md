@@ -169,7 +169,7 @@ Each task declares its expected trace shape (ordered event subset,
 forbidden event types, and `final_reply` substring), so the eval suite
 doubles as living documentation of the loop's invariants. See
 [`eval/README.md`](eval/README.md) for the propose→eval workflow and
-task authoring guide (nine shipped tasks as of Phase 3.1).
+task authoring guide (ten shipped tasks as of Phase 3.3).
 
 ### Replay, Metrics & Context
 

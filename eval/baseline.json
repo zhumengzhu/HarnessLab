@@ -90,6 +90,16 @@
         "denials": 0,
         "invalid_args": 0
       }
+    },
+    "session_memory_persists": {
+      "passed": true,
+      "metrics": {
+        "turns": 2,
+        "tool_calls": 0,
+        "tool_failures": 0,
+        "denials": 0,
+        "invalid_args": 0
+      }
     }
   }
 }

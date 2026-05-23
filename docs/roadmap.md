@@ -570,13 +570,17 @@ sees the same SQLite rows.
 **Deferred within 3.2**: SSE streaming, tool-call inspector panel,
 fork button in UI (CLI `session fork` works today).
 
-### Phase 3.3 — Memory on Session — PLANNED
+### Phase 3.3 — Memory on Session — DONE
 
 - Wire `MemoryStorePort` read/write into `HarnessLoop` with explicit
-  policy (what to store, when to evict).
-- Eval tasks for memory-dependent behavior.
-- Build on session substrate from Phase 2.3 / 3.2 — not cross-session
-  RAG.
+  session-scoped policy (`core/memory_policy.py`).
+- **Read:** inject `session:{id}:notes` as a `system` message each
+  turn; trace `memory_read`.
+- **Write:** on ``/remember <text>`` only; trace ``memory_written``
+  with ``source: remember``. No auto-write on ``final``.
+- Eval task `session_memory_persists` guards the path.
+- **Not in scope:** cross-session RAG, vector index, LLM memory
+  extraction.
 
 ### Phase 3.4 — Tool & edit enhancements — PLANNED
 

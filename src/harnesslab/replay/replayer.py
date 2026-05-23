@@ -11,6 +11,7 @@ turns recorded by the new agentic loop round-trip correctly.
 from __future__ import annotations
 
 import tempfile
+from dataclasses import replace
 from pathlib import Path
 
 from harnesslab.core.config import RuntimeLimits
@@ -18,11 +19,10 @@ from harnesslab.core.loop import HarnessLoop
 from harnesslab.core.models import Decision, TraceEvent
 from harnesslab.core.replay import ReplayModel, ReplayTraceRecorder
 from harnesslab.core.runtime import DEFAULT_REPLAY_CLOCK_START, FrozenClock, SeqIdProvider
+from harnesslab.eval.runner import _build_tool_registry
+from harnesslab.memory.in_memory import InMemoryMemoryStore
 from harnesslab.policy.default_policy import DefaultPolicy
 from harnesslab.session.in_memory import InMemorySessionStore
-from harnesslab.tools.file_tools import ReadFileTool, WriteFileTool
-from harnesslab.tools.registry import ToolRegistry
-from harnesslab.tools.shell_tool import RunShellSafeTool
 
 
 class UnreplayableTraceError(Exception):
@@ -50,7 +50,7 @@ def replay_session(
 
     goal = events[0].payload.get("goal", "")
     turns = _extract_turns(events)
-    return _drive_loop(goal, turns, workspace_root)
+    return _drive_loop(goal, turns, workspace_root, events)
 
 
 def _extract_turns(events: list[TraceEvent]) -> list[TurnPlan]:
@@ -68,10 +68,14 @@ def _extract_turns(events: list[TraceEvent]) -> list[TurnPlan]:
             )
         decisions, next_i = _collect_turn_decisions(events, start=i + 1)
         if not decisions:
-            raise UnreplayableTraceError(
-                f"user_input_received at #{i} not followed by any decision_made"
-            )
-        turns.append((user_input, decisions))
+            if not _turn_ends_with_remember(events, i + 1, next_i):
+                raise UnreplayableTraceError(
+                    f"user_input_received at #{i} not followed by any decision_made"
+                )
+            turns.append((str(user_input), []))
+            i = next_i
+            continue
+        turns.append((str(user_input), decisions))
         i = next_i
     return turns
 
@@ -101,6 +105,14 @@ def _collect_turn_decisions(
     return decisions, j
 
 
+def _turn_ends_with_remember(events: list[TraceEvent], start: int, end: int) -> bool:
+    for j in range(start, end):
+        e = events[j]
+        if e.event_type == "session_finished" and e.payload.get("reason") == "remember":
+            return True
+    return False
+
+
 def _decision_from_payload(payload: dict, index: int) -> Decision:
     if "kind" not in payload:
         raise UnreplayableTraceError(
@@ -119,27 +131,44 @@ def _decision_from_payload(payload: dict, index: int) -> Decision:
         ) from exc
 
 
+def _limits_from_events(events: list[TraceEvent]) -> RuntimeLimits:
+    """Restore compaction knobs recorded in ``compaction_started`` events."""
+
+    base = RuntimeLimits()
+    for e in events:
+        if e.event_type != "compaction_started":
+            continue
+        payload = e.payload
+        overrides: dict[str, int] = {}
+        if "threshold_tokens" in payload:
+            overrides["compaction_threshold_tokens"] = int(payload["threshold_tokens"])
+        if "keep_last" in payload:
+            overrides["compaction_keep_last_messages"] = int(payload["keep_last"])
+        if overrides:
+            return replace(base, **overrides)
+    return base
+
+
 def _drive_loop(
     goal: str,
     turns: list[TurnPlan],
     workspace_root: Path | None,
+    source_events: list[TraceEvent],
 ) -> list[TraceEvent]:
     if workspace_root is None:
         with tempfile.TemporaryDirectory() as ws:
-            return _run(Path(ws), goal, turns)
-    return _run(workspace_root, goal, turns)
+            return _run(Path(ws), goal, turns, source_events)
+    return _run(workspace_root, goal, turns, source_events)
 
 
 def _run(
     workspace: Path,
     goal: str,
     turns: list[TurnPlan],
+    source_events: list[TraceEvent],
 ) -> list[TraceEvent]:
-    limits = RuntimeLimits()
-    tools = ToolRegistry()
-    tools.register(ReadFileTool(workspace, limits=limits))
-    tools.register(WriteFileTool(workspace, limits=limits))
-    tools.register(RunShellSafeTool(workspace, limits=limits))
+    limits = _limits_from_events(source_events)
+    tools = _build_tool_registry(workspace, limits)
 
     flat_decisions: list[Decision] = [d for _, ds in turns for d in ds]
 
@@ -152,9 +181,12 @@ def _run(
         trace=recorder,
         clock=FrozenClock(start=DEFAULT_REPLAY_CLOCK_START),
         ids=SeqIdProvider(),
+        limits=limits,
+        memory=InMemoryMemoryStore(),
     )
 
     session = loop.start(goal=goal)
     for user_input, decisions in turns:
-        loop.run_session(session.id, user_input, max_steps=len(decisions))
+        max_steps = max(1, len(decisions))
+        loop.run_session(session.id, user_input, max_steps=max_steps)
     return recorder.events

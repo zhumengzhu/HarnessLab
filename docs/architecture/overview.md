@@ -131,6 +131,9 @@ or when `max_steps` is reached.
    (`final | ask_user | max_steps`).
 4. `session.status` is updated (`done | waiting_user | running`)
    and persisted.
+5. When a `MemoryStorePort` is wired (Phase 3.3), `/remember <text>`
+   stores an explicit note; the next turn injects notes as a `system`
+   message (`memory_read` / `memory_written` trace events).
 
 The single-turn `run_turn(session_id, user_input)` is a
 `run_session(..., max_steps=1)` wrapper kept for backward
@@ -462,6 +465,35 @@ are silent; a `session_titled` trace event records successful renames.
 The `simple` model path skips LLM naming so eval/replay stay
 deterministic.
 
+## Memory on Session (Phase 3.3)
+
+HarnessLab separates **session** (working conversation state) from
+**memory** (durable notes outside the message timeline):
+
+| Layer | What it holds | Lifecycle |
+| --- | --- | --- |
+| `Session.messages` | Full turn-by-turn transcript | Compacted when context budget is exceeded |
+| `MemoryStorePort` | Rolling notes keyed by `session:{id}:notes` | Survives compaction; re-injected each turn |
+
+**Read path:** at the start of each `run_session`, if notes exist,
+the loop appends a `system` message and emits `memory_read`.
+
+**Write path:** when the user sends ``/remember <text>``, the loop
+stores an explicit note (no model call) and emits ``memory_written``.
+Ordinary ``final`` turns do **not** auto-write memory.
+
+**Out of scope (Phase 3.3):** cross-session retrieval, vector search,
+rich ``MemoryRecord`` schema (see ``data-model.md``).
+
+```mermaid
+flowchart LR
+    Remember["/remember command"] --> Write[memory_written]
+    Write --> KV[(MemoryStorePort)]
+    TurnN[run_session turn N] --> Read[memory_read inject system msg]
+    Read --> Model[ModelPort.decide]
+    KV --> Read
+```
+
 ## Planned Evolution
 
 1. Replace in-memory stores with SQLite-backed stores — DONE (Step 3)
@@ -475,6 +507,6 @@ deterministic.
 6. Real autonomous agent loop with prompt composer, persistent
    sessions, auto compaction, and context observability — DONE
    (Phase 2.1–2.6)
-7. Web chat UI + LLM session auto-titles — IN PROGRESS (Phase 3.2)
-8. Memory retrieval/writeback policy on top of the session
-   substrate — planned (Phase 3.3)
+7. Web chat UI + LLM session auto-titles — DONE (Phase 3.2)
+8. Memory on session (read/write policy) — DONE (Phase 3.3)
+9. Cross-session memory / vector retrieval — planned (post-3.3)

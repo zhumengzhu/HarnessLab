@@ -121,10 +121,10 @@ def test_eval_subcommand_runs_all_tasks_and_passes(
     out = capsys.readouterr().out
 
     assert exc.value.code == cli.EXIT_OK, out
-    assert "Summary: 9/9 passed" in out
+    assert "Summary: 10/10 passed" in out
     report = (tmp_path / "reports" / "latest.json").read_text(encoding="utf-8")
     payload = json.loads(report)
-    assert len(payload["results"]) == 9
+    assert len(payload["results"]) == 10
     assert payload["regressions"] == []
 
 
@@ -209,7 +209,7 @@ def test_eval_update_baseline_overwrites_file(
     assert "baseline updated" in out
     payload = json.loads(baseline_path.read_text(encoding="utf-8"))
     assert "results" in payload
-    assert len(payload["results"]) == 9
+    assert len(payload["results"]) == 10
 
 
 def test_eval_regression_exit_code(

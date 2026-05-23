@@ -38,4 +38,5 @@ def test_shipped_tasks_cover_expected_paths() -> None:
         "grep_then_edit",
         "compaction_on_threshold",
         "session_resume_second_turn",
+        "session_memory_persists",
     } <= names

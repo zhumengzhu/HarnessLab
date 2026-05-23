@@ -35,7 +35,7 @@ Must include (current):
 
 Must NOT include yet:
 
-- Cross-session memory retrieval/writeback (deferred; session substrate first)
+- Cross-session memory retrieval / vector RAG (post Phase 3.3)
 - Multi-agent orchestration
 - Distributed runtime
 - Plugin marketplace complexity
@@ -66,8 +66,8 @@ Must NOT include yet:
 - `src/harnesslab/tools`: tool registry and built-in tool implementations
 - `src/harnesslab/policy`: safety and authorization checks
 - `src/harnesslab/session`: session persistence layer
-- `src/harnesslab/memory`: memory persistence layer (store only; no loop
-  writeback yet)
+- `src/harnesslab/memory`: memory persistence + session-scoped loop
+  read/write (`core/memory_policy.py`)
 - `src/harnesslab/telemetry`: trace recording and metrics aggregation
 - `src/harnesslab/providers`: external `ModelPort` adapters (e.g. DeepSeek)
 - `src/harnesslab/eval`: YAML task suite and regression runner

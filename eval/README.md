@@ -62,3 +62,4 @@ When `harnesslab propose` surfaces a recurring failure cluster:
 | `grep_then_edit` | Phase 2.5 search + edit |
 | `compaction_on_threshold` | context compaction |
 | `session_resume_second_turn` | session resume / turn index |
+| `session_memory_persists` | session-scoped memory read/write |

@@ -17,10 +17,18 @@ from harnesslab.core.context import (
 from harnesslab.core.contracts import (
     ClockPort,
     IdPort,
+    MemoryStorePort,
     ModelPort,
     PolicyPort,
     SessionStorePort,
     TraceRecorderPort,
+)
+from harnesslab.core.memory_policy import (
+    append_note,
+    format_memory_message,
+    format_remember_note,
+    parse_remember_command,
+    session_memory_key,
 )
 from harnesslab.core.models import (
     TERMINAL_DECISION_KINDS,
@@ -66,6 +74,7 @@ class HarnessLoop:
         limits: RuntimeLimits | None = None,
         summarizer: Summarizer | None = None,
         title_namer: TitleNamer | None = None,
+        memory: MemoryStorePort | None = None,
     ) -> None:
         self._model = model
         self._policy = policy
@@ -77,6 +86,7 @@ class HarnessLoop:
         self._limits: RuntimeLimits = limits or RuntimeLimits()
         self._summarizer: Summarizer | None = summarizer
         self._title_namer: TitleNamer | None = title_namer
+        self._memory: MemoryStorePort | None = memory
 
     def start(self, goal: str) -> Session:
         session = Session(
@@ -175,6 +185,11 @@ class HarnessLoop:
         session.messages.append(
             self._make_message(role="user", content=user_input, session=session)
         )
+        self._inject_session_memory(session)
+
+        remember_body = parse_remember_command(user_input)
+        if remember_body is not None:
+            return self._run_remember_turn(session, remember_body)
 
         last_response = ""
         terminal_reason = "max_steps"
@@ -284,6 +299,73 @@ class HarnessLoop:
                 "title": proposed,
                 "previous_title": previous,
                 "source": "llm",
+            },
+        )
+
+    def _run_remember_turn(self, session: Session, body: str) -> str:
+        """Handle ``/remember`` without calling the model."""
+
+        if self._memory is None:
+            reply = "Memory store is not configured."
+        else:
+            self._write_remember_note(session, body)
+            reply = "Stored in session memory."
+
+        session.messages.append(
+            self._make_message(role="assistant", content=reply, session=session)
+        )
+        self._record(
+            session=session,
+            event_type="session_finished",
+            payload={"reason": "remember", "steps": 0},
+        )
+        session.turn_count += 1
+        session.status = "running"
+        self._maybe_auto_title(session)
+        self._sessions.save(session)
+        return reply
+
+    def _inject_session_memory(self, session: Session) -> None:
+        """Load session-scoped notes into the message list for this turn."""
+
+        if self._memory is None:
+            return
+        key = session_memory_key(session.id)
+        notes = self._memory.get(key)
+        if not notes:
+            return
+        session.messages.append(
+            self._make_message(
+                role="system",
+                content=format_memory_message(notes),
+                session=session,
+            )
+        )
+        self._record(
+            session=session,
+            event_type="memory_read",
+            payload={
+                "key": key,
+                "line_count": notes.count("\n") + 1,
+            },
+        )
+
+    def _write_remember_note(self, session: Session, body: str) -> None:
+        """Append an explicit ``/remember`` note to session memory."""
+
+        key = session_memory_key(session.id)
+        line = format_remember_note(body)
+        previous = self._memory.get(key) if self._memory else None
+        updated = append_note(previous, line)
+        self._memory.put(key, updated)  # type: ignore[union-attr]
+        self._record(
+            session=session,
+            event_type="memory_written",
+            payload={
+                "key": key,
+                "line": line,
+                "line_count": updated.count("\n") + 1,
+                "source": "remember",
             },
         )
 
