@@ -53,6 +53,29 @@ def test_unknown_tool_is_denied_by_default(tmp_path: Path) -> None:
     assert "unknown tool" in reason
 
 
+def test_policy_allows_web_search_and_html_to_markdown(tmp_path: Path) -> None:
+    policy = DefaultPolicy(workspace_root=tmp_path)
+    for name in ("web_search", "html_to_markdown"):
+        allowed, reason = policy.allow_tool(ToolCall(name=name, args={}))
+        assert allowed is True
+        assert reason == "ok"
+
+
+def test_policy_treats_read_pdf_as_workspace_path_tool(tmp_path: Path) -> None:
+    policy = DefaultPolicy(workspace_root=tmp_path)
+    allowed, reason = policy.allow_tool(ToolCall(name="read_pdf", args={"path": "../x.pdf"}))
+    assert allowed is False
+    assert "out of workspace" in reason
+
+
+def test_policy_fetch_open_mode_allows_non_allowlisted_https(tmp_path: Path) -> None:
+    policy = DefaultPolicy(workspace_root=tmp_path, fetch_url_mode="open")
+    allowed, reason = policy.allow_tool(
+        ToolCall(name="fetch_url", args={"url": "https://example.com/"})
+    )
+    assert allowed is True, reason
+
+
 def test_shell_denylist_blocks_default_destructive_commands(tmp_path: Path) -> None:
     policy = DefaultPolicy(workspace_root=tmp_path)
     for cmd in ("rm -rf .", "sudo ls", "curl http://example.com"):

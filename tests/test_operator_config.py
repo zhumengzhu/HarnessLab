@@ -71,6 +71,38 @@ def test_load_operator_config_parses_failover_and_gemini(tmp_path: Path) -> None
     assert config.gemini_thinking_level == "high"
 
 
+def test_load_operator_config_parses_tools_block(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "tools": {
+                    "fetch_url": {
+                        "mode": "open",
+                        "allowlist": ["wttr.in", "example.com"],
+                        "deny_hosts": ["bad.example"],
+                    },
+                    "web_search": {
+                        "backend": "tavily",
+                        "max_results": 8,
+                        "api_key_env": "TAVILY_API_KEY",
+                        "api_base_url": "https://api.tavily.com",
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = load_operator_config(path)
+    assert config.fetch_url_mode == "open"
+    assert config.fetch_url_allowlist == ("wttr.in", "example.com")
+    assert config.fetch_url_deny_hosts == ("bad.example",)
+    assert config.web_search_backend == "tavily"
+    assert config.web_search_max_results == 8
+    assert config.web_search_api_key_env == "TAVILY_API_KEY"
+
+
 def test_invalid_config_version_raises(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     path.write_text(json.dumps({"version": 99}), encoding="utf-8")

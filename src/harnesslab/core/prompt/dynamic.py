@@ -11,9 +11,9 @@ Conventions:
 - All builders are pure functions; they take everything they need
   as arguments. This keeps the composer testable without monkey-
   patching ``os`` / ``subprocess``.
-- ``build_agents_md_block`` returns ``None`` if the workspace has no
-  ``AGENTS.md`` so callers can skip the block instead of injecting
-  an empty section.
+- ``build_agents_md_block`` / ``build_skills_block`` return ``None`` if
+  no content exists so callers can skip the section instead of
+  injecting empty blocks.
 - Git inspection is best-effort and silently degrades when ``git`` is
   missing, when the workspace is not a git repo, or when the call
   times out.
@@ -76,6 +76,34 @@ def build_agents_md_block(workspace_root: Path) -> PromptBlock | None:
         name="agents_md",
         content=f"# AGENTS.md (workspace contract)\n\n{raw}",
         origin=f"dynamic:agents_md:{candidate.name}",
+    )
+
+
+def build_skills_block(workspace_root: Path) -> PromptBlock | None:
+    """Inject workspace skill definitions from ``skills/*.md``.
+
+    The block is intentionally read-only: it publishes skill names and
+    markdown content as context, but does not execute anything.
+    """
+
+    skills_dir = workspace_root / "skills"
+    if not skills_dir.is_dir():
+        return None
+    files = sorted(p for p in skills_dir.glob("*.md") if p.is_file())
+    if not files:
+        return None
+    sections: list[str] = []
+    for path in files:
+        raw = path.read_text(encoding="utf-8").strip()
+        if not raw:
+            continue
+        sections.append(f"## {path.stem}\n\n{raw}")
+    if not sections:
+        return None
+    return PromptBlock(
+        name="skills",
+        content="# Skills\n\n" + "\n\n".join(sections),
+        origin=f"dynamic:skills:{skills_dir.name}",
     )
 
 

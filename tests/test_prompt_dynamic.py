@@ -1,4 +1,4 @@
-"""Tests for runtime-built prompt blocks (env, agents_md, tool_guide)."""
+"""Tests for runtime-built prompt blocks (env, agents_md, skills, tool_guide)."""
 
 from __future__ import annotations
 
@@ -8,6 +8,7 @@ from pathlib import Path
 from harnesslab.core.prompt import (
     build_agents_md_block,
     build_env_block,
+    build_skills_block,
     build_tool_guide_block,
 )
 
@@ -82,6 +83,27 @@ def test_agents_md_block_wraps_workspace_file(tmp_path: Path) -> None:
     assert block.origin == "dynamic:agents_md:AGENTS.md"
     assert "Project rules" in block.content
     assert block.content.startswith("# AGENTS.md")
+
+
+# ---------- skills ----------
+
+
+def test_skills_block_returns_none_when_missing(tmp_path: Path) -> None:
+    assert build_skills_block(tmp_path) is None
+
+
+def test_skills_block_collects_markdown_files(tmp_path: Path) -> None:
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    (skills / "research.md").write_text("# Research\n- source map\n", encoding="utf-8")
+    (skills / "debug.md").write_text("Use reproduction-first workflow.", encoding="utf-8")
+    block = build_skills_block(tmp_path)
+    assert block is not None
+    assert block.name == "skills"
+    assert block.origin == "dynamic:skills:skills"
+    assert "## research" in block.content
+    assert "source map" in block.content
+    assert "## debug" in block.content
 
 
 # ---------- tool_guide ----------

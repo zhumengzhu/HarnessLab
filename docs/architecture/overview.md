@@ -225,9 +225,11 @@ at ``WARNING`` unless the app level is ``DEBUG``.
 - JSONL trace output for transparent debugging
 - Policy-first tool execution (deny by default for unknown tools)
 - Built-in tool surface: `read_file`, `write_file`, `edit_file`,
-  `apply_patch`, `grep`, `glob`, `fetch_url`, `run_shell_safe` with
-  expanded read-only shell allowlist, git subcommand gate, and
-  `fetch_url` host allowlist (MVP: `wttr.in`)
+  `apply_patch`, `grep`, `glob`, `fetch_url`, `web_search`,
+  `html_to_markdown`, `read_pdf`, `run_shell_safe` with expanded
+  read-only shell allowlist, git subcommand gate, and profile-aware
+  `fetch_url` policy (`strict` allowlist; `dev`/`read_only` open HTTPS
+  + denylist + robots advisory)
 - Deterministic core via injected `ClockPort` and `IdPort` (replay-ready by construction)
 - Shell tool runs argv with `shell=False`; policy bans shell metacharacters
 - `ToolRegistry` normalizes both "unknown tool" and tool exceptions into
@@ -245,7 +247,7 @@ at ``WARNING`` unless the app level is ``DEBUG``.
   when `max_steps` is hit
 - Prompts are composed, not hardcoded (Phase 2.2): the static system
   prompt is a sequence of versioned markdown blocks loaded at import
-  time; dynamic blocks (`env`, `agents_md`, `tool_guide`) are
+  time; dynamic blocks (`env`, `agents_md`, `skills`, `tool_guide`) are
   contributed per-call by the runtime; provider adapters render the
   composer's output rather than carrying their own template
 - Sessions are persistent first-class entities (Phase 2.3):
@@ -392,6 +394,8 @@ call. The composer concatenates three layers:
      optional git summary.
    - `build_agents_md_block(workspace_root)` — folds `AGENTS.md`
      into the prompt when present.
+   - `build_skills_block(workspace_root)` — folds `skills/*.md` into
+     one dynamic skills block when present.
    - `build_tool_guide_block(registry)` — lists the live tool
      surface so the model sees what is registered today, not what
      was registered when a static prompt was written.

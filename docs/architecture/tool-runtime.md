@@ -74,6 +74,9 @@ Current checks:
   inside workspace root (`_check_path`).
 - `grep` / `glob`: path is optional; when provided, must resolve
   inside workspace root (`_check_optional_path`).
+- `read_pdf`: path must resolve inside workspace root (`_check_path`).
+- `web_search` / `html_to_markdown`: schema-validated and allowed by
+  default policy.
 - `run_shell_safe`: command must contain no shell metacharacters
   (`& | ; < > \` $ ( ) \n \r`); after `shlex` parsing, `argv[0]`
   must not be on the denylist (`rm`, `sudo`, `curl`, `wget`,
@@ -104,9 +107,13 @@ to the allowlist.
 
 **Sandbox claim.** The expanded allowlist defends against the
 agent issuing a single obviously-destructive command directly.
-``fetch_url`` is **not** a general browser: only hosts on
-``DEFAULT_FETCH_HOST_ALLOWLIST`` (currently ``wttr.in``) may be
-fetched. ``curl`` / ``wget`` remain on the shell denylist.
+``fetch_url`` policy is profile-aware (Phase 5.1):
+
+- `strict`: host allowlist only (`wttr.in` by default)
+- `dev` / `read_only`: open HTTPS fetch with optional deny-host list
+
+In every profile, embedded credentials are denied and `curl` / `wget`
+remain on the shell denylist.
 
 ### Tool Executor
 
@@ -148,7 +155,10 @@ stateDiagram-v2
 | `apply_patch` | Unified-diff hunk application (Phase 3.4); context must match exactly | `_check_path` |
 | `grep` | UTF-8 regex search across the workspace, returns `path:lineno: line` matches with `glob` filter; default `max_matches=50`, hard cap `1000`; binary files and noise dirs skipped (Phase 2.5) | `_check_optional_path` |
 | `glob` | Workspace-relative glob match returning sorted relative paths; default `max_results=100`, hard cap `5000`; same noise-dir skip list (Phase 2.5) | `_check_optional_path` |
-| `fetch_url` | Read-only HTTP GET for allowlisted hosts only (MVP: `wttr.in` for weather); response body capped | `_check_fetch_url` |
+| `fetch_url` | Read-only HTTP GET; strict mode host allowlist, open mode HTTPS + robots advisory + deny-host list; text-like content only | `_check_fetch_url` |
+| `web_search` | Web search hits via backend (`duckduckgo`, `brave`, `tavily`, `serpapi`) with capped result count | allow |
+| `html_to_markdown` | Convert HTML to markdown-like text for summarization and downstream parsing | allow |
+| `read_pdf` | Extract text from workspace PDF files with optional page cap | `_check_path` |
 | `run_shell_safe` | Argv shell invocation against the expanded allowlist + git subcommand gate (Phase 2.5) | `_check_shell` |
 
 ### Shell allowlist profiles (Phase 3.4)

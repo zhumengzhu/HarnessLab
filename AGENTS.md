@@ -34,8 +34,9 @@ Must include (current):
 - Single-process runtime
 - Multi-step agent loop (`run_session` with `max_steps`; terminal decisions
   `final` / `ask_user`)
-- Policy-gated tool execution (eight built-in tools; named shell profiles
-  `dev` / `read_only` / `strict`; ``fetch_url`` host allowlist for wttr.in)
+- Policy-gated tool execution (eleven built-in tools; named shell profiles
+  `dev` / `read_only` / `strict`; ``fetch_url`` strict/open profile modes;
+  web research tools: ``web_search``, ``html_to_markdown``, ``read_pdf``)
 - Modular prompt composition (`PromptComposer` + static/dynamic blocks)
 - Session as first-class citizen (persist, list, resume, fork)
 - Session- and workspace-scoped memory (`/remember`, `/remember-global`)

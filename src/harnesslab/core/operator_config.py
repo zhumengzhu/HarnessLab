@@ -16,7 +16,7 @@ import json
 import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from harnesslab.core.config import RuntimeLimits
 from harnesslab.policy.shell_profiles import DEFAULT_SHELL_PROFILE
@@ -25,6 +25,10 @@ from harnesslab.providers.model_resolve import (
     resolve_deepseek_model_name,
     resolve_gemini_model_name,
     resolve_openai_model_name,
+)
+from harnesslab.tools.research_tools import (
+    DEFAULT_WEB_SEARCH_BACKEND,
+    DEFAULT_WEB_SEARCH_MAX_RESULTS,
 )
 
 DEFAULT_CONFIG_PATH = Path.home() / ".config" / "harnesslab" / "config.json"
@@ -52,6 +56,13 @@ class OperatorConfig:
     gemini_api_key_env: str = "GOOGLE_API_KEY"
     model_failover_enabled: bool = False
     model_fallbacks: tuple[str, ...] = ()
+    fetch_url_mode: Literal["auto", "strict", "open"] = "auto"
+    fetch_url_allowlist: tuple[str, ...] = ("wttr.in",)
+    fetch_url_deny_hosts: tuple[str, ...] = ()
+    web_search_backend: str = DEFAULT_WEB_SEARCH_BACKEND
+    web_search_max_results: int = DEFAULT_WEB_SEARCH_MAX_RESULTS
+    web_search_api_key_env: str | None = None
+    web_search_api_base_url: str | None = None
     serve_host: str = "127.0.0.1"
     serve_port: int = 8787
     serve_max_steps: int = 20
@@ -161,6 +172,12 @@ def config_settings_snapshot(
         "gemini_thinking_level": config.gemini_thinking_level,
         "model_failover_enabled": config.model_failover_enabled,
         "model_fallbacks": list(config.model_fallbacks),
+        "fetch_url_mode": config.fetch_url_mode,
+        "fetch_url_allowlist": list(config.fetch_url_allowlist),
+        "fetch_url_deny_hosts": list(config.fetch_url_deny_hosts),
+        "web_search_backend": config.web_search_backend,
+        "web_search_max_results": config.web_search_max_results,
+        "web_search_api_base_url": config.web_search_api_base_url,
         "shell_profile": config.shell_profile,
         "serve": {
             "host": config.serve_host,
@@ -204,6 +221,18 @@ def _parse_config(data: dict[str, Any]) -> OperatorConfig:
     if not isinstance(policy, dict):
         raise ValueError("policy must be an object")
 
+    tools = data.get("tools", {})
+    if not isinstance(tools, dict):
+        raise ValueError("tools must be an object")
+
+    fetch_url = tools.get("fetch_url", {})
+    if fetch_url is not None and not isinstance(fetch_url, dict):
+        raise ValueError("tools.fetch_url must be an object")
+
+    web_search = tools.get("web_search", {})
+    if web_search is not None and not isinstance(web_search, dict):
+        raise ValueError("tools.web_search must be an object")
+
     limits_raw = data.get("limits", {})
     if not isinstance(limits_raw, dict):
         raise ValueError("limits must be an object")
@@ -232,6 +261,14 @@ def _parse_config(data: dict[str, Any]) -> OperatorConfig:
         gemini_api_key_env=str(gemini.get("api_key_env", "GOOGLE_API_KEY")),
         model_failover_enabled=bool(model.get("failover_enabled", False)),
         model_fallbacks=_parse_fallbacks(model.get("fallbacks")),
+        fetch_url_mode=_fetch_mode(fetch_url),
+        fetch_url_allowlist=_parse_hosts(fetch_url.get("allowlist"), default=("wttr.in",)),
+        fetch_url_deny_hosts=_parse_hosts(fetch_url.get("deny_hosts"), default=()),
+        web_search_backend=_optional_str(web_search.get("backend")) or DEFAULT_WEB_SEARCH_BACKEND,
+        web_search_max_results=_optional_int(web_search.get("max_results"))
+        or DEFAULT_WEB_SEARCH_MAX_RESULTS,
+        web_search_api_key_env=_optional_str(web_search.get("api_key_env")),
+        web_search_api_base_url=_optional_str(web_search.get("api_base_url")),
         serve_host=str(serve.get("host", "127.0.0.1")),
         serve_port=int(serve.get("port", 8787)),
         serve_max_steps=int(serve.get("max_steps", 20)),
@@ -275,6 +312,30 @@ def _parse_fallbacks(value: Any) -> tuple[str, ...]:
         if backend and backend not in out:
             out.append(backend)
     return tuple(out)
+
+
+def _parse_hosts(value: Any, *, default: tuple[str, ...]) -> tuple[str, ...]:
+    if value is None:
+        return default
+    if isinstance(value, str):
+        items = value.split(",")
+    elif isinstance(value, list):
+        items = [str(v) for v in value]
+    else:
+        return default
+    out: list[str] = []
+    for item in items:
+        host = item.strip().lower()
+        if host and host not in out:
+            out.append(host)
+    return tuple(out) if out else default
+
+
+def _fetch_mode(fetch_url: dict[str, Any]) -> Literal["auto", "strict", "open"]:
+    mode = str(fetch_url.get("mode", "auto")).strip().lower()
+    if mode not in {"auto", "strict", "open"}:
+        return "auto"
+    return mode  # type: ignore[return-value]
 
 
 def _anthropic_thinking_mode(anthropic: dict[str, Any]) -> str:

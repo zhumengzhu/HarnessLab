@@ -1,14 +1,21 @@
 from __future__ import annotations
 
+import os
 import shlex
 from pathlib import Path
+from typing import Literal
 
 from harnesslab.core.models import ToolCall
 from harnesslab.policy.shell_profiles import (
     DEFAULT_SHELL_PROFILE,
     resolve_shell_profile,
 )
-from harnesslab.tools.fetch_url_tool import validate_fetch_url
+from harnesslab.tools.fetch_url_tool import (
+    DEFAULT_FETCH_HOST_ALLOWLIST,
+    DEFAULT_FETCH_MODE,
+    parse_csv_hosts,
+    validate_fetch_url,
+)
 
 SHELL_METACHARS: frozenset[str] = frozenset("&|;<>`$()\n\r")
 
@@ -65,6 +72,9 @@ class DefaultPolicy:
         shell_allowlist: set[str] | frozenset[str] | None = None,
         shell_denylist: set[str] | frozenset[str] | None = None,
         shell_profile: str | None = None,
+        fetch_url_mode: Literal["strict", "open"] = DEFAULT_FETCH_MODE,
+        fetch_url_allowlist: frozenset[str] | None = None,
+        fetch_url_deny_hosts: frozenset[str] | None = None,
     ) -> None:
         self._workspace_root = workspace_root.resolve()
         if shell_allowlist is not None:
@@ -77,13 +87,20 @@ class DefaultPolicy:
         self._shell_denylist = (
             frozenset(shell_denylist) if shell_denylist is not None else DEFAULT_SHELL_DENYLIST
         )
+        self._fetch_url_mode = fetch_url_mode
+        self._fetch_url_allowlist = fetch_url_allowlist or DEFAULT_FETCH_HOST_ALLOWLIST
+        env_deny_hosts = parse_csv_hosts(os.environ.get("HARNESSLAB_FETCH_URL_DENY_HOSTS"))
+        self._fetch_url_deny_hosts = (fetch_url_deny_hosts or frozenset()) | env_deny_hosts
 
     def allow_tool(self, call: ToolCall) -> tuple[bool, str]:
-        if call.name in {"read_file", "write_file", "edit_file", "apply_patch"}:
+        if call.name in {"read_file", "write_file", "edit_file", "apply_patch", "read_pdf"}:
             return self._check_path(call)
 
         if call.name in {"grep", "glob"}:
             return self._check_optional_path(call)
+
+        if call.name in {"web_search", "html_to_markdown"}:
+            return True, "ok"
 
         if call.name == "fetch_url":
             return self._check_fetch_url(call)
@@ -123,7 +140,12 @@ class DefaultPolicy:
         return True, "ok"
 
     def _check_fetch_url(self, call: ToolCall) -> tuple[bool, str]:
-        return validate_fetch_url(str(call.args.get("url", "")))
+        return validate_fetch_url(
+            str(call.args.get("url", "")),
+            allowlist=self._fetch_url_allowlist,
+            deny_hosts=self._fetch_url_deny_hosts,
+            mode=self._fetch_url_mode,
+        )
 
     def _check_shell(self, call: ToolCall) -> tuple[bool, str]:
         command = str(call.args.get("command", "")).strip()

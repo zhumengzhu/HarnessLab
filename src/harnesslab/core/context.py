@@ -28,7 +28,7 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from harnesslab.core.compaction import estimate_messages_tokens
+from harnesslab.core.compaction import estimate_messages_tokens, estimate_tokens
 from harnesslab.core.config import RuntimeLimits
 from harnesslab.core.models import Message
 
@@ -47,6 +47,7 @@ class ContextSnapshot(BaseModel):
     static_block_tokens: int | None = Field(default=None, ge=0)
     dynamic_block_tokens: int | None = Field(default=None, ge=0)
     prompt_block_names: list[str] | None = None
+    context_breakdown_tokens: dict[str, int] | None = None
 
 
 def make_conversation_snapshot(
@@ -65,6 +66,7 @@ def make_conversation_snapshot(
         compaction_threshold_tokens=threshold,
         usage_ratio=round(conversation_tokens / limit, 4),
         threshold_ratio=round(conversation_tokens / threshold, 4),
+        context_breakdown_tokens=_conversation_breakdown(messages),
     )
 
 
@@ -92,6 +94,10 @@ def merge_adapter_breakdown(
     else:
         names = None
 
+    merged_breakdown = dict(snapshot.context_breakdown_tokens or {})
+    for key, value in _adapter_breakdown(adapter_meta).items():
+        merged_breakdown[key] = merged_breakdown.get(key, 0) + value
+
     return snapshot.model_copy(
         update={
             "prompt_tokens_estimate": _int_or_none(
@@ -104,5 +110,40 @@ def merge_adapter_breakdown(
                 adapter_meta.get("dynamic_block_tokens")
             ),
             "prompt_block_names": names,
+            "context_breakdown_tokens": merged_breakdown or None,
         }
+    )
+
+
+def _conversation_breakdown(messages: list[Message]) -> dict[str, int]:
+    out = {"conversation": 0, "summarized_conversation": 0}
+    for msg in messages:
+        tokens = estimate_tokens(msg.content)
+        if msg.role == "system" and _is_compaction_summary(msg.content):
+            out["summarized_conversation"] += tokens
+        else:
+            out["conversation"] += tokens
+    return out
+
+
+def _adapter_breakdown(adapter_meta: dict[str, Any]) -> dict[str, int]:
+    raw = adapter_meta.get("prompt_block_breakdown")
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, int] = {}
+    for key, value in raw.items():
+        if not isinstance(key, str) or not isinstance(value, int):
+            continue
+        if value < 0:
+            continue
+        out[key] = value
+    return out
+
+
+def _is_compaction_summary(content: str) -> bool:
+    text = content.strip()
+    return (
+        "<system-reminder>" in text
+        and "</system-reminder>" in text
+        and "Compacted earlier conversation" in text
     )

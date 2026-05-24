@@ -225,6 +225,7 @@ Attached to every `model_call.payload.context`:
 | `static_block_tokens` | optional, adapter-supplied |
 | `dynamic_block_tokens` | optional, adapter-supplied |
 | `prompt_block_names` | optional, ordered list of prompt block names |
+| `context_breakdown_tokens` | optional, token buckets for UI-style context panes (`system_prompt`, `tool_definitions`, `rules`, `skills`, `subagent_definitions`, `summarized_conversation`, `conversation`) |
 
 ## MemoryRecord (Planned)
 

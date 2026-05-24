@@ -24,6 +24,7 @@ from harnesslab.core.prompt import (
     PromptBlock,
     build_agents_md_block,
     build_env_block,
+    build_skills_block,
     build_tool_guide_block,
 )
 from harnesslab.core.runtime import SystemClock, UuidIdProvider
@@ -66,6 +67,7 @@ from harnesslab.tools.file_tools import (
 )
 from harnesslab.tools.patch import ApplyPatchTool
 from harnesslab.tools.registry import ToolRegistry
+from harnesslab.tools.research_tools import HtmlToMarkdownTool, ReadPdfTool, WebSearchTool
 from harnesslab.tools.shell_tool import RunShellSafeTool
 from harnesslab.web.server import WebRuntime, serve
 from harnesslab.web.trace_hub import TraceHub
@@ -140,6 +142,9 @@ def _make_dynamic_blocks_provider(
         agents = build_agents_md_block(workspace_root)
         if agents is not None:
             blocks.append(agents)
+        skills = build_skills_block(workspace_root)
+        if skills is not None:
+            blocks.append(skills)
         blocks.append(build_tool_guide_block(tools.list()))
         return blocks
 
@@ -173,9 +178,66 @@ def build_runtime(
     operator_config: OperatorConfig | None = None,
 ) -> HarnessLoop:
     limits = limits or RuntimeLimits()
+    effective_shell_profile = (
+        shell_profile
+        or (operator_config.shell_profile if operator_config is not None else None)
+        or "dev"
+    )
+    fetch_mode = "strict"
+    if operator_config is not None and operator_config.fetch_url_mode != "auto":
+        fetch_mode = operator_config.fetch_url_mode
+    elif effective_shell_profile in {"dev", "read_only"}:
+        fetch_mode = "open"
+    web_search_backend = (
+        os.environ.get("WEB_SEARCH_BACKEND")
+        or (operator_config.web_search_backend if operator_config is not None else None)
+        or "duckduckgo"
+    )
+    try:
+        web_search_max_results = int(
+            os.environ.get(
+                "WEB_SEARCH_MAX_RESULTS",
+                str(
+                    operator_config.web_search_max_results
+                    if operator_config is not None
+                    else 5
+                ),
+            )
+        )
+    except ValueError:
+        web_search_max_results = (
+            operator_config.web_search_max_results if operator_config is not None else 5
+        )
+    configured_api_key_env = (
+        operator_config.web_search_api_key_env
+        if operator_config is not None and operator_config.web_search_api_key_env
+        else None
+    )
+    web_search_api_key = (
+        os.environ.get("WEB_SEARCH_API_KEY")
+        or (os.environ.get(configured_api_key_env) if configured_api_key_env else None)
+        or os.environ.get("BRAVE_API_KEY")
+        or os.environ.get("TAVILY_API_KEY")
+        or os.environ.get("SERPAPI_API_KEY")
+    )
+
     # Memory store is wired into the loop for session-scoped notes (Phase 3.3).
     sessions, memory = _build_stores(storage_backend, workspace_root, sqlite_path)
-    policy = DefaultPolicy(workspace_root=workspace_root, shell_profile=shell_profile)
+    policy = DefaultPolicy(
+        workspace_root=workspace_root,
+        shell_profile=effective_shell_profile,
+        fetch_url_mode=fetch_mode,
+        fetch_url_allowlist=(
+            frozenset(operator_config.fetch_url_allowlist)
+            if operator_config is not None
+            else None
+        ),
+        fetch_url_deny_hosts=(
+            frozenset(operator_config.fetch_url_deny_hosts)
+            if operator_config is not None
+            else None
+        ),
+    )
     tools = ToolRegistry()
     tools.register(ReadFileTool(workspace_root, limits=limits))
     tools.register(WriteFileTool(workspace_root, limits=limits))
@@ -183,7 +245,36 @@ def build_runtime(
     tools.register(ApplyPatchTool(workspace_root, limits=limits))
     tools.register(GrepTool(workspace_root, limits=limits))
     tools.register(GlobTool(workspace_root, limits=limits))
-    tools.register(FetchUrlTool(limits=limits))
+    tools.register(
+        FetchUrlTool(
+            limits=limits,
+            mode=fetch_mode,
+            host_allowlist=(
+                frozenset(operator_config.fetch_url_allowlist)
+                if operator_config is not None
+                else None
+            ),
+            deny_hosts=(
+                frozenset(operator_config.fetch_url_deny_hosts)
+                if operator_config is not None
+                else None
+            ),
+        )
+    )
+    tools.register(
+        WebSearchTool(
+            backend=web_search_backend,
+            max_results=web_search_max_results,
+            api_key=web_search_api_key,
+            api_base_url=(
+                operator_config.web_search_api_base_url
+                if operator_config is not None
+                else None
+            ),
+        )
+    )
+    tools.register(HtmlToMarkdownTool(limits=limits))
+    tools.register(ReadPdfTool(workspace_root, limits=limits))
     tools.register(RunShellSafeTool(workspace_root, limits=limits))
     if trace is None:
         trace = wrap_trace_recorder(
@@ -1150,6 +1241,11 @@ def _format_context_show(summary: dict) -> str:
         names = last.get("prompt_block_names")
         if names:
             lines.append(f"    prompt_blocks:          {', '.join(names)}")
+    breakdown = last.get("context_breakdown_tokens")
+    if isinstance(breakdown, dict) and breakdown:
+        lines.append("    context_breakdown_tokens:")
+        for key in sorted(breakdown):
+            lines.append(f"      - {key}: {breakdown[key]}")
     return "\n".join(lines)
 
 

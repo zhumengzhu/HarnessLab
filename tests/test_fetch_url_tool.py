@@ -6,7 +6,11 @@ import httpx
 
 from harnesslab.core.models import ToolCall
 from harnesslab.policy.default_policy import DefaultPolicy
-from harnesslab.tools.fetch_url_tool import FetchUrlTool, validate_fetch_url
+from harnesslab.tools.fetch_url_tool import (
+    FetchUrlTool,
+    parse_csv_hosts,
+    validate_fetch_url,
+)
 
 
 def test_validate_fetch_url_allows_wttr() -> None:
@@ -54,3 +58,29 @@ def test_policy_denies_fetch_url_for_unlisted_host(tmp_path) -> None:
     )
     assert not allowed
     assert "allowlist" in reason
+
+
+def test_validate_fetch_url_open_mode_allows_https() -> None:
+    ok, reason = validate_fetch_url("https://example.com/path", mode="open")
+    assert ok, reason
+
+
+def test_validate_fetch_url_open_mode_rejects_http() -> None:
+    ok, reason = validate_fetch_url("http://example.com/path", mode="open")
+    assert not ok
+    assert "https" in reason
+
+
+def test_validate_fetch_url_honors_deny_hosts() -> None:
+    ok, reason = validate_fetch_url(
+        "https://example.com/path",
+        mode="open",
+        deny_hosts=frozenset({"example.com"}),
+    )
+    assert not ok
+    assert "denylist" in reason
+
+
+def test_parse_csv_hosts() -> None:
+    hosts = parse_csv_hosts("example.com, wttr.in ,")
+    assert hosts == frozenset({"example.com", "wttr.in"})

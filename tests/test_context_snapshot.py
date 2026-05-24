@@ -49,6 +49,9 @@ def test_snapshot_counts_messages_and_estimates_tokens() -> None:
     assert snap.compaction_threshold_tokens == 500
     assert snap.usage_ratio == 0.2
     assert snap.threshold_ratio == 0.4
+    assert snap.context_breakdown_tokens is not None
+    assert snap.context_breakdown_tokens["conversation"] == 200
+    assert snap.context_breakdown_tokens["summarized_conversation"] == 0
 
 
 def test_snapshot_threshold_ratio_can_exceed_one() -> None:
@@ -71,6 +74,22 @@ def test_snapshot_clamps_zero_limit_to_one_so_ratios_are_finite() -> None:
     assert snap.usage_ratio >= 0.0
 
 
+def test_snapshot_tracks_compaction_summary_tokens_separately() -> None:
+    summary = (
+        "<system-reminder>\n"
+        "[Compacted earlier conversation: 3 messages]\n"
+        "- item\n"
+        "</system-reminder>"
+    )
+    snap = make_conversation_snapshot(
+        [_msg("system", summary), _msg("user", "hello")],
+        RuntimeLimits(),
+    )
+    assert snap.context_breakdown_tokens is not None
+    assert snap.context_breakdown_tokens["summarized_conversation"] > 0
+    assert snap.context_breakdown_tokens["conversation"] > 0
+
+
 # ---------- merge_adapter_breakdown ----------
 
 
@@ -83,12 +102,22 @@ def test_merge_adapter_meta_fills_prompt_fields() -> None:
             "static_block_tokens": 200,
             "dynamic_block_tokens": 80,
             "prompt_block_names": ["identity", "harness", "env"],
+            "prompt_block_breakdown": {
+                "system_prompt": 210,
+                "rules": 90,
+                "tool_definitions": 20,
+                "skills": 0,
+                "subagent_definitions": 0,
+            },
         },
     )
     assert merged.prompt_tokens_estimate == 320
     assert merged.static_block_tokens == 200
     assert merged.dynamic_block_tokens == 80
     assert merged.prompt_block_names == ["identity", "harness", "env"]
+    assert merged.context_breakdown_tokens is not None
+    assert merged.context_breakdown_tokens["system_prompt"] == 210
+    assert merged.context_breakdown_tokens["rules"] == 90
 
 
 def test_merge_adapter_meta_ignores_non_dict() -> None:
@@ -158,6 +187,13 @@ def test_model_call_event_includes_adapter_prompt_breakdown(tmp_path) -> None:
                 "static_block_tokens": 500,
                 "dynamic_block_tokens": 200,
                 "prompt_block_names": ["identity", "env"],
+                "prompt_block_breakdown": {
+                    "system_prompt": 350,
+                    "rules": 50,
+                    "tool_definitions": 30,
+                    "skills": 40,
+                    "subagent_definitions": 0,
+                },
             }
 
     trace_path = tmp_path / "trace.jsonl"
@@ -184,3 +220,5 @@ def test_model_call_event_includes_adapter_prompt_breakdown(tmp_path) -> None:
     assert ctx["static_block_tokens"] == 500
     assert ctx["dynamic_block_tokens"] == 200
     assert ctx["prompt_block_names"] == ["identity", "env"]
+    assert ctx["context_breakdown_tokens"]["system_prompt"] == 350
+    assert ctx["context_breakdown_tokens"]["skills"] == 40
