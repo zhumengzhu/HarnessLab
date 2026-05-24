@@ -893,6 +893,61 @@ Same **Entry / Deliverables / Exit** bar as previous phases.
   the gate result but never bypasses it; integration test asserts the
   read-only nature of the API.
 
+### Phase 5.8 — Tool lifecycle hooks (pre/post) — Not started
+
+- **Entry**: Phase 5.4 MCP adapter shipped (so native + MCP tools share
+  one interception surface).
+- **Deliverables**:
+  - New `hooks` configuration block in operator config:
+    - `pre_tool[]`: ordered hooks before tool execution
+    - `post_tool[]`: ordered hooks after tool execution
+    - hook type: `shell` / `http` / `prompt`
+  - Hook payload schema includes `session_id`, `tool_name`, `tool_args`,
+    and in post hooks `tool_result` summary.
+  - Hooks may annotate, warn, or block (`pre_tool` only) with explicit
+    reason; default behavior remains no hooks, no behavior change.
+  - Trace events: `hook_invoked`, `hook_blocked`, `hook_failed`.
+- **Exit**: existing eval baseline unchanged with hooks disabled; one
+  integration test verifies a `pre_tool` hook can block `run_shell_safe`
+  and produce a normalized denial reason; docs in `tool-runtime.md`
+  explain ordering and failure policy.
+
+### Phase 5.9 — Checkpoint & rewind (session-safe undo) — Not started
+
+- **Entry**: Phase 5.2 artifact store shipped (checkpoint metadata can
+  reuse artifact refs).
+- **Deliverables**:
+  - Checkpoint snapshot before mutating tools:
+    `write_file`, `edit_file`, `apply_patch`, and approved
+    `run_shell_safe` file mutations.
+  - New CLI:
+    - `harnesslab session checkpoints <session-id>`
+    - `harnesslab session rewind <session-id> <checkpoint-id>`
+  - Web UI "rewind" action on session timeline (readable diff before
+    restore; explicit confirm required).
+  - Trace events: `checkpoint_created`, `checkpoint_restored`.
+- **Exit**: deterministic test verifies `rewind` restores file content
+  and session continues from the restored state; replay semantic compare
+  treats checkpoint ids as volatile.
+
+### Phase 5.10 — Session token/cost budgets — Not started
+
+- **Entry**: Phase 5.6 OTel metrics histograms shipped.
+- **Deliverables**:
+  - Operator config:
+    - `limits.max_tokens_per_session` (soft/hard mode)
+    - `limits.max_cost_per_session_usd` (optional; provider price table)
+    - warning thresholds (`80%`, `95%` defaults)
+  - Loop behavior:
+    - soft limit: emits warning + continues
+    - hard limit: terminal `ask_user` with budget summary
+  - Web/CLI surfaces show budget burn-down and threshold alerts.
+  - Trace fields on `model_call`: `session_tokens_used`,
+    `session_cost_estimate_usd`, `budget_threshold_crossed`.
+- **Exit**: a budgeted eval task proves soft and hard behaviors are
+  deterministic; budget accounting excludes replay/eval runs using
+  `SimpleModel`.
+
 **Phase 5 explicitly does NOT include**
 
 - Multi-agent orchestration (Phase 6 below)
@@ -914,6 +969,10 @@ Same **Entry / Deliverables / Exit** bar as previous phases.
 6. **5.6** — Metrics histograms; small, isolated.
 7. **5.7** — Proposal Web UI; last because it must layer cleanly over a
    stable Web UI and stable eval gate.
+8. **5.8** — Tool hooks; after MCP so hook coverage spans both native
+   and MCP tools from day one.
+9. **5.9** — Checkpoint/rewind; after artifact store + stable Web UI.
+10. **5.10** — Budgets; after metrics so accounting/alerts are grounded.
 
 ---
 
