@@ -16,12 +16,12 @@ import sqlite3
 from datetime import datetime
 from pathlib import Path
 
-from harnesslab.core.models import Message, Session
+from harnesslab.core.models import BudgetUsage, Message, Session
 from harnesslab.storage.sqlite import apply_migrations, connect
 
 _SESSION_COLUMNS = (
     "id, goal, status, turn_count, step_count, created_at, "
-    "last_step_at, parent_session_id, title"
+    "last_step_at, parent_session_id, title, budget_usage"
 )
 
 
@@ -39,7 +39,7 @@ class SqliteSessionStore:
             self._conn.execute(
                 f"""
                 INSERT INTO sessions({_SESSION_COLUMNS})
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?);
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                 """,
                 _session_row(session),
             )
@@ -95,7 +95,7 @@ class SqliteSessionStore:
             self._conn.execute(
                 f"""
                 INSERT INTO sessions({_SESSION_COLUMNS})
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     goal = excluded.goal,
                     status = excluded.status,
@@ -104,7 +104,8 @@ class SqliteSessionStore:
                     created_at = excluded.created_at,
                     last_step_at = excluded.last_step_at,
                     parent_session_id = excluded.parent_session_id,
-                    title = excluded.title;
+                    title = excluded.title,
+                    budget_usage = excluded.budget_usage;
                 """,
                 _session_row(session),
             )
@@ -179,6 +180,7 @@ def _session_row(session: Session) -> tuple:
         session.last_step_at.isoformat() if session.last_step_at else None,
         session.parent_session_id,
         session.title,
+        _encode_budget_usage(session.budget_usage),
     )
 
 
@@ -196,6 +198,7 @@ def _session_from_row(row: sqlite3.Row, messages: list[Message]) -> Session:
         ),
         parent_session_id=row["parent_session_id"],
         title=row["title"],
+        budget_usage=_decode_budget_usage(row["budget_usage"]),
         messages=messages,
     )
 
@@ -228,3 +231,16 @@ def _decode_provider_extra(raw: str | None) -> dict | None:
     if not isinstance(parsed, dict):
         return None
     return parsed
+
+
+def _encode_budget_usage(usage: BudgetUsage) -> str:
+    return json.dumps(usage.model_dump(mode="json"), ensure_ascii=False)
+
+
+def _decode_budget_usage(raw: str | None) -> BudgetUsage:
+    if not raw:
+        return BudgetUsage()
+    parsed = json.loads(raw)
+    if not isinstance(parsed, dict):
+        return BudgetUsage()
+    return BudgetUsage.model_validate(parsed)

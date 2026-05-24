@@ -84,6 +84,13 @@ MIGRATIONS: list[tuple[int, str]] = [
         ALTER TABLE messages ADD COLUMN provider_extra TEXT;
         """,
     ),
+    (
+        5,
+        # Phase 5.10: session budget usage persistence.
+        """
+        ALTER TABLE sessions ADD COLUMN budget_usage TEXT;
+        """,
+    ),
 ]
 
 

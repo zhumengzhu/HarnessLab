@@ -7,6 +7,7 @@ import sys
 from pathlib import Path
 from typing import Literal
 
+from harnesslab.core.budget import BudgetLimits
 from harnesslab.core.config import RuntimeLimits
 from harnesslab.core.contracts import MemoryStorePort, SessionStorePort, TraceRecorderPort
 from harnesslab.core.loop import DEFAULT_MAX_STEPS, HarnessLoop
@@ -24,11 +25,18 @@ from harnesslab.core.prompt import (
     PromptBlock,
     build_agents_md_block,
     build_env_block,
+    build_planning_block,
     build_skills_block,
     build_tool_guide_block,
 )
 from harnesslab.core.runtime import SystemClock, UuidIdProvider
+from harnesslab.core.skill_policy import (
+    choose_skill_names,
+    list_skills,
+    selected_skills_from_messages,
+)
 from harnesslab.core.title import LiveTitleNamer
+from harnesslab.core.tool_hooks import build_hook_runner
 from harnesslab.eval.baseline import compare, load_baseline, save_baseline
 from harnesslab.eval.loader import load_suite, load_task
 from harnesslab.eval.report import render_stdout, write_json
@@ -125,9 +133,39 @@ def _filter_suite_by_tags(suite: TaskSuite, skip_tags: set[str]) -> TaskSuite:
     return TaskSuite(tasks=kept)
 
 
+def _env_int(name: str, default: int | None) -> int | None:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return int(raw.strip())
+    except ValueError:
+        return default
+
+
+def _env_float(name: str, default: float) -> float:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw.strip())
+    except ValueError:
+        return default
+
+
+def _budget_action(value: str) -> Literal["ask_user", "final", "error"]:
+    normalized = value.strip().lower()
+    if normalized not in {"ask_user", "final", "error"}:
+        return "ask_user"
+    return normalized  # type: ignore[return-value]
+
+
 def _make_dynamic_blocks_provider(
     workspace_root: Path,
     tools: ToolRegistry,
+    *,
+    skill_selection_mode: Literal["heuristic", "model"] = "heuristic",
+    planning_mode: Literal["off", "hint", "required"] = "off",
 ):
     """Build the per-call dynamic prompt blocks for DeepSeek.
 
@@ -142,7 +180,30 @@ def _make_dynamic_blocks_provider(
         agents = build_agents_md_block(workspace_root)
         if agents is not None:
             blocks.append(agents)
-        skills = build_skills_block(workspace_root)
+        planning = build_planning_block(planning_mode)
+        if planning is not None:
+            blocks.append(planning)
+        available_skills = list_skills(workspace_root)
+        pinned = selected_skills_from_messages(_session.messages)
+        latest_user = ""
+        for msg in reversed(_session.messages):
+            if msg.role == "user":
+                latest_user = msg.content
+                break
+        if skill_selection_mode == "model":
+            selected = None
+        else:
+            selected = choose_skill_names(
+                available=available_skills,
+                pinned=pinned,
+                user_input=latest_user,
+                max_skills=3,
+            )
+        skills = build_skills_block(
+            workspace_root,
+            selected_names=selected,
+            pinned_names=pinned,
+        )
         if skills is not None:
             blocks.append(skills)
         blocks.append(build_tool_guide_block(tools.list()))
@@ -280,12 +341,102 @@ def build_runtime(
         trace = wrap_trace_recorder(
             JsonlTraceRecorder(workspace_root / ".harnesslab" / "trace.jsonl")
         )
+    raw_skill_mode = (
+        os.environ.get("HARNESSLAB_SKILL_SELECTION_MODE")
+        or (
+            operator_config.skill_selection_mode
+            if operator_config is not None
+            else "heuristic"
+        )
+    )
+    effective_skill_mode: Literal["heuristic", "model"] = (
+        "model" if str(raw_skill_mode).strip().lower() == "model" else "heuristic"
+    )
+    raw_planning_mode = (
+        os.environ.get("HARNESSLAB_PLANNING_MODE")
+        or (operator_config.planning_mode if operator_config is not None else "off")
+    )
+    mode_text = str(raw_planning_mode).strip().lower()
+    effective_planning_mode: Literal["off", "hint", "required"] = (
+        mode_text if mode_text in {"off", "hint", "required"} else "off"
+    )
+    raw_replan = os.environ.get("HARNESSLAB_REPLAN_AFTER_STEPS")
+    if raw_replan is not None and raw_replan.strip():
+        try:
+            effective_replan_after_steps = int(raw_replan.strip())
+        except ValueError:
+            effective_replan_after_steps = None
+    else:
+        effective_replan_after_steps = (
+            operator_config.replan_after_steps if operator_config is not None else None
+        )
+    budget_enabled_raw = os.environ.get("HARNESSLAB_BUDGET_ENABLED")
+    if budget_enabled_raw is None:
+        budget_enabled = operator_config.budget_enabled if operator_config is not None else False
+    else:
+        budget_enabled = budget_enabled_raw.strip().lower() in {"1", "true", "yes", "on"}
+    budget_limits = BudgetLimits(
+        enabled=budget_enabled,
+        soft_ratio=max(
+            0.01,
+            min(
+                1.0,
+                _env_float(
+                    "HARNESSLAB_BUDGET_SOFT_RATIO",
+                    operator_config.budget_soft_ratio if operator_config is not None else 0.8,
+                ),
+            ),
+        ),
+        action_on_hard=_budget_action(
+            str(
+                os.environ.get("HARNESSLAB_BUDGET_ACTION_ON_HARD")
+                or (
+                    operator_config.budget_action_on_hard
+                    if operator_config is not None
+                    else "ask_user"
+                )
+            )
+        ),
+        max_llm_calls_per_turn=_env_int(
+            "HARNESSLAB_BUDGET_MAX_LLM_CALLS_PER_TURN",
+            operator_config.budget_max_llm_calls_per_turn if operator_config else None,
+        ),
+        max_tool_calls_per_turn=_env_int(
+            "HARNESSLAB_BUDGET_MAX_TOOL_CALLS_PER_TURN",
+            operator_config.budget_max_tool_calls_per_turn if operator_config else None,
+        ),
+        max_turn_wall_time_ms=_env_int(
+            "HARNESSLAB_BUDGET_MAX_TURN_WALL_TIME_MS",
+            operator_config.budget_max_turn_wall_time_ms if operator_config else None,
+        ),
+        max_session_tokens_total=_env_int(
+            "HARNESSLAB_BUDGET_MAX_SESSION_TOKENS_TOTAL",
+            operator_config.budget_max_session_tokens_total if operator_config else None,
+        ),
+        max_session_tool_calls_total=_env_int(
+            "HARNESSLAB_BUDGET_MAX_SESSION_TOOL_CALLS_TOTAL",
+            operator_config.budget_max_session_tool_calls_total if operator_config else None,
+        ),
+        max_session_wall_time_ms_total=_env_int(
+            "HARNESSLAB_BUDGET_MAX_SESSION_WALL_TIME_MS_TOTAL",
+            operator_config.budget_max_session_wall_time_ms_total if operator_config else None,
+        ),
+    )
+    hook_runner = build_hook_runner(
+        operator_config.pre_tool_hooks if operator_config is not None else (),
+        operator_config.post_tool_hooks if operator_config is not None else (),
+    )
     backend = normalize_backend(model_backend)
     model = create_model(
         backend,
         config=operator_config,
         tool_specs_provider=lambda: tool_specs_from_registry(tools.list()),
-        dynamic_blocks_provider=_make_dynamic_blocks_provider(workspace_root, tools),
+        dynamic_blocks_provider=_make_dynamic_blocks_provider(
+            workspace_root,
+            tools,
+            skill_selection_mode=effective_skill_mode,
+            planning_mode=effective_planning_mode,
+        ),
     )
     get_logger("cli").info(
         "runtime ready workspace=%s model=%s storage=%s",
@@ -306,6 +457,9 @@ def build_runtime(
         title_namer=title_namer,
         memory=memory,
         workspace_root=workspace_root,
+        replan_after_steps=effective_replan_after_steps,
+        budget_limits=budget_limits,
+        hook_runner=hook_runner,
     )
 
 

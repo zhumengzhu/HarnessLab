@@ -64,9 +64,10 @@ Must NOT include yet:
 
 - `HarnessLoop.run_session(session_id, user_input, max_steps=N)` is the
   primary entry point. `run_turn` is `run_session(..., max_steps=1)`.
-- `Decision.kind` is one of `tool | assistant | final | ask_user`.
-  Terminal kinds (`final`, `ask_user`) end the inner loop; `tool` and
-  `assistant` continue until `max_steps` or a terminal decision.
+- `Decision.kind` is one of `tool | assistant | plan | final | ask_user`.
+ Terminal kinds (`final`, `ask_user`) end the inner loop; `tool`,
+ `assistant`, and `plan` continue until `max_steps` or a terminal
+ decision.
 - Before each model call the loop may compact older messages
   (`compaction_started` / `compaction_completed` trace events). Adapters
   raise `ModelOverflowError` on context overflow; the loop compacts once

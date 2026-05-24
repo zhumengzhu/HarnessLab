@@ -102,6 +102,14 @@ Fields:
   otherwise)
 - `title`: short human label derived from the goal at `start()`
   time and used by `harnesslab session ls`
+- `budget_usage`: cumulative budget counters persisted with the
+  session:
+  - `llm_calls_total`
+  - `tool_calls_total`
+  - `tokens_total`
+  - `wall_time_ms_total`
+  - `cost_usd_total`
+  - `last_budget_status` (`ok|soft_exceeded|hard_exceeded`)
 
 ## Message
 
@@ -186,13 +194,21 @@ shapes are what `harnesslab metrics` aggregates.
 | `user_input_received` | `turn_index: int`, `user_input: str` |
 | `step_started` | `step_index: int`, `reason: "initial" \| "after_<prev_outcome>"` |
 | `model_call` | `decision_kind`, `latency_ms`, `context: ContextSnapshot`, optional: `model_name`, `provider`, `request_tokens`, `response_tokens`, `total_tokens` |
-| `decision_made` | `kind: "assistant" \| "tool" \| "final" \| "ask_user"`, `tool_name: str \| null`, `tool_args: dict`, `assistant_message: str \| null` |
+| `decision_made` | `kind: "assistant" \| "plan" \| "tool" \| "final" \| "ask_user"`, `tool_name: str \| null`, `tool_args: dict`, `assistant_message: str \| null` |
+| `plan_emitted` | `plan: str` |
 | `tool_invalid_args` | `tool_call_id`, `tool`, `args`, `error` |
 | `tool_denied` | `tool_call_id`, `tool`, `args`, `policy_decision`, `reason` |
 | `tool_executed` | `tool_call_id`, `tool`, `args`, `policy_decision`, `started_at`, `ended_at`, `duration_ms`, `ok`, `error`, `output_size`, `output_preview`, `output_truncated` |
-| `step_completed` | `step_index: int`, `outcome: "final" \| "ask_user" \| "assistant" \| "tool_ok" \| "tool_error" \| "tool_denied" \| "tool_invalid_args"` |
+| `hook_invoked` | `phase: "pre_tool" \| "post_tool"`, `name`, `type`, `tool_name` |
+| `hook_blocked` | `phase: "pre_tool"`, `name`, `type`, `tool_name`, `reason` |
+| `hook_failed` | `phase: "pre_tool" \| "post_tool"`, `name`, `type`, `tool_name`, `error` |
+| `step_completed` | `step_index: int`, `outcome: "final" \| "ask_user" \| "assistant" \| "plan" \| "tool_ok" \| "tool_error" \| "tool_denied" \| "tool_invalid_args"` |
 | `compaction_started` | `trigger: "threshold" \| "overflow"`, `before_messages: int`, `before_tokens: int`, `keep_last: int` |
 | `compaction_completed` | `after_messages: int`, `after_tokens: int` |
+| `budget_soft_threshold` | `dimension`, `current`, `limit`, `ratio`, `scope`, `severity="soft"` |
+| `budget_hard_exceeded` | `dimension`, `current`, `limit`, `ratio`, `scope`, `severity="hard"` |
+| `budget_enforcement_action` | `action: "ask_user" \| "final" \| "error"` |
+| `plan_recheck_requested` | `steps_used`, `replan_after_steps` |
 | `session_finished` | `reason: "final" \| "ask_user" \| "max_steps" \| "overflow" \| "remember" \| "remember_global"`, `steps: int` |
 | `session_titled` | `title: str`, `previous_title: str \| null`, `source: "llm"` |
 | `memory_read` | `key: str`, `line_count: int` |

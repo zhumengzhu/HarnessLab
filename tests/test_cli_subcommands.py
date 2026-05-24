@@ -134,7 +134,8 @@ def test_eval_subcommand_runs_all_tasks_and_passes(
     out = capsys.readouterr().out
 
     assert exc.value.code == cli.EXIT_OK, out
-    assert "Summary: 14/14 passed" in out
+    count = _eval_task_count(repo_root)
+    assert f"Summary: {count}/{count} passed" in out
     report = (tmp_path / "reports" / "latest.json").read_text(encoding="utf-8")
     payload = json.loads(report)
     assert len(payload["results"]) == _eval_task_count(repo_root)

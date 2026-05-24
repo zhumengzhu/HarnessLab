@@ -77,6 +77,21 @@ def test_load_operator_config_parses_tools_block(tmp_path: Path) -> None:
         json.dumps(
             {
                 "version": 1,
+                "loop": {
+                    "planning_mode": "required",
+                    "replan_after_steps": 3,
+                    "budget": {
+                        "enabled": True,
+                        "soft_ratio": 0.75,
+                        "action_on_hard": "ask_user",
+                        "max_llm_calls_per_turn": 8,
+                        "max_tool_calls_per_turn": 12,
+                        "max_turn_wall_time_ms": 30000,
+                        "max_session_tokens_total": 200000,
+                        "max_session_tool_calls_total": 100,
+                        "max_session_wall_time_ms_total": 600000,
+                    },
+                },
                 "tools": {
                     "fetch_url": {
                         "mode": "open",
@@ -88,6 +103,29 @@ def test_load_operator_config_parses_tools_block(tmp_path: Path) -> None:
                         "max_results": 8,
                         "api_key_env": "TAVILY_API_KEY",
                         "api_base_url": "https://api.tavily.com",
+                    },
+                    "skills": {
+                        "selection_mode": "model",
+                    },
+                    "hooks": {
+                        "pre_tool": [
+                            {
+                                "name": "pre-block-shell",
+                                "type": "prompt",
+                                "config": {
+                                    "tool_name_contains": "run_shell_safe",
+                                    "action": "block",
+                                    "reason": "blocked by test",
+                                },
+                            }
+                        ],
+                        "post_tool": [
+                            {
+                                "name": "post-audit",
+                                "type": "http",
+                                "config": {"url": "https://example.com/hook"},
+                            }
+                        ],
                     },
                 },
             }
@@ -101,6 +139,23 @@ def test_load_operator_config_parses_tools_block(tmp_path: Path) -> None:
     assert config.web_search_backend == "tavily"
     assert config.web_search_max_results == 8
     assert config.web_search_api_key_env == "TAVILY_API_KEY"
+    assert config.skill_selection_mode == "model"
+    assert config.planning_mode == "required"
+    assert config.replan_after_steps == 3
+    assert config.budget_enabled is True
+    assert config.budget_soft_ratio == 0.75
+    assert config.budget_action_on_hard == "ask_user"
+    assert config.budget_max_llm_calls_per_turn == 8
+    assert config.budget_max_tool_calls_per_turn == 12
+    assert config.budget_max_turn_wall_time_ms == 30000
+    assert config.budget_max_session_tokens_total == 200000
+    assert config.budget_max_session_tool_calls_total == 100
+    assert config.budget_max_session_wall_time_ms_total == 600000
+    assert len(config.pre_tool_hooks) == 1
+    assert config.pre_tool_hooks[0]["name"] == "pre-block-shell"
+    assert config.pre_tool_hooks[0]["type"] == "prompt"
+    assert len(config.post_tool_hooks) == 1
+    assert config.post_tool_hooks[0]["type"] == "http"
 
 
 def test_invalid_config_version_raises(tmp_path: Path) -> None:

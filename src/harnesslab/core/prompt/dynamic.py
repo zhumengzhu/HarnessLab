@@ -21,6 +21,7 @@ Conventions:
 
 from __future__ import annotations
 
+import importlib.resources
 import platform
 import subprocess
 from collections.abc import Iterable
@@ -31,6 +32,7 @@ from typing import Any
 from harnesslab.core.prompt.block import PromptBlock
 
 _GIT_TIMEOUT_SECONDS = 2.0
+_PROMPT_BLOCKS_PACKAGE = "harnesslab.core.prompt.blocks"
 
 
 def build_env_block(
@@ -79,7 +81,12 @@ def build_agents_md_block(workspace_root: Path) -> PromptBlock | None:
     )
 
 
-def build_skills_block(workspace_root: Path) -> PromptBlock | None:
+def build_skills_block(
+    workspace_root: Path,
+    *,
+    selected_names: list[str] | None = None,
+    pinned_names: list[str] | None = None,
+) -> PromptBlock | None:
     """Inject workspace skill definitions from ``skills/*.md``.
 
     The block is intentionally read-only: it publishes skill names and
@@ -92,18 +99,66 @@ def build_skills_block(workspace_root: Path) -> PromptBlock | None:
     files = sorted(p for p in skills_dir.glob("*.md") if p.is_file())
     if not files:
         return None
+    selected = set(selected_names or [])
+    pinned = set(pinned_names or [])
+    catalog = [path.stem for path in files]
     sections: list[str] = []
     for path in files:
+        if selected and path.stem not in selected:
+            continue
         raw = path.read_text(encoding="utf-8").strip()
         if not raw:
             continue
         sections.append(f"## {path.stem}\n\n{raw}")
     if not sections:
         return None
+    catalog_lines = ["# Skills", "", "## Catalog", ""]
+    catalog_lines.extend(f"- {name}" for name in catalog)
+    selected_label = ", ".join(sorted(selected)) if selected else "(auto:model-picks)"
+    pinned_label = ", ".join(sorted(pinned)) if pinned else "(none)"
+    catalog_lines.extend(
+        [
+            "",
+            f"Pinned this session: {pinned_label}",
+            f"Selected this turn: {selected_label}",
+            "",
+            "Selection guidance:",
+            "- Prefer pinned skills when relevant.",
+            "- Prefer a minimal subset and ignore unrelated skills.",
+            "",
+        ]
+    )
     return PromptBlock(
         name="skills",
-        content="# Skills\n\n" + "\n\n".join(sections),
+        content="\n".join(catalog_lines) + "\n\n" + "\n\n".join(sections),
         origin=f"dynamic:skills:{skills_dir.name}",
+    )
+
+
+def build_planning_block(mode: str) -> PromptBlock | None:
+    """Return optional planning guidance block based on loop mode."""
+
+    normalized = mode.strip().lower()
+    if normalized == "off":
+        return None
+    if normalized not in {"hint", "required"}:
+        normalized = "off"
+    if normalized == "off":
+        return None
+
+    raw = importlib.resources.files(_PROMPT_BLOCKS_PACKAGE).joinpath("05_planning.md")
+    body = raw.read_text(encoding="utf-8").strip()
+    if not body:
+        return None
+    prefix = (
+        "Planning mode is REQUIRED: always emit a concise plan before execution.\n\n"
+        if normalized == "required"
+        else "Planning mode is enabled: prefer a concise plan before execution.\n\n"
+    )
+    return PromptBlock(
+        name="planning",
+        content=prefix + body,
+        origin=f"static:{raw.name}",
     )
 
 

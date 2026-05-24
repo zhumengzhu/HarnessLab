@@ -1,0 +1,21 @@
+name: plan_then_execute
+goal: emit a plan before finalizing
+description: |
+  Exercises the Phase 5.3 plan decision kind. ``SimpleModel`` emits a
+  non-terminal ``plan`` decision via ``/plan ...``; the loop must persist
+  it as an assistant message, emit ``plan_emitted``, and continue until a
+  terminal decision.
+turns:
+  - input: /plan 1) inspect 2) patch 3) verify
+    max_steps: 2
+expected:
+  final_reply_contains:
+    - HarnessLab is ready.
+  events_include:
+    - event_type: plan_emitted
+      payload_contains:
+        plan: 1) inspect 2) patch 3) verify
+    - event_type: session_finished
+      payload_contains:
+        reason: final
+        steps: 2

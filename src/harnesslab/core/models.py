@@ -11,6 +11,15 @@ def _new_id(prefix: str) -> str:
     return f"{prefix}_{uuid4().hex[:12]}"
 
 
+class BudgetUsage(BaseModel):
+    llm_calls_total: int = 0
+    tool_calls_total: int = 0
+    tokens_total: int = 0
+    wall_time_ms_total: int = 0
+    cost_usd_total: float = 0.0
+    last_budget_status: Literal["ok", "soft_exceeded", "hard_exceeded"] = "ok"
+
+
 class Message(BaseModel):
     id: str = Field(default_factory=lambda: _new_id("msg"))
     role: Literal["system", "user", "assistant", "tool"]
@@ -68,6 +77,7 @@ class Session(BaseModel):
     last_step_at: datetime | None = None
     parent_session_id: str | None = None
     title: str | None = None
+    budget_usage: BudgetUsage = Field(default_factory=BudgetUsage)
 
 
 class ToolCall(BaseModel):
@@ -103,6 +113,9 @@ class Decision(BaseModel):
       the tool result and continues to the next step.
     - ``assistant``: intermediate narration; the loop appends the
       assistant message and continues to the next step.
+    - ``plan``: intermediate planning output; the loop appends the
+      assistant message marked with ``provider_extra.is_plan=true`` and
+      continues to the next step.
     - ``final``: terminal answer; the loop appends the assistant message
       and stops with ``session_finished(reason="final")``.
     - ``ask_user``: terminal pause awaiting more user input; the loop
@@ -110,7 +123,7 @@ class Decision(BaseModel):
       ``session_finished(reason="ask_user")``.
     """
 
-    kind: Literal["assistant", "tool", "final", "ask_user"]
+    kind: Literal["assistant", "plan", "tool", "final", "ask_user"]
     assistant_message: str | None = None
     tool_name: str | None = None
     tool_args: dict[str, Any] = Field(default_factory=dict)

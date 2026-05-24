@@ -65,4 +65,5 @@ def test_shipped_tasks_cover_expected_paths() -> None:
         "fetch_url_weather",
         "shell_profile_strict",
         "workspace_memory_persists",
+        "plan_then_execute",
     } <= names

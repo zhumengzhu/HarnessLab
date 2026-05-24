@@ -793,7 +793,7 @@ Same **Entry / Deliverables / Exit** bar as previous phases.
   `replay` still works (refs treated as volatile); contract tests for
   put/get/list; data-model.md updated.
 
-### Phase 5.3 — Plan-then-execute loop mode — Not started
+### Phase 5.3 — Plan-then-execute loop mode — In progress
 
 - **Entry**: Phase 5.1 + 5.2 shipped (research-class tasks already feasible).
 - **Deliverables**:
@@ -872,10 +872,15 @@ Same **Entry / Deliverables / Exit** bar as previous phases.
 - **Exit**: enabling OTel metrics changes neither JSONL trace nor eval
   baseline; metrics appear in a local OTel collector smoke test.
 
-### Phase 5.7 — Proposal review surface (Web UI) — Not started
+### Phase 5.7 — Proposal review surface (Web UI) — In progress
 
 - **Entry**: `harnesslab propose` is shipped (Step 6); proposals on disk
   follow the AGENTS.md lifecycle.
+- **Current implementation**:
+  - Web API endpoints:
+    - `GET /api/proposals?status=open|all`
+    - `GET /api/proposals/{id}`
+  - Web sidebar renders open proposal list and detail (read-only).
 - **Deliverables**:
   - Web UI panel `/#proposals`: list `open` proposals (id, cluster
     signature, occurrences); show full markdown rendering; "diff
@@ -893,10 +898,17 @@ Same **Entry / Deliverables / Exit** bar as previous phases.
   the gate result but never bypasses it; integration test asserts the
   read-only nature of the API.
 
-### Phase 5.8 — Tool lifecycle hooks (pre/post) — Not started
+### Phase 5.8 — Tool lifecycle hooks (pre/post) — In progress
 
 - **Entry**: Phase 5.4 MCP adapter shipped (so native + MCP tools share
   one interception surface).
+- **Current implementation**:
+  - Config block `tools.hooks.pre_tool[]` / `tools.hooks.post_tool[]`
+    parsed via operator config.
+  - Supported hook types: `prompt`, `shell`, `http`.
+  - Trace events: `hook_invoked`, `hook_blocked`, `hook_failed`.
+  - `pre_tool` hooks can block with explicit reason (mapped to normalized
+    tool denial), while `post_tool` is non-blocking.
 - **Deliverables**:
   - New `hooks` configuration block in operator config:
     - `pre_tool[]`: ordered hooks before tool execution
@@ -930,23 +942,28 @@ Same **Entry / Deliverables / Exit** bar as previous phases.
   and session continues from the restored state; replay semantic compare
   treats checkpoint ids as volatile.
 
-### Phase 5.10 — Session token/cost budgets — Not started
+### Phase 5.10 — Session token/cost budgets — In progress
 
-- **Entry**: Phase 5.6 OTel metrics histograms shipped.
-- **Deliverables**:
-  - Operator config:
-    - `limits.max_tokens_per_session` (soft/hard mode)
-    - `limits.max_cost_per_session_usd` (optional; provider price table)
-    - warning thresholds (`80%`, `95%` defaults)
-  - Loop behavior:
-    - soft limit: emits warning + continues
-    - hard limit: terminal `ask_user` with budget summary
-  - Web/CLI surfaces show budget burn-down and threshold alerts.
-  - Trace fields on `model_call`: `session_tokens_used`,
-    `session_cost_estimate_usd`, `budget_threshold_crossed`.
-- **Exit**: a budgeted eval task proves soft and hard behaviors are
-  deterministic; budget accounting excludes replay/eval runs using
-  `SimpleModel`.
+- **Entry**: `ContextSnapshot` and provider token metadata are already
+  available from Phase 2.6 + provider expansion.
+- **Current implementation**:
+  - Config + env-backed budget guardrails:
+    - per-turn limits: `max_llm_calls_per_turn`,
+      `max_tool_calls_per_turn`, `max_turn_wall_time_ms`
+    - session limits: `max_session_tokens_total`,
+      `max_session_tool_calls_total`, `max_session_wall_time_ms_total`
+    - soft threshold ratio (`budget.soft_ratio`) and hard action
+      (`ask_user|final|error`)
+  - Loop emits `budget_soft_threshold`,
+    `budget_hard_exceeded`, `budget_enforcement_action`.
+  - Session persists cumulative budget usage (llm/tool/tokens/time) in
+    state storage.
+- **Remaining work**:
+  - Add cost budgeting (`max_session_cost_usd_total`) with provider
+    price-table mapping.
+  - Add explicit budget surfaces in CLI session detail pages
+    (Web session detail now exposes cumulative budget usage).
+  - Add eval tasks that pin deterministic soft/hard crossing behavior.
 
 **Phase 5 explicitly does NOT include**
 
@@ -1037,7 +1054,13 @@ and recommended PoC.
   zero-collector dashboard becomes important.
 - **TypeScript migration.** Stable Ports reduce risk; not scheduled until
   Phase 5 is complete and Phase 6 has a settled multi-agent shape (so
-  the migration target is not a moving target).
+  the migration target is not a moving target). Draft plan:
+  `docs/architecture/frontend-ts-migration.md`. Progress update: Phase A/B
+  are complete (foundation + read surfaces), and Phase C interactive parity
+  is complete (`composer + SSE + fork + /remember + /skill`). Default UX
+  remains legacy.
+- **TUI client surface.** Backend remains Python. Stack options captured in
+  `docs/architecture/tui-stack-options.md` (Textual-first recommendation).
 - **Distributed runtime / plugin marketplace.** No path to a "must
   include" until at least Phase 6 closes.
 - **Auto-apply improvement proposals.** Always requires human review per

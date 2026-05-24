@@ -14,6 +14,7 @@ Environment (all optional):
 - ``HL_SERVE_WORKSPACE`` — workspace root (default: repo root)
 - ``HL_SERVE_MAX_STEPS`` — inner-loop step budget (default: ``20``)
 - ``HL_SERVE_ENV_FILE`` — dotenv-style file (default: ``~/.config/harnesslab/env``)
+- ``HARNESSLAB_WEB_UI_VERSION`` — ``legacy`` | ``ts`` (default: ``legacy``)
 
 Model credentials stay out of repo. Set ``DEEPSEEK_API_KEY`` in the shell or
 env file (see ``scripts/hl-serve.example.env``).
@@ -282,6 +283,7 @@ def build_parser() -> argparse.ArgumentParser:
             "  HL_SERVE_WORKSPACE     workspace root (default: repo root)\n"
             "  HL_SERVE_MAX_STEPS     inner-loop step budget (default: 20)\n"
             "  HL_SERVE_ENV_FILE      dotenv file (default: ~/.config/harnesslab/env)\n"
+            "  HARNESSLAB_WEB_UI_VERSION  legacy | ts (default: legacy)\n"
             "\n"
             "Model credentials are not stored in-repo. Set DEEPSEEK_API_KEY in the\n"
             "shell or env file (see scripts/hl-serve.example.env).\n"

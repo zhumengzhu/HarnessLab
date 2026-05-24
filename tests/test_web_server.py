@@ -10,6 +10,9 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import pytest
+
+import harnesslab.web.server as web_server
 from harnesslab.cli import build_runtime
 from harnesslab.core.operator_config import OperatorConfig, config_settings_snapshot
 from harnesslab.telemetry.jsonl_recorder import JsonlTraceRecorder
@@ -118,6 +121,7 @@ def test_web_api_create_session_and_list(tmp_path: Path) -> None:
     session_id = created["session"]["id"]
     assert created["reply"]
     assert any(m["role"] == "user" for m in created["messages"])
+    assert created["session"]["budget_usage"]["llm_calls_total"] >= 1
 
     listed = _get(f"{base}/api/sessions")
     assert any(s["id"] == session_id for s in listed["sessions"])
@@ -125,6 +129,7 @@ def test_web_api_create_session_and_list(tmp_path: Path) -> None:
     detail = _get(f"{base}/api/sessions/{session_id}")
     assert detail["session"]["id"] == session_id
     assert len(detail["messages"]) >= 1
+    assert "budget_usage" in detail["session"]
 
     continued = _post(
         f"{base}/api/sessions/{session_id}/messages",
@@ -149,6 +154,33 @@ def test_web_remember_and_memory_notes(tmp_path: Path) -> None:
     detail = _get(f"{base}/api/sessions/{session_id}")
     assert detail["session"]["memory_notes"]
     assert "api prefers json" in detail["session"]["memory_notes"]
+
+
+def test_web_skill_command_roundtrip(tmp_path: Path) -> None:
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    (skills / "research.md").write_text("deep research", encoding="utf-8")
+
+    port = _free_port()
+    runtime = _web_runtime(tmp_path)
+    _start_server(runtime, port)
+    base = f"http://127.0.0.1:{port}"
+
+    created = _post(f"{base}/api/sessions", {"message": "start"})
+    session_id = created["session"]["id"]
+
+    listed = _post(
+        f"{base}/api/sessions/{session_id}/messages",
+        {"message": "/skill list"},
+    )
+    assert "Skills available:" in listed["reply"]
+    assert "- research" in listed["reply"]
+
+    selected = _post(
+        f"{base}/api/sessions/{session_id}/messages",
+        {"message": "/skill add research"},
+    )
+    assert "Selected skill 'research'" in selected["reply"]
 
 
 def test_web_fork_session(tmp_path: Path) -> None:
@@ -200,6 +232,40 @@ def test_web_settings_api(tmp_path: Path) -> None:
     assert "shell_profile" in settings
 
 
+def test_web_proposals_api_list_and_detail(tmp_path: Path) -> None:
+    proposals = tmp_path / "proposals"
+    proposals.mkdir()
+    body = """---
+id: prop_20260524_abcd1234
+status: open
+kind: policy_denial
+cluster_signature: "tool_denied:run_shell_safe:command not in allowlist"
+occurrences: 3
+generated_at: 2026-05-24T00:00:00+00:00
+related_files:
+  - src/harnesslab/policy/default_policy.py
+---
+
+## Suggested actions
+
+1. tighten shell profile
+"""
+    (proposals / "prop_20260524_abcd1234.md").write_text(body, encoding="utf-8")
+
+    port = _free_port()
+    runtime = _web_runtime(tmp_path)
+    _start_server(runtime, port)
+    base = f"http://127.0.0.1:{port}"
+
+    listed = _get(f"{base}/api/proposals?status=open")
+    assert len(listed["proposals"]) == 1
+    assert listed["proposals"][0]["id"] == "prop_20260524_abcd1234"
+
+    detail = _get(f"{base}/api/proposals/prop_20260524_abcd1234")
+    assert detail["proposal"]["status"] == "open"
+    assert "Suggested actions" in detail["proposal"]["body_markdown"]
+
+
 def test_web_static_index_served(tmp_path: Path) -> None:
     port = _free_port()
     runtime = _web_runtime(tmp_path)
@@ -210,3 +276,25 @@ def test_web_static_index_served(tmp_path: Path) -> None:
     assert "HarnessLab" in body
     assert "/static/app.js" in body
     assert "tool-panel" in body
+
+
+def test_web_can_switch_to_ts_static_bundle(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    ts_static = tmp_path / "ts_static"
+    ts_static.mkdir()
+    (ts_static / "index.html").write_text(
+        "<!doctype html><html><body>TS UI</body></html>",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(web_server, "_TS_STATIC_DIR", ts_static)
+    monkeypatch.setenv("HARNESSLAB_WEB_UI_VERSION", "ts")
+
+    port = _free_port()
+    runtime = _web_runtime(tmp_path)
+    _start_server(runtime, port)
+    base = f"http://127.0.0.1:{port}"
+    with urllib.request.urlopen(f"{base}/", timeout=5) as resp:  # noqa: S310
+        body = resp.read().decode("utf-8")
+    assert "TS UI" in body

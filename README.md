@@ -98,6 +98,17 @@ and appear in the trace inspector panel.
 Use `--model simple` for offline smoke tests without network access.
 Only `127.0.0.1` is allowed; the server refuses public bind addresses.
 
+TS frontend foundation (optional, Phase A):
+
+```bash
+cd webui
+npm install
+npm run build
+HARNESSLAB_WEB_UI_VERSION=ts uv run harnesslab serve --workspace-root .
+```
+
+If the TS bundle is missing, `serve` falls back to the legacy static UI.
+
 There is no global JSON config file yet — model provider settings use
 environment variables plus CLI / `HL_SERVE_*` flags, or optional
 `~/.config/harnesslab/config.json` for non-secret defaults (see

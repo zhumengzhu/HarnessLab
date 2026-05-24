@@ -4,6 +4,12 @@ import json
 from datetime import datetime
 from pathlib import Path
 
+from harnesslab.core.budget import (
+    BudgetBreach,
+    BudgetLimits,
+    TurnBudgetUsage,
+    detect_budget_breaches,
+)
 from harnesslab.core.compaction import (
     ModelOverflowError,
     Summarizer,
@@ -46,7 +52,15 @@ from harnesslab.core.models import (
     TraceEvent,
 )
 from harnesslab.core.runtime import SystemClock, UuidIdProvider
+from harnesslab.core.skill_policy import (
+    SkillCommand,
+    format_skill_state_message,
+    list_skills,
+    parse_skill_command,
+    selected_skills_from_messages,
+)
 from harnesslab.core.title import TitleNamer, derive_title_from_text
+from harnesslab.core.tool_hooks import ToolHookRunner
 from harnesslab.telemetry.log import get_logger
 from harnesslab.tools.registry import ToolRegistry
 
@@ -84,6 +98,9 @@ class HarnessLoop:
         title_namer: TitleNamer | None = None,
         memory: MemoryStorePort | None = None,
         workspace_root: Path | None = None,
+        replan_after_steps: int | None = None,
+        budget_limits: BudgetLimits | None = None,
+        hook_runner: ToolHookRunner | None = None,
     ) -> None:
         self._model = model
         self._policy = policy
@@ -97,6 +114,13 @@ class HarnessLoop:
         self._title_namer: TitleNamer | None = title_namer
         self._memory: MemoryStorePort | None = memory
         self._workspace_root = workspace_root.resolve() if workspace_root else None
+        self._replan_after_steps = (
+            replan_after_steps
+            if isinstance(replan_after_steps, int) and replan_after_steps > 0
+            else None
+        )
+        self._budget_limits = budget_limits or BudgetLimits(enabled=False)
+        self._hook_runner = hook_runner
 
     def start(self, goal: str) -> Session:
         session = Session(
@@ -210,10 +234,17 @@ class HarnessLoop:
         if global_body is not None:
             return self._run_remember_global_turn(session, global_body)
 
+        skill_command = parse_skill_command(user_input)
+        if skill_command is not None:
+            return self._run_skill_turn(session, skill_command)
+
         last_response = ""
         terminal_reason = "max_steps"
         steps_used = 0
         prev_terminal: str | None = None
+        turn_usage = TurnBudgetUsage()
+        turn_started_at = self._clock.now()
+        session_wall_base = session.budget_usage.wall_time_ms_total
 
         for step_index in range(max_steps):
             self._record(
@@ -234,11 +265,34 @@ class HarnessLoop:
             )
 
             self._maybe_compact(session, trigger="threshold")
+            if self._enforce_budget(
+                session=session,
+                turn_usage=turn_usage,
+                turn_started_at=turn_started_at,
+                session_wall_base=session_wall_base,
+            ):
+                terminal_reason = self._budget_limits.action_on_hard
+                if terminal_reason == "error":
+                    terminal_reason = "final"
+                last_response = self._budget_stop_message(session)
+                session.messages.append(
+                    self._make_message(
+                        role="assistant",
+                        content=last_response,
+                        session=session,
+                    )
+                )
+                break
 
             step_input = user_input if step_index == 0 else ""
             decision, decision_started, decision_ended = self._call_model_with_overflow(
                 session, step_input
             )
+            turn_usage.llm_calls += 1
+            session.budget_usage.llm_calls_total += 1
+            token_total = self._model_total_tokens()
+            if token_total is not None:
+                session.budget_usage.tokens_total += token_total
             self._record(
                 session=session,
                 event_type="model_call",
@@ -261,6 +315,9 @@ class HarnessLoop:
             )
 
             step_response, step_outcome = self._apply_decision(session, decision)
+            if step_outcome in {"tool_ok", "tool_error"}:
+                turn_usage.tool_calls += 1
+                session.budget_usage.tool_calls_total += 1
             _log.debug(
                 "decision applied session=%s kind=%s outcome=%s",
                 session.id,
@@ -285,6 +342,40 @@ class HarnessLoop:
             if decision.kind in TERMINAL_DECISION_KINDS:
                 terminal_reason = decision.kind
                 break
+            turn_usage.wall_time_ms = self._elapsed_ms(turn_started_at)
+            session.budget_usage.wall_time_ms_total = self._session_wall_time_total(
+                base_ms=session_wall_base,
+                turn_elapsed_ms=turn_usage.wall_time_ms,
+            )
+            if self._enforce_budget(
+                session=session,
+                turn_usage=turn_usage,
+                turn_started_at=turn_started_at,
+                session_wall_base=session_wall_base,
+            ):
+                terminal_reason = self._budget_limits.action_on_hard
+                if terminal_reason == "error":
+                    terminal_reason = "final"
+                last_response = self._budget_stop_message(session)
+                session.messages.append(
+                    self._make_message(
+                        role="assistant",
+                        content=last_response,
+                        session=session,
+                    )
+                )
+                break
+            self._maybe_emit_replan_reminder(
+                session=session,
+                steps_used=steps_used,
+                max_steps=max_steps,
+            )
+
+        turn_usage.wall_time_ms = self._elapsed_ms(turn_started_at)
+        session.budget_usage.wall_time_ms_total = self._session_wall_time_total(
+            base_ms=session_wall_base,
+            turn_elapsed_ms=turn_usage.wall_time_ms,
+        )
 
         self._record(
             session=session,
@@ -379,6 +470,93 @@ class HarnessLoop:
             session=session,
             event_type="session_finished",
             payload={"reason": "remember_global", "steps": 0},
+        )
+        session.turn_count += 1
+        session.status = "running"
+        self._maybe_auto_title(session)
+        self._sessions.save(session)
+        return reply
+
+    def _run_skill_turn(self, session: Session, command: SkillCommand) -> str:
+        """Handle ``/skill`` commands without model calls."""
+
+        available = list_skills(self._workspace_root)
+        selected = selected_skills_from_messages(session.messages)
+
+        if command.kind == "list":
+            lines = [
+                "Skills available:",
+                *(f"- {name}" for name in available),
+            ]
+            if not available:
+                lines.append("- (none)")
+            lines.append("")
+            lines.append(
+                "Selected skills: " + (", ".join(selected) if selected else "(none)")
+            )
+            reply = "\n".join(lines)
+            return self._finish_skill_turn(session, reply, selected=selected, persist=False)
+
+        if command.kind == "clear":
+            selected = []
+            reply = "Cleared selected skills for this session."
+            return self._finish_skill_turn(session, reply, selected=selected, persist=True)
+
+        if command.kind in {"add", "remove"}:
+            name = (command.name or "").strip()
+            if not name:
+                return self._finish_skill_turn(
+                    session,
+                    "Usage: /skill [list|clear|add <name>|remove <name>|<name>].",
+                    selected=selected,
+                    persist=False,
+                )
+            if name not in available:
+                return self._finish_skill_turn(
+                    session,
+                    f"Skill '{name}' not found under skills/*.md.",
+                    selected=selected,
+                    persist=False,
+                )
+            if command.kind == "add":
+                if name not in selected:
+                    selected.append(name)
+                reply = f"Selected skill '{name}' for this session."
+            else:
+                selected = [item for item in selected if item != name]
+                reply = f"Removed skill '{name}' from this session."
+            return self._finish_skill_turn(session, reply, selected=selected, persist=True)
+
+        return self._finish_skill_turn(
+            session,
+            "Usage: /skill [list|clear|add <name>|remove <name>|<name>].",
+            selected=selected,
+            persist=False,
+        )
+
+    def _finish_skill_turn(
+        self,
+        session: Session,
+        reply: str,
+        *,
+        selected: list[str],
+        persist: bool,
+    ) -> str:
+        if persist:
+            session.messages.append(
+                self._make_message(
+                    role="system",
+                    content=format_skill_state_message(selected),
+                    session=session,
+                )
+            )
+        session.messages.append(
+            self._make_message(role="assistant", content=reply, session=session)
+        )
+        self._record(
+            session=session,
+            event_type="session_finished",
+            payload={"reason": "skill", "steps": 0},
         )
         session.turn_count += 1
         session.status = "running"
@@ -621,6 +799,15 @@ class HarnessLoop:
         payload["context"] = snapshot.model_dump(exclude_none=True)
         return payload
 
+    def _model_total_tokens(self) -> int | None:
+        raw = self._model_raw_meta()
+        if not raw:
+            return None
+        value = raw.get("total_tokens")
+        if isinstance(value, int):
+            return max(value, 0)
+        return None
+
     def _model_raw_meta(self) -> dict | None:
         getter = getattr(self._model, "last_call_meta", None)
         if not callable(getter):
@@ -649,7 +836,7 @@ class HarnessLoop:
         """Apply one decision; return ``(user_visible_response, outcome)``.
 
         ``outcome`` is the short string written to the ``step_completed``
-        trace event. It is one of ``final | ask_user | assistant | tool |
+        trace event. It is one of ``final | ask_user | assistant | plan | tool |
         tool_invalid_args | tool_denied | tool_error | tool_ok``.
         """
 
@@ -674,7 +861,136 @@ class HarnessLoop:
             )
             return reply, "assistant"
 
+        if decision.kind == "plan":
+            reply = decision.assistant_message or ""
+            extra = self._model_provider_extra() or {}
+            extra = {**extra, "is_plan": True}
+            session.messages.append(
+                self._make_message(
+                    role="assistant",
+                    content=reply,
+                    session=session,
+                    provider_extra=extra,
+                )
+            )
+            self._record(
+                session=session,
+                event_type="plan_emitted",
+                payload={"plan": reply},
+            )
+            return reply, "plan"
+
         return self._apply_tool_decision(session, decision)
+
+    def _maybe_emit_replan_reminder(
+        self,
+        *,
+        session: Session,
+        steps_used: int,
+        max_steps: int,
+    ) -> None:
+        if self._replan_after_steps is None:
+            return
+        if steps_used <= 0 or steps_used >= max_steps:
+            return
+        if steps_used % self._replan_after_steps != 0:
+            return
+        reminder = (
+            "Plan check: re-evaluate your current plan, summarize progress, "
+            "and adjust next steps if needed."
+        )
+        session.messages.append(
+            self._make_message(role="system", content=reminder, session=session)
+        )
+        self._record(
+            session=session,
+            event_type="plan_recheck_requested",
+            payload={
+                "steps_used": steps_used,
+                "replan_after_steps": self._replan_after_steps,
+            },
+        )
+
+    def _elapsed_ms(self, started_at: datetime) -> int:
+        now = self._clock.now()
+        return max(0, int((now - started_at).total_seconds() * 1000.0))
+
+    def _session_wall_time_total(self, *, base_ms: int, turn_elapsed_ms: int) -> int:
+        return max(0, base_ms + turn_elapsed_ms)
+
+    def _enforce_budget(
+        self,
+        *,
+        session: Session,
+        turn_usage: TurnBudgetUsage,
+        turn_started_at: datetime,
+        session_wall_base: int,
+    ) -> bool:
+        if not self._budget_limits.enabled:
+            return False
+        turn_usage.wall_time_ms = self._elapsed_ms(turn_started_at)
+        session.budget_usage.wall_time_ms_total = self._session_wall_time_total(
+            base_ms=session_wall_base,
+            turn_elapsed_ms=turn_usage.wall_time_ms,
+        )
+        breaches = detect_budget_breaches(
+            limits=self._budget_limits,
+            turn=turn_usage,
+            session=session.budget_usage,
+        )
+        hard = [b for b in breaches if b.severity == "hard"]
+        soft = [b for b in breaches if b.severity == "soft"]
+        if not hard and not soft:
+            session.budget_usage.last_budget_status = "ok"
+            return False
+        for breach in soft:
+            if breach.dimension in turn_usage.soft_notified:
+                continue
+            turn_usage.soft_notified.add(breach.dimension)
+            session.budget_usage.last_budget_status = "soft_exceeded"
+            self._record_budget_event(session, breach, event_type="budget_soft_threshold")
+        if not hard:
+            return False
+        session.budget_usage.last_budget_status = "hard_exceeded"
+        for breach in hard:
+            self._record_budget_event(session, breach, event_type="budget_hard_exceeded")
+        self._record(
+            session=session,
+            event_type="budget_enforcement_action",
+            payload={"action": self._budget_limits.action_on_hard},
+        )
+        return True
+
+    def _record_budget_event(
+        self,
+        session: Session,
+        breach: BudgetBreach,
+        *,
+        event_type: str,
+    ) -> None:
+        self._record(
+            session=session,
+            event_type=event_type,
+            payload={
+                "dimension": breach.dimension,
+                "current": breach.current,
+                "limit": breach.limit,
+                "ratio": breach.ratio,
+                "scope": breach.scope,
+                "severity": breach.severity,
+            },
+        )
+
+    def _budget_stop_message(self, session: Session) -> str:
+        action = self._budget_limits.action_on_hard
+        return (
+            "Budget hard limit exceeded. "
+            f"Action={action}. "
+            f"Usage: llm_calls={session.budget_usage.llm_calls_total}, "
+            f"tool_calls={session.budget_usage.tool_calls_total}, "
+            f"tokens={session.budget_usage.tokens_total}, "
+            f"wall_time_ms={session.budget_usage.wall_time_ms_total}."
+        )
 
     def _model_reasoning_text(self) -> str | None:
         """Optional reasoning from the last model call (networked adapters)."""
@@ -751,8 +1067,26 @@ class HarnessLoop:
             return denied_msg, "tool_denied"
 
         call.started_at = self._clock.now()
+        blocked = self._run_pre_tool_hooks(session, call)
+        if blocked is not None:
+            call.policy_decision = f"deny:hook:{blocked}"
+            denied_msg = f"Tool denied by hook: {blocked}"
+            self._append_tool_exchange(session, call, denied_msg)
+            self._record(
+                session=session,
+                event_type="tool_denied",
+                payload={
+                    "tool_call_id": call.id,
+                    "tool": call.name,
+                    "args": call.args,
+                    "policy_decision": call.policy_decision,
+                    "reason": f"hook:{blocked}",
+                },
+            )
+            return denied_msg, "tool_denied"
         result = self._tools.execute(call)
         call.ended_at = self._clock.now()
+        self._run_post_tool_hooks(session, call, result)
 
         tool_message = self._format_tool_message(call=call, result=result)
         self._append_tool_exchange(session, call, tool_message)
@@ -773,6 +1107,82 @@ class HarnessLoop:
             ),
         )
         return tool_message, "tool_ok" if result.ok else "tool_error"
+
+    def _run_pre_tool_hooks(self, session: Session, call: ToolCall) -> str | None:
+        runner = self._hook_runner
+        if runner is None:
+            return None
+        for hook in runner.pre_hooks:
+            self._record(
+                session=session,
+                event_type="hook_invoked",
+                payload={
+                    "phase": "pre_tool",
+                    "name": hook.name,
+                    "type": hook.hook_type,
+                    "tool_name": call.name,
+                },
+            )
+            try:
+                decision = runner.run_pre(hook, call)
+            except Exception as exc:  # noqa: BLE001
+                self._record(
+                    session=session,
+                    event_type="hook_failed",
+                    payload={
+                        "phase": "pre_tool",
+                        "name": hook.name,
+                        "type": hook.hook_type,
+                        "tool_name": call.name,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    },
+                )
+                continue
+            if decision.action == "block":
+                reason = decision.reason or f"blocked by hook '{hook.name}'"
+                self._record(
+                    session=session,
+                    event_type="hook_blocked",
+                    payload={
+                        "phase": "pre_tool",
+                        "name": hook.name,
+                        "type": hook.hook_type,
+                        "tool_name": call.name,
+                        "reason": reason,
+                    },
+                )
+                return reason
+        return None
+
+    def _run_post_tool_hooks(self, session: Session, call: ToolCall, result: ToolResult) -> None:
+        runner = self._hook_runner
+        if runner is None:
+            return
+        for hook in runner.post_hooks:
+            self._record(
+                session=session,
+                event_type="hook_invoked",
+                payload={
+                    "phase": "post_tool",
+                    "name": hook.name,
+                    "type": hook.hook_type,
+                    "tool_name": call.name,
+                },
+            )
+            try:
+                runner.run_post(hook, call, result)
+            except Exception as exc:  # noqa: BLE001
+                self._record(
+                    session=session,
+                    event_type="hook_failed",
+                    payload={
+                        "phase": "post_tool",
+                        "name": hook.name,
+                        "type": hook.hook_type,
+                        "tool_name": call.name,
+                        "error": f"{type(exc).__name__}: {exc}",
+                    },
+                )
 
     def _tool_executed_payload(self, call: ToolCall, result: ToolResult) -> dict:
         duration_ms: float | None = None

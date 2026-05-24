@@ -120,13 +120,17 @@ or when `max_steps` is reached.
      `compaction_started(trigger=overflow)`, compact more
      aggressively (`keep_last = max(1, configured // 2)`), and
      retry the call once.
-   - The model returns a `Decision` (`assistant | tool | final |
-     ask_user`).
+  - The model returns a `Decision` (`assistant | plan | tool | final |
+    ask_user`).
    - For `tool`, policy validates; if allowed, the tool runs and
      a tool result message is appended. The next inner step then
      runs with empty `user_input`.
-   - For `assistant`, the assistant text is appended and the loop
-     continues.
+  - For `assistant`, the assistant text is appended and the loop
+    continues.
+  - For `plan`, the assistant plan text is appended with
+    `provider_extra.is_plan=true`; trace emits `plan_emitted`.
+    Optional `replan_after_steps` emits a system reminder
+    (`plan_recheck_requested`) after N non-terminal steps.
    - For `final` / `ask_user`, the loop exits.
 3. `session_finished` is recorded with the terminal reason
    (`final | ask_user | max_steps`).
@@ -139,6 +143,25 @@ or when `max_steps` is reached.
 The single-turn `run_turn(session_id, user_input)` is a
 `run_session(..., max_steps=1)` wrapper kept for backward
 compatibility.
+
+### Budget guardrails (Phase 5.10, in progress)
+
+Budget control is separate from context compaction:
+
+- **Compaction** answers "can this prompt fit the model context window?"
+- **Budget guardrails** answer "should this session keep spending?"
+
+Current budget dimensions:
+
+- Per-turn: LLM call count, tool call count, wall-time (ms)
+- Per-session: token total, tool call total, wall-time (ms)
+
+Behavior:
+
+- Soft threshold (`budget.soft_ratio`) emits `budget_soft_threshold` and continues.
+- Hard threshold emits `budget_hard_exceeded`, then applies
+  `budget.action_on_hard` (`ask_user`, `final`, or `error`).
+- The loop records `budget_enforcement_action` when hard limits are enforced.
 
 ```mermaid
 sequenceDiagram
@@ -234,6 +257,9 @@ at ``WARNING`` unless the app level is ``DEBUG``.
 - Shell tool runs argv with `shell=False`; policy bans shell metacharacters
 - `ToolRegistry` normalizes both "unknown tool" and tool exceptions into
   `ToolResult(ok=False)` so the loop only sees the normalized result shape
+- Tool lifecycle hooks are opt-in (Phase 5.8): ordered `pre_tool`/`post_tool`
+  hook chains can annotate or block tool calls; hook failures are trace-visible
+  and non-fatal by default
 - Trace is the source of truth for replay: `user_input_received` plus a
   full `decision_made` payload (`kind`, `tool_name`, `tool_args`,
   `assistant_message`) is sufficient to rebuild a `ReplayModel` without
@@ -484,6 +510,8 @@ Endpoints:
 - `GET /api/sessions` — list sessions (newest first)
 - `GET /api/sessions/{id}` — session metadata, messages, `memory_notes`
 - `GET /api/sessions/{id}/trace` — tool/step events for inspector panel
+- `GET /api/proposals?status=open|all` — list proposal headers from `proposals/`
+- `GET /api/proposals/{id}` — read one proposal markdown + metadata
 - `POST /api/sessions` — `start` + first `run_session`
 - `POST /api/sessions/{id}/messages` — continue conversation (JSON or SSE)
 - `POST /api/sessions/{id}/fork` — fork session branch
@@ -498,6 +526,11 @@ SQLite for the model loop. The latest turn may also include structured
 sidebar **settings** panel shows model label, workspace path, and
 config path from `/api/settings`. Composer buttons expose **Fork** and
 **`/remember`** (session-scoped memory writes).
+
+By default `serve` hosts legacy static assets under `web/static/`.
+When `HARNESSLAB_WEB_UI_VERSION=ts` and a built TS bundle exists under
+`web/static_ts/`, the server switches to that bundle; otherwise it
+falls back to legacy automatically.
 
 ## Session auto-titles (Phase 3.2)
 
@@ -542,6 +575,32 @@ Optional cross-session notes keyed by workspace root hash
 
 Writes are explicit user commands only (no LLM extraction). The loop
 requires ``workspace_root`` on ``HarnessLoop`` for inject/write.
+
+### Skills (Phase 5.2)
+
+Workspace skills live under ``skills/*.md``. The prompt composer now
+selects a **bounded subset** per turn instead of injecting every skill:
+
+- **Pinned first**: session-selected skills from ``/skill`` commands.
+- **Then relevance**: lightweight lexical overlap against the latest
+  user message.
+- **Cap**: up to 3 skills per turn.
+
+Selection mode is operator-configurable via
+``tools.skills.selection_mode`` (or env
+``HARNESSLAB_SKILL_SELECTION_MODE``):
+
+- ``heuristic`` (default): runtime picks a bounded subset before model call.
+- ``model``: inject full skill catalog + bodies so the model picks in-context.
+
+The selection is controlled with explicit slash commands:
+
+| Command | Effect |
+| --- | --- |
+| ``/skill`` or ``/skill list`` | Show available + selected skills |
+| ``/skill add <name>`` (or ``/skill <name>``) | Pin a skill for current session |
+| ``/skill remove <name>`` | Unpin a previously selected skill |
+| ``/skill clear`` | Clear all pinned skills for current session |
 
 ```mermaid
 flowchart LR

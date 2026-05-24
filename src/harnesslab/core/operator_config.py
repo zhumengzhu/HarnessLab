@@ -63,6 +63,20 @@ class OperatorConfig:
     web_search_max_results: int = DEFAULT_WEB_SEARCH_MAX_RESULTS
     web_search_api_key_env: str | None = None
     web_search_api_base_url: str | None = None
+    skill_selection_mode: Literal["heuristic", "model"] = "heuristic"
+    planning_mode: Literal["off", "hint", "required"] = "off"
+    replan_after_steps: int | None = None
+    budget_enabled: bool = False
+    budget_soft_ratio: float = 0.8
+    budget_action_on_hard: Literal["ask_user", "final", "error"] = "ask_user"
+    budget_max_llm_calls_per_turn: int | None = None
+    budget_max_tool_calls_per_turn: int | None = None
+    budget_max_turn_wall_time_ms: int | None = None
+    budget_max_session_tokens_total: int | None = None
+    budget_max_session_tool_calls_total: int | None = None
+    budget_max_session_wall_time_ms_total: int | None = None
+    pre_tool_hooks: tuple[dict[str, Any], ...] = ()
+    post_tool_hooks: tuple[dict[str, Any], ...] = ()
     serve_host: str = "127.0.0.1"
     serve_port: int = 8787
     serve_max_steps: int = 20
@@ -178,6 +192,24 @@ def config_settings_snapshot(
         "web_search_backend": config.web_search_backend,
         "web_search_max_results": config.web_search_max_results,
         "web_search_api_base_url": config.web_search_api_base_url,
+        "skill_selection_mode": config.skill_selection_mode,
+        "planning_mode": config.planning_mode,
+        "replan_after_steps": config.replan_after_steps,
+        "budget": {
+            "enabled": config.budget_enabled,
+            "soft_ratio": config.budget_soft_ratio,
+            "action_on_hard": config.budget_action_on_hard,
+            "max_llm_calls_per_turn": config.budget_max_llm_calls_per_turn,
+            "max_tool_calls_per_turn": config.budget_max_tool_calls_per_turn,
+            "max_turn_wall_time_ms": config.budget_max_turn_wall_time_ms,
+            "max_session_tokens_total": config.budget_max_session_tokens_total,
+            "max_session_tool_calls_total": config.budget_max_session_tool_calls_total,
+            "max_session_wall_time_ms_total": config.budget_max_session_wall_time_ms_total,
+        },
+        "hooks": {
+            "pre_tool": list(config.pre_tool_hooks),
+            "post_tool": list(config.post_tool_hooks),
+        },
         "shell_profile": config.shell_profile,
         "serve": {
             "host": config.serve_host,
@@ -232,6 +264,18 @@ def _parse_config(data: dict[str, Any]) -> OperatorConfig:
     web_search = tools.get("web_search", {})
     if web_search is not None and not isinstance(web_search, dict):
         raise ValueError("tools.web_search must be an object")
+    skills = tools.get("skills", {})
+    if skills is not None and not isinstance(skills, dict):
+        raise ValueError("tools.skills must be an object")
+    hooks = tools.get("hooks", {})
+    if hooks is not None and not isinstance(hooks, dict):
+        raise ValueError("tools.hooks must be an object")
+    loop = data.get("loop", {})
+    if not isinstance(loop, dict):
+        raise ValueError("loop must be an object")
+    budget = loop.get("budget", {})
+    if budget is not None and not isinstance(budget, dict):
+        raise ValueError("loop.budget must be an object")
 
     limits_raw = data.get("limits", {})
     if not isinstance(limits_raw, dict):
@@ -269,6 +313,30 @@ def _parse_config(data: dict[str, Any]) -> OperatorConfig:
         or DEFAULT_WEB_SEARCH_MAX_RESULTS,
         web_search_api_key_env=_optional_str(web_search.get("api_key_env")),
         web_search_api_base_url=_optional_str(web_search.get("api_base_url")),
+        skill_selection_mode=_skill_selection_mode(skills),
+        planning_mode=_planning_mode(loop),
+        replan_after_steps=_optional_int(loop.get("replan_after_steps")),
+        budget_enabled=bool(budget.get("enabled", False)),
+        budget_soft_ratio=_budget_soft_ratio(budget),
+        budget_action_on_hard=_budget_action_on_hard(budget),
+        budget_max_llm_calls_per_turn=_optional_int(
+            budget.get("max_llm_calls_per_turn")
+        ),
+        budget_max_tool_calls_per_turn=_optional_int(
+            budget.get("max_tool_calls_per_turn")
+        ),
+        budget_max_turn_wall_time_ms=_optional_int(budget.get("max_turn_wall_time_ms")),
+        budget_max_session_tokens_total=_optional_int(
+            budget.get("max_session_tokens_total")
+        ),
+        budget_max_session_tool_calls_total=_optional_int(
+            budget.get("max_session_tool_calls_total")
+        ),
+        budget_max_session_wall_time_ms_total=_optional_int(
+            budget.get("max_session_wall_time_ms_total")
+        ),
+        pre_tool_hooks=_parse_hook_list(hooks.get("pre_tool")),
+        post_tool_hooks=_parse_hook_list(hooks.get("post_tool")),
         serve_host=str(serve.get("host", "127.0.0.1")),
         serve_port=int(serve.get("port", 8787)),
         serve_max_steps=int(serve.get("max_steps", 20)),
@@ -347,3 +415,57 @@ def _anthropic_thinking_mode(anthropic: dict[str, Any]) -> str:
         if isinstance(mode, str) and mode.strip():
             return mode.strip()
     return "disabled"
+
+
+def _skill_selection_mode(skills: dict[str, Any]) -> Literal["heuristic", "model"]:
+    mode = str(skills.get("selection_mode", "heuristic")).strip().lower()
+    if mode not in {"heuristic", "model"}:
+        return "heuristic"
+    return mode  # type: ignore[return-value]
+
+
+def _planning_mode(loop: dict[str, Any]) -> Literal["off", "hint", "required"]:
+    mode = str(loop.get("planning_mode", "off")).strip().lower()
+    if mode not in {"off", "hint", "required"}:
+        return "off"
+    return mode  # type: ignore[return-value]
+
+
+def _budget_soft_ratio(budget: dict[str, Any]) -> float:
+    raw = budget.get("soft_ratio", 0.8)
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        return 0.8
+    if value <= 0:
+        return 0.8
+    if value >= 1:
+        return 1.0
+    return value
+
+
+def _budget_action_on_hard(
+    budget: dict[str, Any],
+) -> Literal["ask_user", "final", "error"]:
+    mode = str(budget.get("action_on_hard", "ask_user")).strip().lower()
+    if mode not in {"ask_user", "final", "error"}:
+        return "ask_user"
+    return mode  # type: ignore[return-value]
+
+
+def _parse_hook_list(value: Any) -> tuple[dict[str, Any], ...]:
+    if not isinstance(value, list):
+        return ()
+    out: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        name = _optional_str(item.get("name")) or "hook"
+        hook_type = (_optional_str(item.get("type")) or "prompt").lower()
+        if hook_type not in {"prompt", "shell", "http"}:
+            hook_type = "prompt"
+        config = item.get("config", {})
+        if not isinstance(config, dict):
+            config = {}
+        out.append({"name": name, "type": hook_type, "config": config})
+    return tuple(out)

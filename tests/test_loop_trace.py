@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from harnesslab.cli import build_runtime
+from harnesslab.core.operator_config import OperatorConfig
 
 
 def _read_trace(workspace_root: Path) -> list[dict]:
@@ -54,6 +55,33 @@ def test_trace_records_denied_with_policy_decision(tmp_path: Path) -> None:
     assert payload["tool"] == "read_file"
     assert payload["policy_decision"].startswith("deny:")
     assert "out of workspace" in payload["reason"]
+
+
+def test_trace_records_hook_events_when_pre_tool_blocks(tmp_path: Path) -> None:
+    loop = build_runtime(
+        tmp_path,
+        operator_config=OperatorConfig(
+            pre_tool_hooks=(
+                {
+                    "name": "block-shell",
+                    "type": "prompt",
+                    "config": {
+                        "tool_name_contains": "run_shell_safe",
+                        "action": "block",
+                        "reason": "blocked by pre hook",
+                    },
+                },
+            )
+        ),
+    )
+    session = loop.start(goal="hook trace")
+    loop.run_turn(session.id, '/tool run_shell_safe {"command":"pwd"}')
+
+    events = _read_trace(tmp_path)
+    assert any(e["event_type"] == "hook_invoked" for e in events)
+    blocked = [e for e in events if e["event_type"] == "hook_blocked"]
+    assert len(blocked) == 1
+    assert blocked[0]["payload"]["reason"] == "blocked by pre hook"
 
 
 def test_tool_path_appends_assistant_tool_calls_and_tool_message(tmp_path: Path) -> None:

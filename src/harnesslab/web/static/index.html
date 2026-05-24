@@ -18,6 +18,14 @@
         <h3>设置</h3>
         <dl id="settings-list" class="settings-list"></dl>
       </div>
+      <div id="proposal-panel" class="settings-panel">
+        <div class="sidebar-header">
+          <h3>Proposals</h3>
+          <button id="refresh-proposals" type="button" class="ghost-btn small">刷新</button>
+        </div>
+        <ul id="proposal-list" class="session-list"></ul>
+        <pre id="proposal-detail" class="memory-notes hidden"></pre>
+      </div>
     </aside>
     <main class="chat">
       <header class="chat-header">
@@ -25,6 +33,7 @@
         <div class="header-actions">
           <button type="button" id="fork-btn" class="ghost-btn" disabled title="复制会话分支">Fork</button>
           <button type="button" id="remember-btn" class="ghost-btn" disabled title="下一条以 /remember 发送">记住</button>
+          <button type="button" id="skill-btn" class="ghost-btn" disabled title="下一条以 /skill 发送">技能</button>
           <span id="chat-status" class="status-pill"></span>
         </div>
       </header>
@@ -34,6 +43,7 @@
         <textarea id="input" rows="2" placeholder="输入消息… (Enter 发送, Shift+Enter 换行)"></textarea>
         <div class="composer-actions">
           <button type="button" id="remember-inline" class="ghost-btn small" title="插入 /remember ">📝 记住</button>
+          <button type="button" id="skill-inline" class="ghost-btn small" title="插入 /skill ">🧩 技能</button>
           <button type="submit" id="send-btn">发送</button>
         </div>
       </form>

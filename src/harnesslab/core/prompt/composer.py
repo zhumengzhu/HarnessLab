@@ -19,6 +19,7 @@ from harnesslab.core.models import Session
 from harnesslab.core.prompt.block import ComposedPrompt, PromptBlock
 
 _BLOCKS_PACKAGE = "harnesslab.core.prompt.blocks"
+_OPTIONAL_STATIC_FILES = frozenset({"05_planning.md"})
 
 
 def _strip_numeric_prefix(stem: str) -> str:
@@ -51,7 +52,11 @@ def load_default_static_blocks() -> list[PromptBlock]:
     blocks: list[PromptBlock] = []
     package = importlib.resources.files(_BLOCKS_PACKAGE)
     entries = sorted(
-        (p for p in package.iterdir() if p.name.endswith(".md")),
+        (
+            p
+            for p in package.iterdir()
+            if p.name.endswith(".md") and p.name not in _OPTIONAL_STATIC_FILES
+        ),
         key=lambda p: p.name,
     )
     for entry in entries:

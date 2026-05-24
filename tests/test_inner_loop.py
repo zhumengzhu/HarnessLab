@@ -15,6 +15,7 @@ from pathlib import Path
 import pytest
 
 from harnesslab.cli import build_runtime
+from harnesslab.core.budget import BudgetLimits
 from harnesslab.core.config import RuntimeLimits
 from harnesslab.core.loop import HarnessLoop
 from harnesslab.core.models import Decision
@@ -34,6 +35,9 @@ def _read_trace(workspace_root: Path) -> list[dict]:
 def _build_loop(
     tmp_path: Path,
     decisions: list[Decision],
+    *,
+    replan_after_steps: int | None = None,
+    budget_limits: BudgetLimits | None = None,
 ) -> tuple[HarnessLoop, ReplayTraceRecorder]:
     limits = RuntimeLimits()
     tools = ToolRegistry()
@@ -47,6 +51,8 @@ def _build_loop(
         sessions=InMemorySessionStore(),
         tools=tools,
         trace=recorder,
+        replan_after_steps=replan_after_steps,
+        budget_limits=budget_limits,
     )
     return loop, recorder
 
@@ -131,6 +137,35 @@ def test_run_session_rejects_zero_max_steps(tmp_path: Path) -> None:
         loop.run_session(session.id, "go", max_steps=0)
 
 
+def test_run_session_plan_decision_emits_plan_trace(tmp_path: Path) -> None:
+    decisions = [
+        Decision(kind="plan", assistant_message="1) inspect 2) patch 3) verify"),
+        Decision(kind="final", assistant_message="done"),
+    ]
+    loop, recorder = _build_loop(tmp_path, decisions)
+    session = loop.start(goal="plan mode")
+    response = loop.run_session(session.id, "fix issue", max_steps=4)
+    assert response == "done"
+
+    plan_events = [e for e in recorder.events if e.event_type == "plan_emitted"]
+    assert len(plan_events) == 1
+    assert "inspect" in str(plan_events[0].payload.get("plan"))
+
+
+def test_run_session_emits_replan_reminder_after_interval(tmp_path: Path) -> None:
+    decisions = [
+        Decision(kind="assistant", assistant_message="step 1"),
+        Decision(kind="assistant", assistant_message="step 2"),
+        Decision(kind="final", assistant_message="done"),
+    ]
+    loop, recorder = _build_loop(tmp_path, decisions, replan_after_steps=2)
+    session = loop.start(goal="long run")
+    loop.run_session(session.id, "go", max_steps=4)
+    reminders = [e for e in recorder.events if e.event_type == "plan_recheck_requested"]
+    assert len(reminders) == 1
+    assert reminders[0].payload["steps_used"] == 2
+
+
 def test_run_turn_is_single_step_wrapper(tmp_path: Path) -> None:
     """run_turn must remain a max_steps=1 wrapper so the existing
     single-step trace contract (used by eval/replay) still holds."""
@@ -156,3 +191,50 @@ def test_cli_run_default_max_steps_drives_full_loop(tmp_path: Path) -> None:
     events = _read_trace(tmp_path)
     finished = [e for e in events if e["event_type"] == "session_finished"]
     assert finished[0]["payload"]["reason"] == "final"
+
+
+def test_budget_hard_limit_stops_turn_with_ask_user(tmp_path: Path) -> None:
+    decisions = [
+        Decision(kind="assistant", assistant_message="step one"),
+        Decision(kind="assistant", assistant_message="step two"),
+    ]
+    loop, recorder = _build_loop(
+        tmp_path,
+        decisions,
+        budget_limits=BudgetLimits(
+            enabled=True,
+            action_on_hard="ask_user",
+            max_llm_calls_per_turn=1,
+        ),
+    )
+    session = loop.start(goal="budget guard")
+    response = loop.run_session(session.id, "go", max_steps=4)
+    assert "Budget hard limit exceeded" in response
+    finished = [e for e in recorder.events if e.event_type == "session_finished"]
+    assert finished[0].payload["reason"] == "ask_user"
+    assert any(e.event_type == "budget_hard_exceeded" for e in recorder.events)
+
+
+def test_budget_soft_threshold_emits_warning_event(tmp_path: Path) -> None:
+    decisions = [
+        Decision(
+            kind="tool",
+            tool_name="write_file",
+            tool_args={"path": "a.txt", "content": "x"},
+        ),
+        Decision(kind="final", assistant_message="done"),
+    ]
+    loop, recorder = _build_loop(
+        tmp_path,
+        decisions,
+        budget_limits=BudgetLimits(
+            enabled=True,
+            soft_ratio=0.5,
+            max_tool_calls_per_turn=2,
+        ),
+    )
+    session = loop.start(goal="soft budget")
+    loop.run_session(session.id, "do it", max_steps=3)
+    soft = [e for e in recorder.events if e.event_type == "budget_soft_threshold"]
+    assert soft
+    assert soft[0].payload["dimension"] == "max_tool_calls_per_turn"

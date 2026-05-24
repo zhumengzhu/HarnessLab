@@ -34,6 +34,21 @@
   "policy": {
     "shell_profile": "dev"
   },
+  "loop": {
+    "planning_mode": "off",
+    "replan_after_steps": 4,
+    "budget": {
+      "enabled": false,
+      "soft_ratio": 0.8,
+      "action_on_hard": "ask_user",
+      "max_llm_calls_per_turn": 12,
+      "max_tool_calls_per_turn": 16,
+      "max_turn_wall_time_ms": 120000,
+      "max_session_tokens_total": 500000,
+      "max_session_tool_calls_total": 200,
+      "max_session_wall_time_ms_total": 1800000
+    }
+  },
   "tools": {
     "fetch_url": {
       "mode": "auto",
@@ -44,6 +59,23 @@
       "backend": "duckduckgo",
       "max_results": 5,
       "api_key_env": "WEB_SEARCH_API_KEY"
+    },
+    "skills": {
+      "selection_mode": "heuristic"
+    },
+    "hooks": {
+      "pre_tool": [
+        {
+          "name": "block-shell-rm",
+          "type": "prompt",
+          "config": {
+            "tool_name_contains": "run_shell_safe",
+            "action": "warn",
+            "reason": "Shell tools are high-risk; double-check command intent."
+          }
+        }
+      ],
+      "post_tool": []
     }
   },
   "limits": {

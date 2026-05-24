@@ -155,6 +155,26 @@ def test_session_persists_across_store_instances(tmp_path: Path) -> None:
         store2.close()
 
 
+def test_session_round_trip_preserves_budget_usage(tmp_path: Path) -> None:
+    store = SqliteSessionStore(tmp_path / "s.sqlite")
+    try:
+        session = Session(goal="budget")
+        session.budget_usage.llm_calls_total = 3
+        session.budget_usage.tool_calls_total = 2
+        session.budget_usage.tokens_total = 1200
+        session.budget_usage.wall_time_ms_total = 4500
+        session.budget_usage.last_budget_status = "soft_exceeded"
+        store.create(session)
+        loaded = store.get(session.id)
+        assert loaded.budget_usage.llm_calls_total == 3
+        assert loaded.budget_usage.tool_calls_total == 2
+        assert loaded.budget_usage.tokens_total == 1200
+        assert loaded.budget_usage.wall_time_ms_total == 4500
+        assert loaded.budget_usage.last_budget_status == "soft_exceeded"
+    finally:
+        store.close()
+
+
 def test_memory_persists_across_store_instances(tmp_path: Path) -> None:
     db = tmp_path / "m.sqlite"
 

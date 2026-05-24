@@ -161,6 +161,25 @@ stateDiagram-v2
 | `read_pdf` | Extract text from workspace PDF files with optional page cap | `_check_path` |
 | `run_shell_safe` | Argv shell invocation against the expanded allowlist + git subcommand gate (Phase 2.5) | `_check_shell` |
 
+### Tool lifecycle hooks (Phase 5.8)
+
+Optional hooks can run before and after tool execution via
+`tools.hooks` config:
+
+- `pre_tool[]` (ordered): may `allow`, `warn`, or `block`
+- `post_tool[]` (ordered): audit/annotation only (no blocking)
+- Supported hook types: `prompt`, `shell`, `http`
+
+Payload fields:
+
+- Common: `session_id`, `tool_name`, `tool_args`
+- Post-hook only: `tool_result` summary (`ok`, `error`, `output_size`)
+
+Failure policy:
+
+- Hook failure does not crash the turn; loop emits `hook_failed` and continues.
+- `pre_tool` returning `block` yields a normalized tool denial reason.
+
 ### Shell allowlist profiles (Phase 3.4)
 
 ``run_shell_safe`` allowlists are selected by **profile name** (config
@@ -212,6 +231,9 @@ Each tool call emits exactly one of the following trace events:
 - `tool_invalid_args` — schema validation failed; policy and tool were not run
 - `tool_denied` — schema passed but policy denied; tool was not run
 - `tool_executed` — schema passed, policy allowed, tool ran (ok=true/false)
+- `hook_invoked` — a pre/post hook was called
+- `hook_blocked` — a pre hook explicitly blocked the tool
+- `hook_failed` — hook execution failed (non-fatal; loop continues)
 
 `tool_executed` (and `tool_denied`) carry the following payload fields:
 

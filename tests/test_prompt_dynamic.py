@@ -8,6 +8,7 @@ from pathlib import Path
 from harnesslab.core.prompt import (
     build_agents_md_block,
     build_env_block,
+    build_planning_block,
     build_skills_block,
     build_tool_guide_block,
 )
@@ -101,9 +102,56 @@ def test_skills_block_collects_markdown_files(tmp_path: Path) -> None:
     assert block is not None
     assert block.name == "skills"
     assert block.origin == "dynamic:skills:skills"
+    assert "## Catalog" in block.content
+    assert "- research" in block.content
+    assert "- debug" in block.content
+    assert "Pinned this session: (none)" in block.content
+    assert "Selected this turn: (auto:model-picks)" in block.content
     assert "## research" in block.content
     assert "source map" in block.content
     assert "## debug" in block.content
+
+
+def test_skills_block_can_filter_selected_names(tmp_path: Path) -> None:
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    (skills / "research.md").write_text("search deeply", encoding="utf-8")
+    (skills / "debug.md").write_text("repro first", encoding="utf-8")
+    block = build_skills_block(tmp_path, selected_names=["debug"])
+    assert block is not None
+    assert "Pinned this session: (none)" in block.content
+    assert "Selected this turn: debug" in block.content
+    assert "- research" in block.content
+    assert "## debug" in block.content
+    assert "## research" not in block.content
+
+
+def test_skills_block_can_show_pinned_names(tmp_path: Path) -> None:
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    (skills / "research.md").write_text("search deeply", encoding="utf-8")
+    block = build_skills_block(tmp_path, pinned_names=["research"])
+    assert block is not None
+    assert "Pinned this session: research" in block.content
+    assert "Selected this turn: (auto:model-picks)" in block.content
+
+
+# ---------- planning ----------
+
+
+def test_planning_block_is_disabled_when_mode_off() -> None:
+    assert build_planning_block("off") is None
+
+
+def test_planning_block_uses_packaged_content_when_enabled() -> None:
+    hint = build_planning_block("hint")
+    required = build_planning_block("required")
+    assert hint is not None
+    assert required is not None
+    assert hint.origin == "static:05_planning.md"
+    assert "Planning mode is enabled" in hint.content
+    assert "Planning mode is REQUIRED" in required.content
+    assert "Plan: list 2-5 concrete steps" in hint.content
 
 
 # ---------- tool_guide ----------

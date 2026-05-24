@@ -3,6 +3,7 @@
 let currentSessionId = null;
 let busy = false;
 let rememberMode = false;
+let skillMode = false;
 
 const els = {
   sessionList: document.getElementById("session-list"),
@@ -16,10 +17,15 @@ const els = {
   newChat: document.getElementById("new-chat"),
   forkBtn: document.getElementById("fork-btn"),
   rememberBtn: document.getElementById("remember-btn"),
+  skillBtn: document.getElementById("skill-btn"),
   rememberInline: document.getElementById("remember-inline"),
+  skillInline: document.getElementById("skill-inline"),
   traceList: document.getElementById("trace-list"),
   clearTrace: document.getElementById("clear-trace"),
   settingsList: document.getElementById("settings-list"),
+  proposalList: document.getElementById("proposal-list"),
+  proposalDetail: document.getElementById("proposal-detail"),
+  refreshProposals: document.getElementById("refresh-proposals"),
 };
 
 async function api(path, options = {}) {
@@ -93,6 +99,7 @@ function updateSessionActions() {
   const hasSession = Boolean(currentSessionId);
   els.forkBtn.disabled = !hasSession || busy;
   els.rememberBtn.disabled = !hasSession || busy;
+  els.skillBtn.disabled = !hasSession || busy;
 }
 
 function clearTracePanel() {
@@ -145,6 +152,11 @@ async function loadSettings() {
       ["模型", s.model_label || s.model_backend],
       ["DeepSeek", s.deepseek_model],
       ["Thinking", s.deepseek_thinking],
+      ["Skill selection", s.skill_selection_mode],
+      ["Planning mode", s.planning_mode],
+      ["Budget enabled", s.budget?.enabled ? "yes" : "no"],
+      ["Pre hooks", (s.hooks?.pre_tool || []).length],
+      ["Post hooks", (s.hooks?.post_tool || []).length],
       ["Shell profile", s.shell_profile],
       ["Workspace", s.workspace],
       ["Config", s.config_path],
@@ -161,6 +173,56 @@ async function loadSettings() {
     }
   } catch {
     els.settingsList.innerHTML = '<p class="empty-hint">无法加载设置</p>';
+  }
+}
+
+async function loadProposals() {
+  if (!els.proposalList) return;
+  try {
+    const data = await api("/api/proposals?status=open");
+    const proposals = data.proposals || [];
+    els.proposalList.innerHTML = "";
+    if (!proposals.length) {
+      els.proposalList.innerHTML = '<li class="empty-hint">暂无 open proposal</li>';
+      if (els.proposalDetail) {
+        els.proposalDetail.classList.add("hidden");
+        els.proposalDetail.textContent = "";
+      }
+      return;
+    }
+    for (const p of proposals) {
+      const li = document.createElement("li");
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.innerHTML = `<strong>${escapeHtml(p.id)}</strong><span class="meta">${escapeHtml(p.kind || "")} · ${escapeHtml(String(p.occurrences || ""))}</span>`;
+      btn.addEventListener("click", () => openProposal(p.id));
+      li.appendChild(btn);
+      els.proposalList.appendChild(li);
+    }
+  } catch {
+    els.proposalList.innerHTML = '<li class="empty-hint">proposal 加载失败</li>';
+  }
+}
+
+async function openProposal(id) {
+  if (!els.proposalDetail) return;
+  try {
+    const data = await api(`/api/proposals/${id}`);
+    const p = data.proposal || {};
+    const lines = [
+      `id: ${p.id || ""}`,
+      `status: ${p.status || ""}`,
+      `kind: ${p.kind || ""}`,
+      `occurrences: ${p.occurrences || ""}`,
+      `generated_at: ${p.generated_at || ""}`,
+      "",
+      p.body_markdown || "",
+    ];
+    els.proposalDetail.classList.remove("hidden");
+    els.proposalDetail.textContent = lines.join("\n");
+  } catch (err) {
+    els.proposalDetail.classList.remove("hidden");
+    els.proposalDetail.textContent = `加载失败: ${err.message || err}`;
   }
 }
 
@@ -182,7 +244,9 @@ async function loadSessions() {
 async function openSession(id) {
   currentSessionId = id;
   rememberMode = false;
+  skillMode = false;
   els.rememberBtn.textContent = "记住";
+  els.skillBtn.textContent = "技能";
   const data = await api(`/api/sessions/${id}`);
   els.title.textContent = data.session.title || data.session.goal;
   els.status.textContent = data.session.status;
@@ -196,7 +260,9 @@ async function openSession(id) {
 function startNewChat() {
   currentSessionId = null;
   rememberMode = false;
+  skillMode = false;
   els.rememberBtn.textContent = "记住";
+  els.skillBtn.textContent = "技能";
   els.title.textContent = "新对话";
   els.status.textContent = "";
   renderMessages([]);
@@ -215,6 +281,12 @@ function prepareOutgoingText(text) {
     els.rememberBtn.textContent = "记住";
     if (trimmed.startsWith("/remember ")) return trimmed;
     return `/remember ${trimmed}`;
+  }
+  if (skillMode || trimmed.startsWith("/skill")) {
+    skillMode = false;
+    els.skillBtn.textContent = "技能";
+    if (trimmed.startsWith("/skill")) return trimmed;
+    return `/skill ${trimmed}`;
   }
   return trimmed;
 }
@@ -310,6 +382,10 @@ async function forkSession() {
 }
 
 function toggleRememberMode() {
+  if (skillMode) {
+    skillMode = false;
+    els.skillBtn.textContent = "技能";
+  }
   rememberMode = !rememberMode;
   els.rememberBtn.textContent = rememberMode ? "记住 ✓" : "记住";
   if (rememberMode) {
@@ -322,11 +398,45 @@ function toggleRememberMode() {
 }
 
 function insertRememberPrefix() {
+  if (skillMode) {
+    skillMode = false;
+    els.skillBtn.textContent = "技能";
+  }
   rememberMode = true;
   els.rememberBtn.textContent = "记住 ✓";
   const val = els.input.value;
   if (!val.startsWith("/remember ")) {
     els.input.value = `/remember ${val}`.trimEnd();
+  }
+  els.input.focus();
+}
+
+function toggleSkillMode() {
+  if (rememberMode) {
+    rememberMode = false;
+    els.rememberBtn.textContent = "记住";
+  }
+  skillMode = !skillMode;
+  els.skillBtn.textContent = skillMode ? "技能 ✓" : "技能";
+  if (skillMode) {
+    els.input.focus();
+    if (!els.input.value.startsWith("/skill ")) {
+      els.input.value = "/skill ";
+      els.input.setSelectionRange(els.input.value.length, els.input.value.length);
+    }
+  }
+}
+
+function insertSkillPrefix() {
+  if (rememberMode) {
+    rememberMode = false;
+    els.rememberBtn.textContent = "记住";
+  }
+  skillMode = true;
+  els.skillBtn.textContent = "技能 ✓";
+  const val = els.input.value;
+  if (!val.startsWith("/skill ")) {
+    els.input.value = `/skill ${val}`.trimEnd();
   }
   els.input.focus();
 }
@@ -360,10 +470,18 @@ els.input.addEventListener("keydown", (e) => {
 els.newChat.addEventListener("click", startNewChat);
 els.forkBtn.addEventListener("click", forkSession);
 els.rememberBtn.addEventListener("click", toggleRememberMode);
+els.skillBtn.addEventListener("click", toggleSkillMode);
 els.rememberInline.addEventListener("click", insertRememberPrefix);
+els.skillInline.addEventListener("click", insertSkillPrefix);
 els.clearTrace.addEventListener("click", clearTracePanel);
+if (els.refreshProposals) {
+  els.refreshProposals.addEventListener("click", () => {
+    loadProposals().catch(() => {});
+  });
+}
 
 clearTracePanel();
 updateSessionActions();
 loadSettings().catch(() => {});
 loadSessions().catch((err) => showError(err.message));
+loadProposals().catch(() => {});

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import os
 import threading
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -20,7 +21,8 @@ from harnesslab.replay.trace_reader import read_trace
 from harnesslab.telemetry.log import get_logger
 from harnesslab.web.trace_hub import TraceHub
 
-_STATIC_DIR = Path(__file__).resolve().parent / "static"
+_LEGACY_STATIC_DIR = Path(__file__).resolve().parent / "static"
+_TS_STATIC_DIR = Path(__file__).resolve().parent / "static_ts"
 _log = get_logger("web.server")
 
 TOOL_PANEL_EVENT_TYPES = frozenset(
@@ -38,6 +40,9 @@ TOOL_PANEL_EVENT_TYPES = frozenset(
         "compaction_started",
         "compaction_completed",
         "session_titled",
+        "hook_invoked",
+        "hook_blocked",
+        "hook_failed",
     }
 )
 
@@ -73,6 +78,7 @@ def _session_json(session: Session, *, memory_notes: str | None = None) -> dict[
         "last_step_at": session.last_step_at.isoformat() if session.last_step_at else None,
         "parent_session_id": session.parent_session_id,
         "message_count": len(session.messages),
+        "budget_usage": session.budget_usage.model_dump(mode="json"),
     }
     if memory_notes is not None:
         payload["memory_notes"] = memory_notes
@@ -188,6 +194,21 @@ class _Handler(BaseHTTPRequestHandler):
 
         if path == "/api/settings":
             return self._json_ok({"settings": self.runtime.settings})
+
+        if path == "/api/proposals":
+            qs = parse_qs(parsed.query)
+            status = qs.get("status", ["open"])[0]
+            proposals = _load_proposals(self.runtime.workspace_root, status=status)
+            return self._json_ok({"proposals": proposals})
+
+        if path.startswith("/api/proposals/"):
+            proposal_id = path[len("/api/proposals/") :].strip("/")
+            if not proposal_id:
+                raise ValueError("proposal id required")
+            proposal = _load_one_proposal(self.runtime.workspace_root, proposal_id)
+            if proposal is None:
+                raise KeyError("proposal not found")
+            return self._json_ok({"proposal": proposal})
 
         if path == "/api/health":
             return self._json_ok(
@@ -368,12 +389,13 @@ class _Handler(BaseHTTPRequestHandler):
         return _session_trace_events(self.runtime, session_id)
 
     def _serve_static(self, rel: str) -> None:
+        static_dir = _select_static_dir()
         safe = Path(rel)
         if safe.is_absolute() or ".." in safe.parts:
             self._json_error(HTTPStatus.NOT_FOUND, "not found")
             return
-        file_path = (_STATIC_DIR / safe).resolve()
-        if not str(file_path).startswith(str(_STATIC_DIR.resolve())):
+        file_path = (static_dir / safe).resolve()
+        if not str(file_path).startswith(str(static_dir.resolve())):
             self._json_error(HTTPStatus.NOT_FOUND, "not found")
             return
         if not file_path.is_file():
@@ -427,3 +449,94 @@ def serve(
         print("\nShutting down.")
     finally:
         server.server_close()
+
+
+def _select_static_dir() -> Path:
+    requested = os.environ.get("HARNESSLAB_WEB_UI_VERSION", "legacy").strip().lower()
+    if requested == "ts" and _TS_STATIC_DIR.is_dir():
+        return _TS_STATIC_DIR
+    return _LEGACY_STATIC_DIR
+
+
+def _load_proposals(workspace_root: Path, *, status: str = "open") -> list[dict[str, Any]]:
+    proposals_dir = workspace_root / "proposals"
+    if not proposals_dir.is_dir():
+        return []
+    out: list[dict[str, Any]] = []
+    for path in sorted(proposals_dir.glob("prop_*.md"), reverse=True):
+        parsed = _parse_proposal_markdown(path)
+        if parsed is None:
+            continue
+        if status != "all" and parsed.get("status") != status:
+            continue
+        out.append(
+            {
+                "id": parsed.get("id"),
+                "status": parsed.get("status"),
+                "kind": parsed.get("kind"),
+                "cluster_signature": parsed.get("cluster_signature"),
+                "occurrences": parsed.get("occurrences"),
+                "generated_at": parsed.get("generated_at"),
+            }
+        )
+    return out
+
+
+def _load_one_proposal(workspace_root: Path, proposal_id: str) -> dict[str, Any] | None:
+    proposals_dir = workspace_root / "proposals"
+    path = proposals_dir / f"{proposal_id}.md"
+    if not path.is_file():
+        return None
+    parsed = _parse_proposal_markdown(path)
+    if parsed is None:
+        return None
+    return {
+        "id": parsed.get("id"),
+        "status": parsed.get("status"),
+        "kind": parsed.get("kind"),
+        "cluster_signature": parsed.get("cluster_signature"),
+        "occurrences": parsed.get("occurrences"),
+        "generated_at": parsed.get("generated_at"),
+        "related_files": parsed.get("related_files", []),
+        "body_markdown": parsed.get("body_markdown", ""),
+    }
+
+
+def _parse_proposal_markdown(path: Path) -> dict[str, Any] | None:
+    text = path.read_text(encoding="utf-8")
+    lines = text.splitlines()
+    if len(lines) < 3 or lines[0].strip() != "---":
+        return None
+    end = None
+    for i in range(1, len(lines)):
+        if lines[i].strip() == "---":
+            end = i
+            break
+    if end is None:
+        return None
+    front = lines[1:end]
+    body = "\n".join(lines[end + 1 :]).strip()
+    parsed: dict[str, Any] = {"related_files": []}
+    idx = 0
+    while idx < len(front):
+        line = front[idx]
+        if line.startswith("related_files:"):
+            idx += 1
+            related: list[str] = []
+            while idx < len(front) and front[idx].lstrip().startswith("- "):
+                related.append(front[idx].split("- ", 1)[1].strip())
+                idx += 1
+            parsed["related_files"] = related
+            continue
+        if ":" in line:
+            key, raw = line.split(":", 1)
+            value = raw.strip().strip('"')
+            parsed[key.strip()] = value
+        idx += 1
+    if "id" not in parsed:
+        parsed["id"] = path.stem
+    occurrences = parsed.get("occurrences")
+    if isinstance(occurrences, str) and occurrences.isdigit():
+        parsed["occurrences"] = int(occurrences)
+    parsed["body_markdown"] = body
+    return parsed

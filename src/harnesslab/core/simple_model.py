@@ -13,6 +13,7 @@ class SimpleModel:
 
     - ``/tool <tool_name> <json_args>`` → ``kind="tool"`` (non-terminal;
       the loop will execute the tool and call this model again)
+    - ``/plan <message>`` → ``kind="plan"`` (non-terminal planning step)
     - ``/final <message>`` → ``kind="final"`` (terminal answer)
     - ``/ask <message>`` → ``kind="ask_user"`` (terminal pause)
     - anything else → ``kind="final"`` with the canned greeting
@@ -52,6 +53,12 @@ class SimpleModel:
             return Decision(
                 kind="final",
                 assistant_message=text[len("/final ") :].strip() or self._CANNED_FINAL,
+            )
+
+        if text.startswith("/plan "):
+            return Decision(
+                kind="plan",
+                assistant_message=text[len("/plan ") :].strip() or "Plan drafted.",
             )
 
         if text.startswith("/ask "):
