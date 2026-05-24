@@ -7,6 +7,8 @@ from collections.abc import Callable
 from typing import Any
 
 import httpx
+from openai import APIConnectionError, APITimeoutError
+from openai import APIStatusError as OpenAIAPIStatusError
 
 from harnesslab.core.compaction import ModelOverflowError, estimate_tokens
 from harnesslab.core.models import Decision, Session
@@ -17,6 +19,7 @@ from harnesslab.providers.model_resolve import (
     resolve_deepseek_model_name,
 )
 from harnesslab.providers.transforms.openai_chat import parse_response, serialize_messages
+from harnesslab.providers.transports.openai_chat import OpenAIChatTransport
 
 DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
 # Official API models (2026): deepseek-v4-flash, deepseek-v4-pro.
@@ -59,6 +62,7 @@ class DeepSeekModel:
         thinking_mode: str = "disabled",
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         transport: httpx.BaseTransport | None = None,
+        chat_transport: OpenAIChatTransport | None = None,
         composer: PromptComposer | None = None,
         dynamic_blocks_provider: DynamicBlocksProvider | None = None,
     ) -> None:
@@ -72,14 +76,11 @@ class DeepSeekModel:
         self._base_url = base_url or os.getenv("DEEPSEEK_BASE_URL") or DEFAULT_BASE_URL
         self._model_name = resolve_deepseek_model_name(model_name=model_name)
         self._thinking_mode = (thinking_mode or "disabled").strip().lower()
-        self._client = httpx.Client(
-            base_url=self._base_url.rstrip("/"),
-            timeout=timeout_seconds,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-            },
-            transport=transport,
+        self._chat = chat_transport or OpenAIChatTransport(
+            api_key=api_key,
+            base_url=self._base_url,
+            timeout_seconds=timeout_seconds,
+            httpx_transport=transport,
         )
         self._composer = composer or PromptComposer()
         self._dynamic_blocks_provider = dynamic_blocks_provider or _no_dynamic_blocks
@@ -99,13 +100,17 @@ class DeepSeekModel:
             **prompt_meta,
         }
         try:
-            response = self._client.post("/chat/completions", json=body)
-            if _is_context_overflow(response):
-                self._last_call_meta = dict(base_meta)
-                raise ModelOverflowError(_overflow_message(response))
-            response.raise_for_status()
-            payload = response.json()
-        except httpx.HTTPError as exc:
+            payload = self._chat.create_chat_completion(body)
+        except ModelOverflowError:
+            self._last_call_meta = dict(base_meta)
+            raise
+        except OpenAIAPIStatusError as exc:
+            self._last_call_meta = dict(base_meta)
+            return Decision(
+                kind="final",
+                assistant_message=f"DeepSeek request failed: {type(exc).__name__}: {exc}",
+            )
+        except (APIConnectionError, APITimeoutError, httpx.HTTPError) as exc:
             self._last_call_meta = dict(base_meta)
             return Decision(
                 kind="final",
@@ -116,7 +121,10 @@ class DeepSeekModel:
             **base_meta,
             **_usage_meta(payload.get("usage")),
         }
-        return parse_response(payload).decision
+        turn = parse_response(payload)
+        if turn.reasoning_text:
+            self._last_call_meta["reasoning_text"] = turn.reasoning_text
+        return turn.decision
 
     def last_call_meta(self) -> dict[str, Any]:
         return dict(self._last_call_meta)
@@ -159,49 +167,6 @@ def _decision_from_payload(payload: dict[str, Any]) -> Decision:
     """Backward-compatible wrapper around :func:`parse_response`."""
 
     return parse_response(payload).decision
-
-
-_OVERFLOW_HINTS = (
-    "context_length_exceeded",
-    "context length exceeded",
-    "maximum context length",
-    "too many tokens",
-)
-
-
-def _is_context_overflow(response: httpx.Response) -> bool:
-    """Detect OpenAI / DeepSeek context-overflow responses.
-
-    These come back as HTTP 400 with an ``error.code`` of
-    ``context_length_exceeded`` (or a similar phrase in
-    ``error.message``). We treat any 400 whose body mentions one of
-    the hint strings as an overflow so the loop can run emergency
-    compaction instead of bubbling the error to the user.
-    """
-
-    if response.status_code != 400:
-        return False
-    try:
-        body = response.json()
-    except ValueError:
-        return False
-    error = body.get("error") if isinstance(body, dict) else None
-    if not isinstance(error, dict):
-        return False
-    code = (error.get("code") or "").lower()
-    msg = (error.get("message") or "").lower()
-    return any(hint in code or hint in msg for hint in _OVERFLOW_HINTS)
-
-
-def _overflow_message(response: httpx.Response) -> str:
-    try:
-        body = response.json()
-    except ValueError:
-        return "DeepSeek context length exceeded"
-    error = body.get("error") if isinstance(body, dict) else None
-    if isinstance(error, dict) and error.get("message"):
-        return f"DeepSeek context length exceeded: {error['message']}"
-    return "DeepSeek context length exceeded"
 
 
 def _prompt_meta(prompt: ComposedPrompt | None) -> dict[str, Any]:

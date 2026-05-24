@@ -1,4 +1,9 @@
-"""Unit tests for DeepSeekModel provider adapter."""
+"""Unit tests for DeepSeekModel provider adapter.
+
+Transport-level behavior (SDK request shape, overflow mapping) lives in
+``test_openai_chat_transport.py``. Parse/replay algorithms live in
+``test_openai_chat_transform.py``. This module covers adapter integration.
+"""
 
 from __future__ import annotations
 
@@ -99,6 +104,102 @@ def test_returns_tool_decision() -> None:
     assert decision.kind == "tool"
     assert decision.tool_name == "write_file"
     assert decision.tool_args == {"path": "a.txt", "content": "x"}
+
+
+def test_last_call_meta_includes_reasoning_text() -> None:
+    payload = {
+        "choices": [
+            {
+                "message": {
+                    "tool_calls": [
+                        {
+                            "function": {
+                                "name": "grep",
+                                "arguments": json.dumps({"pattern": "x"}),
+                            }
+                        }
+                    ],
+                    "reasoning_content": "search first",
+                }
+            }
+        ],
+        "usage": {},
+    }
+    model = DeepSeekModel(
+        tool_specs_provider=lambda: [],
+        api_key="x",
+        transport=_transport(payload),
+    )
+    model.decide(_session(), "grep")
+    assert model.last_call_meta()["reasoning_text"] == "search first"
+
+
+def test_request_body_replays_reasoning_in_open_tool_loop() -> None:
+    """Second model call after a tool result must include reasoning_content."""
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content.decode("utf-8")))
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "done after tool"}}]},
+        )
+
+    session = Session(
+        id="ses_tool_loop",
+        goal="demo",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        messages=[
+            Message(
+                id="msg_u",
+                role="user",
+                content="run grep",
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
+                session_id="ses_tool_loop",
+            ),
+            Message(
+                id="msg_a",
+                role="assistant",
+                content="",
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
+                session_id="ses_tool_loop",
+                tool_calls=[
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "grep",
+                            "arguments": json.dumps({"pattern": "foo"}),
+                        },
+                    }
+                ],
+                reasoning_text="plan: grep foo",
+            ),
+            Message(
+                id="msg_t",
+                role="tool",
+                content="[tool:grep] matches",
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
+                session_id="ses_tool_loop",
+                tool_call_id="call_1",
+            ),
+        ],
+    )
+
+    model = DeepSeekModel(
+        tool_specs_provider=lambda: [],
+        api_key="x",
+        transport=httpx.MockTransport(handler),
+    )
+    model.decide(session, "run grep")
+
+    assistant_msgs = [
+        m
+        for m in captured["messages"]
+        if m.get("role") == "assistant" and m.get("tool_calls")
+    ]
+    assert assistant_msgs
+    assert assistant_msgs[-1]["reasoning_content"] == "plan: grep foo"
 
 
 def test_invalid_tool_call_json_falls_back_to_final() -> None:

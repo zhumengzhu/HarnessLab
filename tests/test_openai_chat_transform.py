@@ -1,4 +1,9 @@
-"""Tests for OpenAI Chat Completions transform hooks (Post-MVP P1)."""
+"""Tests for OpenAI Chat Completions transform hooks (Post-MVP P1).
+
+Parse edge cases shared with DeepSeek (invalid JSON, empty choices) live in
+``test_deepseek_provider.py`` as adapter integration smoke tests. This module
+owns serialize/replay policy and reasoning-specific parse coverage.
+"""
 
 from __future__ import annotations
 
@@ -163,25 +168,6 @@ def test_parse_response_tool_with_reasoning() -> None:
     assert turn.decision.tool_name == "grep"
     assert turn.decision.tool_args == {"pattern": "foo"}
     assert turn.reasoning_text == "need grep"
-
-
-def test_parse_response_invalid_tool_args() -> None:
-    turn = parse_response(
-        {
-            "choices": [
-                {
-                    "message": {
-                        "tool_calls": [
-                            {"function": {"name": "grep", "arguments": "not-json"}}
-                        ]
-                    }
-                }
-            ]
-        },
-        _entry(),
-    )
-    assert turn.decision.kind == "final"
-    assert "invalid JSON" in (turn.decision.assistant_message or "")
 
 
 def test_replay_policy_none_for_reasoning_support_none() -> None:

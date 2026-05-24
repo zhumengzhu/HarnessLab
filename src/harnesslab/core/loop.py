@@ -654,6 +654,17 @@ class HarnessLoop:
 
         return self._apply_tool_decision(session, decision)
 
+    def _model_reasoning_text(self) -> str | None:
+        """Optional reasoning from the last model call (networked adapters)."""
+
+        raw = self._model_raw_meta()
+        if not raw:
+            return None
+        reasoning = raw.get("reasoning_text")
+        if isinstance(reasoning, str) and reasoning.strip():
+            return reasoning.strip()
+        return None
+
     def _apply_tool_decision(
         self,
         session: Session,
@@ -748,6 +759,7 @@ class HarnessLoop:
                 content="",
                 session=session,
                 tool_calls=_tool_calls_payload(call),
+                reasoning_text=self._model_reasoning_text(),
             )
         )
         session.messages.append(
@@ -766,6 +778,7 @@ class HarnessLoop:
         session: Session,
         tool_call_id: str | None = None,
         tool_calls: list[dict] | None = None,
+        reasoning_text: str | None = None,
     ) -> Message:
         return Message(
             id=self._ids.new_id("msg"),
@@ -775,6 +788,7 @@ class HarnessLoop:
             session_id=session.id,
             tool_call_id=tool_call_id,
             tool_calls=tool_calls,
+            reasoning_text=reasoning_text,
         )
 
     def _make_tool_call(self, session_id: str, name: str, args: dict) -> ToolCall:
