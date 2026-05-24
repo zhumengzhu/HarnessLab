@@ -12,6 +12,9 @@ ReasoningSupport = Literal["native", "proxy", "none"]
 _CATALOG_DIR = Path(__file__).resolve().parent / "catalog"
 
 
+ThinkingSchema = Literal["none", "budget", "level"]
+
+
 @dataclass(frozen=True)
 class CatalogEntry:
     model_id: str
@@ -20,6 +23,7 @@ class CatalogEntry:
     context_window: int
     thinking_default: str
     reasoning_support: ReasoningSupport = "none"
+    thinking_schema: ThinkingSchema = "none"
 
 
 def _entry_from_dict(raw: dict[str, object]) -> CatalogEntry:
@@ -29,6 +33,7 @@ def _entry_from_dict(raw: dict[str, object]) -> CatalogEntry:
     context_window = raw.get("context_window")
     thinking_default = raw.get("thinking_default")
     reasoning_support = raw.get("reasoning_support", "none")
+    thinking_schema = raw.get("thinking_schema", "none")
     if not isinstance(model_id, str) or not model_id:
         raise ValueError("catalog entry missing model_id")
     if not isinstance(provider, str) or not provider:
@@ -43,6 +48,10 @@ def _entry_from_dict(raw: dict[str, object]) -> CatalogEntry:
         raise ValueError(
             f"catalog entry {model_id!r} has invalid reasoning_support: {reasoning_support!r}"
         )
+    if thinking_schema not in {"none", "budget", "level"}:
+        raise ValueError(
+            f"catalog entry {model_id!r} has invalid thinking_schema: {thinking_schema!r}"
+        )
     return CatalogEntry(
         model_id=model_id,
         provider=provider,
@@ -50,6 +59,7 @@ def _entry_from_dict(raw: dict[str, object]) -> CatalogEntry:
         context_window=context_window,
         thinking_default=thinking_default,
         reasoning_support=reasoning_support,  # type: ignore[arg-type]
+        thinking_schema=thinking_schema,  # type: ignore[arg-type]
     )
 
 

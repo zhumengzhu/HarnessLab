@@ -2,11 +2,28 @@
   "version": 1,
   "model": {
     "default_backend": "deepseek",
+    "failover_enabled": false,
+    "fallbacks": ["simple"],
     "deepseek": {
       "base_url": "https://api.deepseek.com/v1",
       "model_name": "deepseek-v4-flash",
       "api_key_env": "DEEPSEEK_API_KEY",
       "thinking": "disabled"
+    },
+    "anthropic": {
+      "model_name": "claude-sonnet-4-6",
+      "api_key_env": "ANTHROPIC_API_KEY",
+      "thinking": { "mode": "adaptive", "effort": "medium" }
+    },
+    "openai": {
+      "model_name": "gpt-5-mini",
+      "api_key_env": "OPENAI_API_KEY",
+      "reasoning_effort": "none"
+    },
+    "gemini": {
+      "model_name": "gemini-2.5-flash",
+      "api_key_env": "GOOGLE_API_KEY",
+      "thinking_budget": -1
     }
   },
   "serve": {

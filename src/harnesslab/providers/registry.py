@@ -15,17 +15,22 @@ from harnesslab.core.prompt import PromptBlock, PromptComposer
 from harnesslab.core.simple_model import SimpleModel
 from harnesslab.providers.anthropic import AnthropicModel
 from harnesslab.providers.deepseek import DeepSeekModel
+from harnesslab.providers.failover import FailoverModel
+from harnesslab.providers.gemini import GeminiModel
 from harnesslab.providers.model_resolve import (
     resolve_anthropic_model_name,
     resolve_deepseek_model_name,
+    resolve_gemini_model_name,
     resolve_openai_model_name,
 )
 from harnesslab.providers.openai_responses import OpenAIResponsesModel
 from harnesslab.telemetry.log import get_logger
 
-ModelBackend = Literal["simple", "deepseek", "anthropic", "openai"]
+ModelBackend = Literal["simple", "deepseek", "anthropic", "openai", "gemini"]
 
-SUPPORTED_BACKENDS: frozenset[str] = frozenset({"simple", "deepseek", "anthropic", "openai"})
+SUPPORTED_BACKENDS: frozenset[str] = frozenset(
+    {"simple", "deepseek", "anthropic", "openai", "gemini"}
+)
 _log = get_logger("providers.registry")
 
 DynamicBlocksProvider = Callable[[Session], list[PromptBlock]]
@@ -46,10 +51,59 @@ def create_model(
     tool_specs_provider: Callable[[], list[dict[str, Any]]],
     dynamic_blocks_provider: DynamicBlocksProvider,
     composer: PromptComposer | None = None,
-) -> SimpleModel | DeepSeekModel | AnthropicModel | OpenAIResponsesModel:
+) -> (
+    SimpleModel
+    | DeepSeekModel
+    | AnthropicModel
+    | OpenAIResponsesModel
+    | GeminiModel
+    | FailoverModel
+):
     """Instantiate a ``ModelPort`` for ``backend`` using operator config."""
 
     normalized = normalize_backend(backend)
+    primary = _create_single_model(
+        normalized,
+        config=config,
+        tool_specs_provider=tool_specs_provider,
+        dynamic_blocks_provider=dynamic_blocks_provider,
+        composer=composer,
+    )
+    if config is None or not config.model_failover_enabled or not config.model_fallbacks:
+        return primary
+
+    chain: list[Any] = [primary]
+    labels: list[str] = [normalized]
+    for fallback_backend in config.model_fallbacks:
+        fb = normalize_backend(fallback_backend)
+        if fb in labels:
+            continue
+        chain.append(
+            _create_single_model(
+                fb,
+                config=config,
+                tool_specs_provider=tool_specs_provider,
+                dynamic_blocks_provider=dynamic_blocks_provider,
+                composer=composer,
+            )
+        )
+        labels.append(fb)
+
+    if len(chain) == 1:
+        return primary
+
+    _log.info("model failover enabled chain=%s", " -> ".join(labels))
+    return FailoverModel(chain, backend_labels=labels)
+
+
+def _create_single_model(
+    normalized: str,
+    *,
+    config: OperatorConfig | None,
+    tool_specs_provider: Callable[[], list[dict[str, Any]]],
+    dynamic_blocks_provider: DynamicBlocksProvider,
+    composer: PromptComposer | None,
+) -> SimpleModel | DeepSeekModel | AnthropicModel | OpenAIResponsesModel | GeminiModel:
     if normalized == "simple":
         _log.info("model backend=simple")
         return SimpleModel()
@@ -91,6 +145,25 @@ def create_model(
             dynamic_blocks_provider=dynamic_blocks_provider,
         )
 
+    if normalized == "gemini":
+        model_name = resolve_gemini_model_name(config=config)
+        budget = config.gemini_thinking_budget if config else None
+        level = config.gemini_thinking_level if config else None
+        _log.info(
+            "model backend=gemini model_name=%s budget=%s level=%s",
+            model_name,
+            budget if budget is not None else "-",
+            level or "-",
+        )
+        return GeminiModel(
+            tool_specs_provider=tool_specs_provider,
+            model_name=model_name,
+            thinking_budget=budget,
+            thinking_level=level,
+            composer=composer,
+            dynamic_blocks_provider=dynamic_blocks_provider,
+        )
+
     model_name = resolve_deepseek_model_name(config=config)
     thinking = (config.deepseek_thinking if config else "disabled") or "disabled"
     _log.info("model backend=deepseek model_name=%s thinking=%s", model_name, thinking)
@@ -119,5 +192,8 @@ def model_label(
     if normalized == "openai":
         name = resolve_openai_model_name(config=config)
         return f"openai ({name})"
+    if normalized == "gemini":
+        name = resolve_gemini_model_name(config=config)
+        return f"gemini ({name})"
     name = resolve_deepseek_model_name(config=config)
     return f"deepseek ({name})"

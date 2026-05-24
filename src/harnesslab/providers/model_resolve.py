@@ -8,6 +8,7 @@ from typing import Any
 DEFAULT_DEEPSEEK_MODEL = "deepseek-v4-flash"
 DEFAULT_ANTHROPIC_MODEL = "claude-sonnet-4-6"
 DEFAULT_OPENAI_MODEL = "gpt-5-mini"
+DEFAULT_GEMINI_MODEL = "gemini-2.5-flash"
 
 
 def resolve_deepseek_model_name(
@@ -62,3 +63,21 @@ def resolve_openai_model_name(
     if env:
         return env.strip()
     return DEFAULT_OPENAI_MODEL
+
+
+def resolve_gemini_model_name(
+    *,
+    model_name: str | None = None,
+    config: Any | None = None,
+) -> str:
+    """Resolve Gemini model id from explicit arg, operator config, or env."""
+
+    if model_name:
+        return model_name.strip()
+    configured = getattr(config, "gemini_model_name", None) if config is not None else None
+    if configured:
+        return str(configured).strip()
+    env = os.getenv("GEMINI_MODEL") or os.getenv("GOOGLE_MODEL")
+    if env:
+        return env.strip()
+    return DEFAULT_GEMINI_MODEL

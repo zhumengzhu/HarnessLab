@@ -23,6 +23,7 @@ from harnesslab.policy.shell_profiles import DEFAULT_SHELL_PROFILE
 from harnesslab.providers.model_resolve import (
     resolve_anthropic_model_name,
     resolve_deepseek_model_name,
+    resolve_gemini_model_name,
     resolve_openai_model_name,
 )
 
@@ -45,6 +46,12 @@ class OperatorConfig:
     openai_reasoning_effort: str = "none"
     openai_base_url: str | None = None
     openai_api_key_env: str = "OPENAI_API_KEY"
+    gemini_model_name: str | None = None
+    gemini_thinking_budget: int | None = None
+    gemini_thinking_level: str | None = None
+    gemini_api_key_env: str = "GOOGLE_API_KEY"
+    model_failover_enabled: bool = False
+    model_fallbacks: tuple[str, ...] = ()
     serve_host: str = "127.0.0.1"
     serve_port: int = 8787
     serve_max_steps: int = 20
@@ -86,6 +93,8 @@ def apply_provider_env(config: OperatorConfig) -> None:
         os.environ["OPENAI_MODEL"] = config.openai_model_name
     if config.openai_base_url and not os.environ.get("OPENAI_BASE_URL"):
         os.environ["OPENAI_BASE_URL"] = config.openai_base_url
+    if config.gemini_model_name and not os.environ.get("GEMINI_MODEL"):
+        os.environ["GEMINI_MODEL"] = config.gemini_model_name
 
 
 def resolve_model_backend(
@@ -147,6 +156,11 @@ def config_settings_snapshot(
         "anthropic_thinking_effort": config.anthropic_thinking_effort,
         "openai_model": resolve_openai_model_name(config=config),
         "openai_reasoning_effort": config.openai_reasoning_effort,
+        "gemini_model": resolve_gemini_model_name(config=config),
+        "gemini_thinking_budget": config.gemini_thinking_budget,
+        "gemini_thinking_level": config.gemini_thinking_level,
+        "model_failover_enabled": config.model_failover_enabled,
+        "model_fallbacks": list(config.model_fallbacks),
         "shell_profile": config.shell_profile,
         "serve": {
             "host": config.serve_host,
@@ -178,6 +192,10 @@ def _parse_config(data: dict[str, Any]) -> OperatorConfig:
     if openai is not None and not isinstance(openai, dict):
         raise ValueError("model.openai must be an object")
 
+    gemini = model.get("gemini", {})
+    if gemini is not None and not isinstance(gemini, dict):
+        raise ValueError("model.gemini must be an object")
+
     serve = data.get("serve", {})
     if not isinstance(serve, dict):
         raise ValueError("serve must be an object")
@@ -208,6 +226,12 @@ def _parse_config(data: dict[str, Any]) -> OperatorConfig:
         openai_reasoning_effort=str(openai.get("reasoning_effort", "none")),
         openai_base_url=_optional_str(openai.get("base_url")),
         openai_api_key_env=str(openai.get("api_key_env", "OPENAI_API_KEY")),
+        gemini_model_name=_optional_str(gemini.get("model_name")),
+        gemini_thinking_budget=_optional_int(gemini.get("thinking_budget")),
+        gemini_thinking_level=_optional_str(gemini.get("thinking_level")),
+        gemini_api_key_env=str(gemini.get("api_key_env", "GOOGLE_API_KEY")),
+        model_failover_enabled=bool(model.get("failover_enabled", False)),
+        model_fallbacks=_parse_fallbacks(model.get("fallbacks")),
         serve_host=str(serve.get("host", "127.0.0.1")),
         serve_port=int(serve.get("port", 8787)),
         serve_max_steps=int(serve.get("max_steps", 20)),
@@ -221,6 +245,36 @@ def _optional_str(value: Any) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _optional_int(value: Any) -> int | None:
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    text = str(value).strip()
+    if not text:
+        return None
+    return int(text)
+
+
+def _parse_fallbacks(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    out: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            continue
+        backend = item.strip().lower()
+        if not backend:
+            continue
+        if "/" in backend:
+            backend = backend.split("/", 1)[0].strip()
+        if backend and backend not in out:
+            out.append(backend)
+    return tuple(out)
 
 
 def _anthropic_thinking_mode(anthropic: dict[str, Any]) -> str:

@@ -313,6 +313,23 @@ Notes:
   deferred (the Step 5 replayer reads JSONL directly, which is enough
   for the current divergence/metrics use cases).
 
+### OpenTelemetry fan-out (Post-MVP P7)
+
+When `HARNESSLAB_OTEL=1` or `OTEL_EXPORTER_OTLP_ENDPOINT` is set, CLI and
+`hl-serve` wrap the inner JSONL recorder with `OtelTraceRecorder`
+(`telemetry/otel_recorder.py`). Each `TraceEvent` still lands in JSONL
+unchanged; a parallel OTel span is emitted with:
+
+- **Span name:** `harnesslab.{event_type}` (e.g. `harnesslab.model_call`)
+- **Stable attributes:** `harnesslab.run_id`, `harnesslab.session_id`,
+  `harnesslab.event_type`, and non-volatile `harnesslab.payload.*` keys copied
+  from `payload`
+- **Excluded from spans:** token counters, `latency_ms`, `model_name`,
+  `provider`, `api_family`, and other fields already treated as volatile for
+  semantic replay compare
+
+Eval and replay **must not** depend on OTel export or collector availability.
+
 ## Compatibility Guidance
 
 To simplify Python -> TypeScript migration:

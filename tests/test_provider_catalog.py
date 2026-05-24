@@ -14,6 +14,8 @@ def test_builtin_catalog_loads_deepseek_models() -> None:
     assert "deepseek-v4-pro" in ids
     assert "claude-sonnet-4-6" in ids
     assert "gpt-5-mini" in ids
+    assert "gemini-2.5-flash" in ids
+    assert "gemini-3-flash-preview" in ids
 
 
 def test_catalog_get_returns_entry_fields() -> None:
@@ -28,6 +30,13 @@ def test_catalog_get_returns_entry_fields() -> None:
 def test_catalog_resolve_accepts_provider_ref() -> None:
     entry = ModelCatalog().resolve("deepseek/deepseek-v4-pro")
     assert entry.model_id == "deepseek-v4-pro"
+
+
+def test_gemini_catalog_thinking_schema() -> None:
+    budget = ModelCatalog().get("gemini-2.5-flash")
+    level = ModelCatalog().get("gemini-3-flash-preview")
+    assert budget.thinking_schema == "budget"
+    assert level.thinking_schema == "level"
 
 
 def test_catalog_get_unknown_raises() -> None:

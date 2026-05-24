@@ -1,0 +1,9 @@
+{
+  "model_id": "gemini-3-flash-preview",
+  "provider": "google",
+  "api_family": "google_generate_content",
+  "context_window": 1048576,
+  "thinking_default": "high",
+  "reasoning_support": "native",
+  "thinking_schema": "level"
+}

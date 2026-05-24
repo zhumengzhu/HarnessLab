@@ -55,6 +55,7 @@ from harnesslab.session.sqlite_store import SqliteSessionStore
 from harnesslab.telemetry.aggregate import aggregate, render_metrics
 from harnesslab.telemetry.jsonl_recorder import JsonlTraceRecorder
 from harnesslab.telemetry.log import configure_logging, get_logger
+from harnesslab.telemetry.otel_recorder import wrap_trace_recorder
 from harnesslab.tools.fetch_url_tool import FetchUrlTool
 from harnesslab.tools.file_tools import (
     EditFileTool,
@@ -70,7 +71,7 @@ from harnesslab.web.server import WebRuntime, serve
 from harnesslab.web.trace_hub import TraceHub
 
 StorageBackend = Literal["memory", "sqlite"]
-ModelBackend = Literal["simple", "deepseek", "anthropic", "openai"]
+ModelBackend = Literal["simple", "deepseek", "anthropic", "openai", "gemini"]
 
 DEFAULT_SQLITE_PATH = ".harnesslab/state.sqlite"
 DEFAULT_TASKS_DIR = "eval/tasks"
@@ -185,7 +186,9 @@ def build_runtime(
     tools.register(FetchUrlTool(limits=limits))
     tools.register(RunShellSafeTool(workspace_root, limits=limits))
     if trace is None:
-        trace = JsonlTraceRecorder(workspace_root / ".harnesslab" / "trace.jsonl")
+        trace = wrap_trace_recorder(
+            JsonlTraceRecorder(workspace_root / ".harnesslab" / "trace.jsonl")
+        )
     backend = normalize_backend(model_backend)
     model = create_model(
         backend,
@@ -266,7 +269,7 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--model",
         default=None,
-        choices=["simple", "deepseek", "anthropic", "openai"],
+        choices=["simple", "deepseek", "anthropic", "openai", "gemini"],
         help=(
             "Model backend for `run` (default: simple, or model.default_backend "
             "from ~/.config/harnesslab/config.json when set)."
@@ -471,7 +474,7 @@ def _build_parser() -> argparse.ArgumentParser:
     rs.add_argument(
         "--model",
         default="simple",
-        choices=["simple", "deepseek", "anthropic", "openai"],
+        choices=["simple", "deepseek", "anthropic", "openai", "gemini"],
         help="Model backend for the resumed turn (default: simple).",
     )
     rs.add_argument(
@@ -577,7 +580,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sv.add_argument(
         "--model",
         default=None,
-        choices=["simple", "deepseek", "anthropic", "openai"],
+        choices=["simple", "deepseek", "anthropic", "openai", "gemini"],
         help="Model backend (default: config model.default_backend or deepseek).",
     )
     sv.add_argument(
@@ -694,7 +697,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
     workspace_root = Path(args.workspace_root).resolve()
     sqlite_path = Path(args.sqlite_path) if args.sqlite_path else None
     trace_path = workspace_root / ".harnesslab" / "trace.jsonl"
-    trace_hub = TraceHub(JsonlTraceRecorder(trace_path))
+    trace_hub = TraceHub(wrap_trace_recorder(JsonlTraceRecorder(trace_path)))
     try:
         loop = build_runtime(
             workspace_root=workspace_root,

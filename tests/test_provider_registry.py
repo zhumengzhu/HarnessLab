@@ -9,6 +9,8 @@ from harnesslab.core.prompt import PromptComposer
 from harnesslab.core.simple_model import SimpleModel
 from harnesslab.providers.anthropic import AnthropicModel
 from harnesslab.providers.deepseek import DEFAULT_MODEL, DeepSeekModel
+from harnesslab.providers.failover import FailoverModel
+from harnesslab.providers.gemini import GeminiModel
 from harnesslab.providers.openai_responses import OpenAIResponsesModel
 from harnesslab.providers.registry import (
     create_model,
@@ -134,3 +136,43 @@ def test_model_label() -> None:
         "openai",
         config=OperatorConfig(openai_model_name="gpt-5-mini"),
     )
+
+
+def test_create_gemini_requires_api_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("GOOGLE_API_KEY", raising=False)
+    monkeypatch.delenv("GEMINI_API_KEY", raising=False)
+    with pytest.raises(ValueError, match="GOOGLE_API_KEY"):
+        create_model(
+            "gemini",
+            config=OperatorConfig(gemini_model_name="gemini-2.5-flash"),
+            tool_specs_provider=lambda: [],
+            dynamic_blocks_provider=lambda _s: [],
+        )
+
+
+def test_create_gemini_uses_config(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("GOOGLE_API_KEY", "test-key")
+    model = create_model(
+        "gemini",
+        config=OperatorConfig(
+            gemini_model_name="gemini-2.5-flash",
+            gemini_thinking_budget=-1,
+        ),
+        tool_specs_provider=lambda: [],
+        dynamic_blocks_provider=lambda _s: [],
+        composer=PromptComposer(),
+    )
+    assert isinstance(model, GeminiModel)
+    assert model._model_name == "gemini-2.5-flash"
+    assert model._thinking_budget == -1
+
+
+def test_failover_disabled_by_default(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+    model = create_model(
+        "deepseek",
+        config=OperatorConfig(model_fallbacks=("simple",)),
+        tool_specs_provider=lambda: [],
+        dynamic_blocks_provider=lambda _s: [],
+    )
+    assert not isinstance(model, FailoverModel)

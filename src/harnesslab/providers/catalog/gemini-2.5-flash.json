@@ -1,0 +1,9 @@
+{
+  "model_id": "gemini-2.5-flash",
+  "provider": "google",
+  "api_family": "google_generate_content",
+  "context_window": 1048576,
+  "thinking_default": "dynamic",
+  "reasoning_support": "native",
+  "thinking_schema": "budget"
+}
