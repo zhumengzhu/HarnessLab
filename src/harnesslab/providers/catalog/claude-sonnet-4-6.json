@@ -1,0 +1,8 @@
+{
+  "model_id": "claude-sonnet-4-6",
+  "provider": "anthropic",
+  "api_family": "anthropic_messages",
+  "context_window": 200000,
+  "thinking_default": "adaptive",
+  "reasoning_support": "native"
+}

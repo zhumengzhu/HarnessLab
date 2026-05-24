@@ -65,7 +65,15 @@ def test_run_subcommand_prints_assistant_reply(
 ) -> None:
     monkeypatch.setattr(
         "sys.argv",
-        ["harnesslab", "run", "hello", "--workspace-root", str(tmp_path)],
+        [
+            "harnesslab",
+            "run",
+            "hello",
+            "--workspace-root",
+            str(tmp_path),
+            "--model",
+            "simple",
+        ],
     )
     with pytest.raises(SystemExit) as exc:
         cli.main()

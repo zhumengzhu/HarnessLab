@@ -1,1 +1,5 @@
-scripts/hl_serve.py
+#!/usr/bin/env bash
+# Wrapper so hl-serve runs inside the project venv (uv), not system python3.
+set -euo pipefail
+ROOT="$(cd "$(dirname "$0")" && pwd)"
+exec uv run python "$ROOT/scripts/hl_serve.py" "$@"

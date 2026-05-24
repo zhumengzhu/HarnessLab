@@ -54,6 +54,7 @@ from harnesslab.session.in_memory import InMemorySessionStore
 from harnesslab.session.sqlite_store import SqliteSessionStore
 from harnesslab.telemetry.aggregate import aggregate, render_metrics
 from harnesslab.telemetry.jsonl_recorder import JsonlTraceRecorder
+from harnesslab.telemetry.log import configure_logging, get_logger
 from harnesslab.tools.fetch_url_tool import FetchUrlTool
 from harnesslab.tools.file_tools import (
     EditFileTool,
@@ -69,7 +70,7 @@ from harnesslab.web.server import WebRuntime, serve
 from harnesslab.web.trace_hub import TraceHub
 
 StorageBackend = Literal["memory", "sqlite"]
-ModelBackend = Literal["simple", "deepseek"]
+ModelBackend = Literal["simple", "deepseek", "anthropic", "openai"]
 
 DEFAULT_SQLITE_PATH = ".harnesslab/state.sqlite"
 DEFAULT_TASKS_DIR = "eval/tasks"
@@ -192,6 +193,12 @@ def build_runtime(
         tool_specs_provider=lambda: tool_specs_from_registry(tools.list()),
         dynamic_blocks_provider=_make_dynamic_blocks_provider(workspace_root, tools),
     )
+    get_logger("cli").info(
+        "runtime ready workspace=%s model=%s storage=%s",
+        workspace_root,
+        backend,
+        storage_backend,
+    )
     title_namer = LiveTitleNamer(model) if backend == "deepseek" else None
     return HarnessLoop(
         model=model,
@@ -217,6 +224,16 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="harnesslab",
         description="HarnessLab CLI — run a single turn or the eval suite.",
+    )
+    parser.add_argument(
+        "--log-level",
+        default=None,
+        metavar="LEVEL",
+        choices=["DEBUG", "INFO", "WARNING", "ERROR"],
+        help=(
+            "Application log level (default: INFO, or env HARNESSLAB_LOG; "
+            "WARNING under pytest)."
+        ),
     )
     sub = parser.add_subparsers(dest="command", required=False, metavar="COMMAND")
 
@@ -249,7 +266,7 @@ def _build_parser() -> argparse.ArgumentParser:
     run.add_argument(
         "--model",
         default=None,
-        choices=["simple", "deepseek"],
+        choices=["simple", "deepseek", "anthropic", "openai"],
         help=(
             "Model backend for `run` (default: simple, or model.default_backend "
             "from ~/.config/harnesslab/config.json when set)."
@@ -454,7 +471,7 @@ def _build_parser() -> argparse.ArgumentParser:
     rs.add_argument(
         "--model",
         default="simple",
-        choices=["simple", "deepseek"],
+        choices=["simple", "deepseek", "anthropic", "openai"],
         help="Model backend for the resumed turn (default: simple).",
     )
     rs.add_argument(
@@ -560,7 +577,7 @@ def _build_parser() -> argparse.ArgumentParser:
     sv.add_argument(
         "--model",
         default=None,
-        choices=["simple", "deepseek"],
+        choices=["simple", "deepseek", "anthropic", "openai"],
         help="Model backend (default: config model.default_backend or deepseek).",
     )
     sv.add_argument(
@@ -597,6 +614,10 @@ def main() -> None:
 
     parser = _build_parser()
     args = parser.parse_args()
+    configure_logging(getattr(args, "log_level", None))
+    cli_log = get_logger("cli")
+    if args.command:
+        cli_log.debug("subcommand=%s", args.command)
 
     if args.command == "run":
         sys.exit(_cmd_run(args))

@@ -12,6 +12,8 @@ def test_builtin_catalog_loads_deepseek_models() -> None:
     ids = catalog.list_model_ids()
     assert "deepseek-v4-flash" in ids
     assert "deepseek-v4-pro" in ids
+    assert "claude-sonnet-4-6" in ids
+    assert "gpt-5-mini" in ids
 
 
 def test_catalog_get_returns_entry_fields() -> None:

@@ -47,9 +47,11 @@ from harnesslab.core.models import (
 )
 from harnesslab.core.runtime import SystemClock, UuidIdProvider
 from harnesslab.core.title import TitleNamer, derive_title_from_text
+from harnesslab.telemetry.log import get_logger
 from harnesslab.tools.registry import ToolRegistry
 
 _TRACE_OUTPUT_PREVIEW_BYTES = 512
+_log = get_logger("core.loop")
 
 DEFAULT_MAX_STEPS = 20
 
@@ -109,6 +111,7 @@ class HarnessLoop:
             event_type="session_started",
             payload=self._session_started_payload(goal=goal),
         )
+        _log.info("session started id=%s goal=%r", session.id, goal[:80])
         return session
 
     def fork(self, source_id: str, *, goal: str | None = None) -> Session:
@@ -223,6 +226,12 @@ class HarnessLoop:
                     ),
                 },
             )
+            _log.debug(
+                "step started session=%s index=%s reason=%s",
+                session.id,
+                step_index,
+                "initial" if step_index == 0 else f"after_{prev_terminal}",
+            )
 
             self._maybe_compact(session, trigger="threshold")
 
@@ -252,6 +261,12 @@ class HarnessLoop:
             )
 
             step_response, step_outcome = self._apply_decision(session, decision)
+            _log.debug(
+                "decision applied session=%s kind=%s outcome=%s",
+                session.id,
+                decision.kind,
+                step_outcome,
+            )
             last_response = step_response
             prev_terminal = step_outcome
             steps_used = step_index + 1
@@ -278,6 +293,13 @@ class HarnessLoop:
                 "reason": terminal_reason,
                 "steps": steps_used,
             },
+        )
+        _log.info(
+            "session finished id=%s reason=%s steps=%s turn=%s",
+            session.id,
+            terminal_reason,
+            steps_used,
+            session.turn_count + 1,
         )
 
         session.turn_count += 1
@@ -665,6 +687,17 @@ class HarnessLoop:
             return reasoning.strip()
         return None
 
+    def _model_provider_extra(self) -> dict | None:
+        """Opaque vendor payload from the last model call (e.g. thinking blocks)."""
+
+        raw = self._model_raw_meta()
+        if not raw:
+            return None
+        extra = raw.get("provider_extra")
+        if isinstance(extra, dict) and extra:
+            return extra
+        return None
+
     def _apply_tool_decision(
         self,
         session: Session,
@@ -709,6 +742,12 @@ class HarnessLoop:
                     "reason": reason,
                 },
             )
+            _log.warning(
+                "tool denied session=%s tool=%s reason=%s",
+                session.id,
+                call.name,
+                reason,
+            )
             return denied_msg, "tool_denied"
 
         call.started_at = self._clock.now()
@@ -721,6 +760,17 @@ class HarnessLoop:
             session=session,
             event_type="tool_executed",
             payload=self._tool_executed_payload(call=call, result=result),
+        )
+        _log.info(
+            "tool executed session=%s tool=%s ok=%s duration_ms=%s",
+            session.id,
+            call.name,
+            result.ok,
+            (
+                (call.ended_at - call.started_at).total_seconds() * 1000.0
+                if call.started_at and call.ended_at
+                else None
+            ),
         )
         return tool_message, "tool_ok" if result.ok else "tool_error"
 
@@ -760,6 +810,7 @@ class HarnessLoop:
                 session=session,
                 tool_calls=_tool_calls_payload(call),
                 reasoning_text=self._model_reasoning_text(),
+                provider_extra=self._model_provider_extra(),
             )
         )
         session.messages.append(
@@ -779,6 +830,7 @@ class HarnessLoop:
         tool_call_id: str | None = None,
         tool_calls: list[dict] | None = None,
         reasoning_text: str | None = None,
+        provider_extra: dict | None = None,
     ) -> Message:
         return Message(
             id=self._ids.new_id("msg"),
@@ -789,6 +841,7 @@ class HarnessLoop:
             tool_call_id=tool_call_id,
             tool_calls=tool_calls,
             reasoning_text=reasoning_text,
+            provider_extra=provider_extra,
         )
 
     def _make_tool_call(self, session_id: str, name: str, args: dict) -> ToolCall:

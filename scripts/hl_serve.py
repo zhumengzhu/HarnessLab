@@ -278,7 +278,7 @@ def build_parser() -> argparse.ArgumentParser:
             "environment (all optional):\n"
             "  HL_SERVE_HOST          bind address (default: 127.0.0.1)\n"
             "  HL_SERVE_PORT          TCP port (default: 8787)\n"
-            "  HL_SERVE_MODEL         simple | deepseek (default: deepseek)\n"
+            "  HL_SERVE_MODEL         simple | deepseek | anthropic | openai (default: deepseek)\n"
             "  HL_SERVE_WORKSPACE     workspace root (default: repo root)\n"
             "  HL_SERVE_MAX_STEPS     inner-loop step budget (default: 20)\n"
             "  HL_SERVE_ENV_FILE      dotenv file (default: ~/.config/harnesslab/env)\n"

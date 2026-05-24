@@ -67,6 +67,7 @@ flowchart TD
    - Retrieval and writeback policy boundary
 6. `telemetry`
    - Structured traces, run events, and replay-friendly artifacts
+   - Application logging (`telemetry.log`, stdlib) for operational diagnostics
 7. `eval`
    - YAML task suites, pass rate tracking, and regression gating
    - `harnesslab eval` CLI subcommand; baseline JSON in-repo
@@ -202,6 +203,21 @@ must obtain every timestamp and every entity ID from them, never directly from
 
 All infrastructure details (storage engine, model provider, runtime language)
 should be replaceable behind these contracts.
+
+## Application logging
+
+HarnessLab uses stdlib ``logging`` via ``harnesslab.telemetry.log``. Logs are
+**complementary** to JSONL trace — not a replacement:
+
+| Signal | Role |
+|--------|------|
+| **Trace (JSONL)** | Replay/eval source of truth; per-step payloads |
+| **Log (stderr)** | Session lifecycle, provider errors, migrations, tool summary |
+
+Configure with ``HARNESSLAB_LOG=DEBUG|INFO|WARNING|ERROR`` or CLI
+``harnesslab --log-level INFO run ...``. Defaults: ``INFO`` for CLI,
+``WARNING`` under pytest. Third-party HTTP loggers (httpx/openai) are capped
+at ``WARNING`` unless the app level is ``DEBUG``.
 
 ## Architecture Decisions (Current)
 

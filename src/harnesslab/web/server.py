@@ -17,9 +17,11 @@ from harnesslab.core.loop import DEFAULT_MAX_STEPS, HarnessLoop
 from harnesslab.core.memory_policy import session_memory_key
 from harnesslab.core.models import Session, TraceEvent
 from harnesslab.replay.trace_reader import read_trace
+from harnesslab.telemetry.log import get_logger
 from harnesslab.web.trace_hub import TraceHub
 
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
+_log = get_logger("web.server")
 
 TOOL_PANEL_EVENT_TYPES = frozenset(
     {
@@ -417,6 +419,7 @@ def serve(
     )
     server = ThreadingHTTPServer((host, port), handler_cls)
     url = f"http://{host}:{port}/"
+    _log.info("web ui listening url=%s", url)
     print(f"HarnessLab Web UI at {url}  (Ctrl+C to stop)")
     try:
         server.serve_forever()

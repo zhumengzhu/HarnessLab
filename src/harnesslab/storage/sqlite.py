@@ -13,6 +13,10 @@ import sqlite3
 from datetime import UTC, datetime
 from pathlib import Path
 
+from harnesslab.telemetry.log import get_logger
+
+_log = get_logger("storage.sqlite")
+
 MIGRATIONS: list[tuple[int, str]] = [
     (
         1,
@@ -120,6 +124,7 @@ def apply_migrations(conn: sqlite3.Connection) -> int:
                 "INSERT INTO schema_version(version, applied_at) VALUES (?, ?);",
                 (version, datetime.now(UTC).isoformat()),
             )
+        _log.info("applied sqlite migration version=%s", version)
         current = version
     return current
 

@@ -360,18 +360,18 @@ not targets for parity. HarnessLab remains a single-process learning harness.
 
 ---
 
-## 8. Phased rollout (implementation — not started)
+## 8. Phased rollout
 
-| Phase | Scope | Exit criteria |
-|-------|--------|---------------|
-| **P0 Design** | This document + catalog schema RFC | Reviewed; linked from roadmap |
-| **P1 Catalog + transform interface** | `ModelCatalog`, `ParsedModelTurn`, replay hooks; extend `Message` | Unit tests; docs in data-model.md |
-| **P2 DeepSeek via OpenAI SDK** | Transport swap; fix tool-loop `reasoning_content` replay | Existing DeepSeek tests green + new thinking tool-loop test |
-| **P3 Anthropic native** | Messages transport + adaptive thinking mapping | Manual + contract test with mocked SDK |
-| **P4 OpenAI Responses** | Reasoning effort for GPT-5.x | Opt-in config; document env vars |
-| **P5 Gemini** | generateContent + thinking_level/budget split in catalog | One eval-style mock task (no network default) |
-| **P6 Provider failover** (optional) | OpenClaw-style fallback chain across configured backends | Contract tests; explicit operator opt-in |
-| **P7 OpenTelemetry bridge** | OTel exporter adapter behind `TraceRecorderPort` (see §11) | Traces/metrics in standard backends; eval semantic replay unchanged |
+| Phase | Scope | Exit criteria | Status |
+|-------|--------|---------------|--------|
+| **P0 Design** | This document + catalog schema RFC | Reviewed; linked from roadmap | **DONE** |
+| **P1 Catalog + transform interface** | `ModelCatalog`, `ParsedModelTurn`, replay hooks; extend `Message` | Unit tests; docs in data-model.md | **DONE** |
+| **P2 DeepSeek via OpenAI SDK** | Transport swap; fix tool-loop `reasoning_content` replay | Existing DeepSeek tests green + new thinking tool-loop test | **DONE** |
+| **P3 Anthropic native** | Messages transport + adaptive thinking mapping | Mocked SDK contract tests (no live key required) | **DONE** |
+| **P4 OpenAI Responses** | Reasoning effort for GPT-5.x | Mocked SDK contract tests; opt-in config | **DONE** |
+| **P5 Gemini** | generateContent + thinking_level/budget split in catalog | One eval-style mock task (no network default) | Not started |
+| **P6 Provider failover** (optional) | OpenClaw-style fallback chain across configured backends | Contract tests; explicit operator opt-in | Not started |
+| **P7 OpenTelemetry bridge** | OTel exporter adapter behind `TraceRecorderPort` (see §11) | Traces/metrics in standard backends; eval semantic replay unchanged | Deferred |
 
 **Explicitly out of scope for P1–P5:** plugin marketplace, multi-agent. P6/P7 are optional post-rollout items.
 
@@ -399,7 +399,10 @@ When adding a model:
 4. If thinking + tools: add **tool-loop replay test** (mock 400 on missing reasoning).
 5. Update this doc’s matrix (§2.1) if vendor changes semantics.
 6. Run `uv run pytest`, `uv run harnesslab eval --skip-tags network`.
-7. Optional live smoke: `RUN_DEEPSEEK_LIVE=1 DEEPSEEK_API_KEY=... uv run pytest tests/manual/test_deepseek_live.py -m network` (thinking on/off + tool replay; not CI).
+7. Optional live smoke:
+   - OpenAI wire: `RUN_DEEPSEEK_LIVE=1 DEEPSEEK_API_KEY=... uv run pytest tests/manual/test_deepseek_live.py -m network`
+   - Anthropic wire via DeepSeek: `RUN_ANTHROPIC_DEEPSEEK_LIVE=1 DEEPSEEK_API_KEY=... uv run pytest tests/manual/test_anthropic_deepseek_live.py -m network`
+   Both are connectivity-only (thinking on/off); not CI. Real Claude uses `ANTHROPIC_API_KEY` without DeepSeek base URL.
 
 ---
 

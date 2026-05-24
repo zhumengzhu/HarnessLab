@@ -1,0 +1,8 @@
+{
+  "model_id": "gpt-5-mini",
+  "provider": "openai",
+  "api_family": "openai_responses",
+  "context_window": 128000,
+  "thinking_default": "medium",
+  "reasoning_support": "native"
+}
