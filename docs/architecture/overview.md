@@ -348,6 +348,11 @@ Phase 4.1 adds `providers/registry.py`: `create_model(backend, config, …)`
 maps `config.model.default_backend` to `SimpleModel` or `DeepSeekModel`
 without inlining provider construction in `cli.build_runtime`.
 
+MVP adapters call OpenAI-compatible HTTP via `httpx` directly. When adding
+OpenAI, Anthropic, or other vendors, prefer official SDKs behind the same
+registry factory (streaming, reasoning fields, vendor maintenance) rather
+than growing bespoke HTTP clients per provider.
+
 This split keeps deterministic quality gates intact:
 
 - `run --model deepseek` can be non-deterministic by design.

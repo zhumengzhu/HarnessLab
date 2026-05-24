@@ -62,22 +62,19 @@ flowchart TD
     S6 --> P11 --> P21 --> P22 --> P23 --> P24 --> P25 --> P26
 ```
 
-## Current State (Post-MVP Phase 3 — in progress)
+## Current State (Post-MVP Phase 3–4 — complete)
 
 HarnessLab is a daily-usable local agent harness. The shipped runtime includes
 everything from Phase 2 **plus**:
 
 - **Web chat UI** (`harnesslab serve`, `./hl-serve`) with SSE trace panel,
-  fork, `/remember`, auto session titles (DeepSeek)
-- **Session-scoped memory** (`/remember`, inject-on-read)
+  settings snapshot, tool cards, fork, `/remember`, auto session titles (DeepSeek)
+- **Session- and workspace-scoped memory** (`/remember`, `/remember-global`)
 - **Eight built-in tools** including `apply_patch` and allowlisted `fetch_url`
-- **Twelve eval tasks** + GitHub Actions gate
+- **Fourteen eval tasks** + GitHub Actions offline gate (`--skip-tags network`)
+- **Operator config** (`config.json`) + **provider registry** (DeepSeek v4)
 - **Provider message round-trip** — assistant `tool_calls` + tool results
   persisted for DeepSeek/OpenAI-compatible replay
-
-**In flight:** Phase 3.4 shell allowlist profiles; operator config file
-(Phase 3.5). See [Post-MVP Phase 3](#post-mvp-phase-3--usability--production-feedback-in-progress)
-and [Post-MVP Phase 4 proposal](#post-mvp-phase-4--hardening--operator-ergonomics-proposal).
 
 Historical Phase 2 snapshot (for context):
 
@@ -501,7 +498,7 @@ the other way around".
   `overflow_recoveries`; pre-Phase-2.6 traces still aggregate
   cleanly (missing fields default to `0` / `None`).
 
-## Post-MVP Phase 3 — Usability & Production Feedback (in progress)
+## Post-MVP Phase 3 — Usability & Production Feedback — DONE
 
 Phase 2 delivered a working multi-step agent. Phase 3 turns it into
 something people actually use daily: browser chat, smarter session
@@ -627,7 +624,7 @@ Precedence: `CLI flag > process env > config.json > built-in default`.
 
 ---
 
-## Post-MVP Phase 4 — Hardening & operator ergonomics (proposal)
+## Post-MVP Phase 4 — Hardening & operator ergonomics — DONE
 
 Phase 3 made the harness *usable*. Phase 4 should make it *trustworthy
 under daily use* without violating AGENTS.md non-goals (no multi-agent
@@ -665,7 +662,7 @@ Steps 1–6. Nothing starts until its Entry criteria are objectively true.
   contract tests per adapter; eval stays on `simple`/`ReplayModel` by
   default in CI.
 
-### Phase 4.2 — Shell allowlist profiles (finish 3.4 remainder)
+### Phase 4.2 — Shell allowlist profiles — DONE
 
 - **Entry**: policy tests cover current monolithic allowlist.
 - **Deliverables**: named profiles (`read_only`, `dev`, `strict`) in
@@ -683,7 +680,7 @@ Steps 1–6. Nothing starts until its Entry criteria are objectively true.
 - **Exit**: manual QA checklist + one integration test for settings API;
   chat still hides internal `tool` role rows by default.
 
-### Phase 4.4 — Eval / CI hardening
+### Phase 4.4 — Eval / CI hardening — DONE
 
 - **Entry**: twelve tasks green locally; `fetch_url_weather` may need network.
 - **Deliverables**: tag network-dependent tasks; document offline CI
@@ -708,6 +705,10 @@ Steps 1–6. Nothing starts until its Entry criteria are objectively true.
 - Metrics HTML dashboard (JSON CLI remains sufficient)
 - TS migration (Ports stay stable; migration is a separate program)
 - Auto-apply improvement proposals
+- **Provider SDK layer** — MVP `DeepSeekModel` uses raw `httpx` against
+  OpenAI-compatible endpoints; post-MVP expansion should add official
+  SDK adapters (`openai`, etc.) behind `providers/registry.py` for
+  streaming, thinking/reasoning fields, and multi-vendor maintenance
 
 **Recommended execution order**
 

@@ -64,4 +64,5 @@ def test_shipped_tasks_cover_expected_paths() -> None:
         "apply_patch_unified_diff",
         "fetch_url_weather",
         "shell_profile_strict",
+        "workspace_memory_persists",
     } <= names

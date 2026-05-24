@@ -14,32 +14,38 @@ Secondary objective:
 
 ## Current Phase
 
-MVP (Steps 1–6) and Post-MVP Phase 2 are **complete**. The runtime is a
-single-process, multi-step agent harness — not a one-turn decision machine.
+MVP (Steps 1–6), Post-MVP Phase 2, and Phase 3–4 operator hardening are
+**complete**. The runtime is a daily-usable local agent harness.
 
 Must include (current):
 
 - Single-process runtime
 - Multi-step agent loop (`run_session` with `max_steps`; terminal decisions
   `final` / `ask_user`)
-- Policy-gated tool execution (eight built-in tools; expanded read-only shell
-  allowlist with git subcommand gate; ``fetch_url`` host allowlist for wttr.in)
+- Policy-gated tool execution (eight built-in tools; named shell profiles
+  `dev` / `read_only` / `strict`; ``fetch_url`` host allowlist for wttr.in)
 - Modular prompt composition (`PromptComposer` + static/dynamic blocks)
 - Session as first-class citizen (persist, list, resume, fork)
+- Session- and workspace-scoped memory (`/remember`, `/remember-global`)
 - Automatic context compaction (threshold + overflow recovery)
 - Per-call context observability (`ContextSnapshot` on `model_call`)
-- Local Web chat UI (`harnesslab serve`, Phase 3.2)
+- Local Web chat UI (`harnesslab serve`, `./hl-serve`) with settings panel
+  and tool result cards
 - Optional LLM session auto-titles after first turn (DeepSeek only)
+- Operator config (`~/.config/harnesslab/config.json`) + provider registry
 - Trace recording, eval/replay/propose CLI, unit + contract tests
-- DeepSeek provider behind `ModelPort` for `harnesslab run --model deepseek`
+- DeepSeek provider (`deepseek-v4-flash` / `deepseek-v4-pro`) behind
+  `ModelPort` for `harnesslab run --model deepseek`
 
 Must NOT include yet:
 
-- Cross-session memory retrieval / vector RAG (post Phase 3.3)
+- Vector RAG / semantic memory retrieval
 - Multi-agent orchestration
 - Distributed runtime
 - Plugin marketplace complexity
 - Uncontrolled self-modifying pipelines
+- Official OpenAI/Anthropic SDK adapters (MVP uses `httpx`; migrate in
+  post-MVP provider expansion)
 
 ## Agent Loop Contract (Phase 2)
 

@@ -53,9 +53,9 @@ When `harnesslab propose` surfaces a recurring failure cluster:
 
 ## Shipped coverage (Phase 3.1+)
 
-Twelve tasks as of Phase 3.4 (`eval/baseline.json`); task 13 adds shell
-profiles (`13_shell_profile_strict`). Task `fetch_url_weather` is tagged
-``network`` and skipped by default in CI.
+Fourteen tasks in `eval/baseline.json`. Task `fetch_url_weather` is tagged
+``network`` and skipped by default in CI (`--skip-tags network` /
+`pytest -m "not network"`). Optional live lane: ``RUN_LIVE_EVAL=1 pytest -m network``.
 
 | Task | Path exercised |
 |------|----------------|
@@ -72,3 +72,4 @@ profiles (`13_shell_profile_strict`). Task `fetch_url_weather` is tagged
 | `apply_patch_unified_diff` | unified-diff patch tool |
 | `fetch_url_weather` | allowlisted HTTP fetch (wttr.in); tag: ``network`` |
 | `shell_profile_strict` | named shell profile denies dev runners |
+| `workspace_memory_persists` | workspace memory across sessions |
