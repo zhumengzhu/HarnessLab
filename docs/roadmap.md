@@ -706,9 +706,15 @@ Steps 1–6. Nothing starts until its Entry criteria are objectively true.
 - TS migration (Ports stay stable; migration is a separate program)
 - Auto-apply improvement proposals
 - **Provider SDK layer** — MVP `DeepSeekModel` uses raw `httpx` against
-  OpenAI-compatible endpoints; post-MVP expansion should add official
-  SDK adapters (`openai`, etc.) behind `providers/registry.py` for
-  streaming, thinking/reasoning fields, and multi-vendor maintenance
+  OpenAI-compatible endpoints; post-MVP expansion is specified in
+  [`docs/architecture/provider-expansion.md`](architecture/provider-expansion.md)
+  (vendor thinking survey, OpenCode/OpenClaw patterns, transform hooks, phased P1–P5).
+- **OpenTelemetry export** — optional OTLP bridge behind `TraceRecorderPort` (P7 in
+  provider-expansion doc); JSONL + eval semantic replay remain source of truth; no
+  implementation until provider transforms stabilize.
+- **Constrained provider plugins** — built-in `api_family` hooks first; optional local
+  `entry_points` / plugin dir for third-party transports only (no marketplace, no
+  policy/tool plugins); see provider-expansion §6.7.
 
 **Recommended execution order**
 
@@ -726,5 +732,9 @@ Steps 1–6. Nothing starts until its Entry criteria are objectively true.
 - **Metrics dashboard artifact.** Static HTML report on top of
   `harnesslab metrics` / `harnesslab context`. The JSON CLI surfaces
   are sufficient for Phase 4; revisit after operator config exists.
+- **OpenTelemetry integration.** Fan-out or adapter on `TraceRecorderPort` for
+  OTLP traces/metrics (`model_call` latency, tokens, tool duration). Design in
+  [`provider-expansion.md` §11](architecture/provider-expansion.md#11-opentelemetry-integration-deferred--design-only);
+  eval/replay must not depend on an external collector.
 - **TypeScript migration.** Stable Ports reduce risk; not scheduled until
   Phase 4 hardening exits are met.
