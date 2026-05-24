@@ -72,6 +72,14 @@ MIGRATIONS: list[tuple[int, str]] = [
         ALTER TABLE messages ADD COLUMN tool_calls TEXT;
         """,
     ),
+    (
+        4,
+        # Post-MVP P1: optional reasoning / vendor round-trip fields on messages.
+        """
+        ALTER TABLE messages ADD COLUMN reasoning_text TEXT;
+        ALTER TABLE messages ADD COLUMN provider_extra TEXT;
+        """,
+    ),
 ]
 
 

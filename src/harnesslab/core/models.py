@@ -21,6 +21,11 @@ class Message(BaseModel):
     # OpenAI/DeepSeek assistant ``tool_calls`` payload when the loop
     # records a model-initiated tool request before the tool result.
     tool_calls: list[dict[str, Any]] | None = None
+    # Provider reasoning captured for replay when the API requires it
+    # (e.g. DeepSeek ``reasoning_content`` in a tool loop).
+    reasoning_text: str | None = None
+    # Opaque vendor payload when normalization would lose data.
+    provider_extra: dict[str, Any] | None = None
 
 
 SessionStatus = Literal[

@@ -1,0 +1,8 @@
+{
+  "model_id": "deepseek-v4-pro",
+  "provider": "deepseek",
+  "api_family": "openai_chat",
+  "context_window": 128000,
+  "thinking_default": "disabled",
+  "reasoning_support": "native"
+}

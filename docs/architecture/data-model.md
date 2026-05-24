@@ -34,6 +34,8 @@ erDiagram
       datetime created_at
       string tool_call_id
       json tool_calls
+      text reasoning_text
+      json provider_extra
     }
     TOOL_CALL {
       string id
@@ -115,6 +117,20 @@ Suggested fields:
 - `tool_calls` (optional): OpenAI-style assistant tool request payload
   recorded immediately before a tool result message so chat providers
   can replay the turn without a 400 invalid-history error
+- `reasoning_text` (optional): normalized chain-of-thought text captured
+  from provider responses (e.g. DeepSeek ``reasoning_content``) for
+  replay when the API requires it in a tool loop
+- `provider_extra` (optional): opaque vendor payload when normalization
+  would lose data (Anthropic thinking blocks, Gemini thought signatures)
+
+### Provider catalog & transforms (Post-MVP P1)
+
+Model metadata lives under ``providers/catalog/*.json`` and is loaded by
+``ModelCatalog``. Each entry records ``api_family``, context limits, and
+thinking defaults. Message serialization for networked adapters runs through
+``providers/transforms/`` hooks (``serialize_messages``, ``parse_response``,
+``replay_policy``) keyed by ``api_family``. See
+``docs/architecture/provider-expansion.md`` §6.
 
 ## ToolCall
 
@@ -271,8 +287,11 @@ CREATE TABLE messages (
     created_at TEXT NOT NULL,
     tool_call_id TEXT,
     tool_calls TEXT,
+    reasoning_text TEXT,
+    provider_extra TEXT,
     ord INTEGER NOT NULL
 );
+-- v3: tool_calls column; v4: reasoning_text + provider_extra (Post-MVP P1)
 
 CREATE INDEX idx_messages_session_ord ON messages(session_id, ord);
 

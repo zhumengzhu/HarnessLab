@@ -120,8 +120,9 @@ class SqliteSessionStore:
         self._conn.executemany(
             """
             INSERT INTO messages(
-                id, session_id, role, content, created_at, tool_call_id, tool_calls, ord
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
+                id, session_id, role, content, created_at, tool_call_id,
+                tool_calls, reasoning_text, provider_extra, ord
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
             """,
             [
                 (
@@ -132,6 +133,8 @@ class SqliteSessionStore:
                     msg.created_at.isoformat(),
                     msg.tool_call_id,
                     _encode_tool_calls(msg.tool_calls),
+                    msg.reasoning_text,
+                    _encode_provider_extra(msg.provider_extra),
                     ord_,
                 )
                 for ord_, msg in enumerate(messages)
@@ -141,7 +144,8 @@ class SqliteSessionStore:
     def _load_messages(self, session_id: str) -> list[Message]:
         rows = self._conn.execute(
             """
-            SELECT id, role, content, created_at, tool_call_id, tool_calls
+            SELECT id, role, content, created_at, tool_call_id, tool_calls,
+                   reasoning_text, provider_extra
             FROM messages
             WHERE session_id = ?
             ORDER BY ord ASC;
@@ -157,6 +161,8 @@ class SqliteSessionStore:
                 session_id=session_id,
                 tool_call_id=row["tool_call_id"],
                 tool_calls=_decode_tool_calls(row["tool_calls"]),
+                reasoning_text=row["reasoning_text"],
+                provider_extra=_decode_provider_extra(row["provider_extra"]),
             )
             for row in rows
         ]
@@ -205,5 +211,20 @@ def _decode_tool_calls(raw: str | None) -> list[dict] | None:
         return None
     parsed = json.loads(raw)
     if not isinstance(parsed, list):
+        return None
+    return parsed
+
+
+def _encode_provider_extra(provider_extra: dict | None) -> str | None:
+    if not provider_extra:
+        return None
+    return json.dumps(provider_extra, ensure_ascii=False)
+
+
+def _decode_provider_extra(raw: str | None) -> dict | None:
+    if not raw:
+        return None
+    parsed = json.loads(raw)
+    if not isinstance(parsed, dict):
         return None
     return parsed

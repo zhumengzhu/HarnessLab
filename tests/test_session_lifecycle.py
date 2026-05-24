@@ -254,8 +254,8 @@ def test_v1_database_migrates_to_v2_in_place(tmp_path: Path) -> None:
 
     conn = connect(db_path)
     new_version = apply_migrations(conn)
-    assert new_version == 3
-    assert current_version(conn) == 3
+    assert new_version == 4
+    assert current_version(conn) == 4
     conn.close()
 
     store = SqliteSessionStore(db_path)
@@ -272,10 +272,10 @@ def test_apply_migrations_is_idempotent(tmp_path: Path) -> None:
     conn = connect(db_path)
     apply_migrations(conn)
     second = apply_migrations(conn)
-    assert second == 3
+    assert second == 4
     # No duplicate insert into schema_version.
     rows = conn.execute("SELECT version FROM schema_version ORDER BY version").fetchall()
-    assert [r["version"] for r in rows] == [1, 2, 3]
+    assert [r["version"] for r in rows] == [1, 2, 3, 4]
 
 
 # ---------- ReplayModel + new Decision kind compatibility ----------

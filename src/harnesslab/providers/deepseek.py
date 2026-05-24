@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import os
 from collections.abc import Callable
 from typing import Any
@@ -12,10 +11,12 @@ import httpx
 from harnesslab.core.compaction import ModelOverflowError, estimate_tokens
 from harnesslab.core.models import Decision, Session
 from harnesslab.core.prompt import ComposedPrompt, PromptBlock, PromptComposer
+from harnesslab.providers.catalog import ModelCatalog
 from harnesslab.providers.model_resolve import (
     DEFAULT_DEEPSEEK_MODEL,
     resolve_deepseek_model_name,
 )
+from harnesslab.providers.transforms.openai_chat import parse_response, serialize_messages
 
 DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
 # Official API models (2026): deepseek-v4-flash, deepseek-v4-pro.
@@ -82,6 +83,7 @@ class DeepSeekModel:
         )
         self._composer = composer or PromptComposer()
         self._dynamic_blocks_provider = dynamic_blocks_provider or _no_dynamic_blocks
+        self._catalog = ModelCatalog()
         self._last_call_meta: dict[str, Any] = {
             "provider": "deepseek",
             "model_name": self._model_name,
@@ -114,7 +116,7 @@ class DeepSeekModel:
             **base_meta,
             **_usage_meta(payload.get("usage")),
         }
-        return _decision_from_payload(payload)
+        return parse_response(payload).decision
 
     def last_call_meta(self) -> dict[str, Any]:
         return dict(self._last_call_meta)
@@ -135,9 +137,13 @@ class DeepSeekModel:
             variables={"model_name": self._model_name},
         )
         self._last_prompt = composed
+        try:
+            entry = self._catalog.get(self._model_name)
+        except KeyError:
+            entry = self._catalog.get(DEFAULT_DEEPSEEK_MODEL)
         body: dict[str, Any] = {
             "model": self._model_name,
-            "messages": composed.as_openai_messages(),
+            "messages": serialize_messages(composed, session, entry),
             "temperature": 0,
         }
         if self._thinking_mode in {"enabled", "disabled"}:
@@ -150,65 +156,9 @@ class DeepSeekModel:
 
 
 def _decision_from_payload(payload: dict[str, Any]) -> Decision:
-    """Translate one DeepSeek response into a ``Decision``.
+    """Backward-compatible wrapper around :func:`parse_response`."""
 
-    Tool calls produce ``kind="tool"`` (non-terminal — the inner loop
-    will execute the tool and call the model again). Plain assistant
-    text with no tool calls produces ``kind="final"``: that is the
-    OpenAI function-calling convention for "the model considers itself
-    done".
-    """
-
-    choices = payload.get("choices")
-    if not isinstance(choices, list) or not choices:
-        return Decision(
-            kind="final",
-            assistant_message="DeepSeek response invalid: missing choices.",
-        )
-    first = choices[0] if isinstance(choices[0], dict) else {}
-    message = first.get("message", {})
-    if not isinstance(message, dict):
-        return Decision(
-            kind="final",
-            assistant_message="DeepSeek response invalid: malformed message.",
-        )
-
-    tool_calls = message.get("tool_calls")
-    if isinstance(tool_calls, list) and tool_calls:
-        function = tool_calls[0].get("function", {}) if isinstance(tool_calls[0], dict) else {}
-        name = function.get("name")
-        arguments = function.get("arguments")
-        if not isinstance(name, str) or not name:
-            return Decision(
-                kind="final",
-                assistant_message="DeepSeek tool call invalid: missing function name.",
-            )
-        if not isinstance(arguments, str):
-            return Decision(
-                kind="final",
-                assistant_message="DeepSeek tool call invalid: arguments must be a JSON string.",
-            )
-        try:
-            tool_args = json.loads(arguments)
-        except json.JSONDecodeError as exc:
-            return Decision(
-                kind="final",
-                assistant_message=f"DeepSeek tool call invalid JSON args: {exc.msg}",
-            )
-        if not isinstance(tool_args, dict):
-            return Decision(
-                kind="final",
-                assistant_message="DeepSeek tool call invalid: JSON args must be an object.",
-            )
-        return Decision(kind="tool", tool_name=name, tool_args=tool_args)
-
-    content = message.get("content")
-    if isinstance(content, str) and content.strip():
-        return Decision(kind="final", assistant_message=content.strip())
-    return Decision(
-        kind="final",
-        assistant_message="DeepSeek returned an empty response.",
-    )
+    return parse_response(payload).decision
 
 
 _OVERFLOW_HINTS = (
