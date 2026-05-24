@@ -52,6 +52,33 @@ body {
   padding: 0.5rem;
   overflow-y: auto;
   flex: 1;
+  min-height: 0;
+}
+
+.settings-panel {
+  border-top: 1px solid #30363d;
+  padding: 0.75rem 1rem 1rem;
+  font-size: 0.78rem;
+}
+
+.settings-panel h3 {
+  margin: 0 0 0.5rem;
+  font-size: 0.85rem;
+  color: #8b949e;
+}
+
+.settings-list {
+  margin: 0;
+}
+
+.settings-list dt {
+  color: #8b949e;
+  margin-top: 0.35rem;
+}
+
+.settings-list dd {
+  margin: 0.1rem 0 0;
+  word-break: break-all;
 }
 
 .session-list li button {
@@ -191,6 +218,39 @@ body {
 .msg.system {
   font-size: 0.85rem;
   color: #8b949e;
+}
+
+.tool-card {
+  align-self: stretch;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  padding: 0.5rem 0.75rem;
+  background: #161b22;
+  font-size: 0.82rem;
+}
+
+.tool-card.ok {
+  border-left: 3px solid #3fb950;
+}
+
+.tool-card.fail {
+  border-left: 3px solid #f85149;
+}
+
+.tool-card-title {
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+}
+
+.tool-card-preview {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: #8b949e;
+  font-family: ui-monospace, monospace;
+  font-size: 0.75rem;
+  max-height: 8rem;
+  overflow: auto;
 }
 
 .composer {

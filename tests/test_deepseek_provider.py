@@ -62,7 +62,7 @@ def test_returns_final_decision_when_no_tool_calls() -> None:
     # Provider + usage are exact; prompt_meta is best-effort and
     # asserted as "present, non-negative".
     assert meta["provider"] == "deepseek"
-    assert meta["model_name"] == "deepseek-chat"
+    assert meta["model_name"] == "deepseek-v4-flash"
     assert meta["request_tokens"] == 10
     assert meta["response_tokens"] == 2
     assert meta["total_tokens"] == 12
@@ -134,7 +134,7 @@ def test_http_error_falls_back_to_final() -> None:
     assert "DeepSeek request failed" in (decision.assistant_message or "")
     meta = model.last_call_meta()
     assert meta["provider"] == "deepseek"
-    assert meta["model_name"] == "deepseek-chat"
+    assert meta["model_name"] == "deepseek-v4-flash"
     # Prompt-side fields are recorded even on transport failure so
     # operators can see how big the rejected request was.
     assert "prompt_tokens_estimate" in meta
@@ -187,7 +187,8 @@ def test_request_body_includes_tools_spec() -> None:
     )
     decision = model.decide(_session(), "hello")
     assert decision.kind == "final"
-    assert captured["model"] == "deepseek-chat"
+    assert captured["model"] == "deepseek-v4-flash"
+    assert captured["thinking"] == {"type": "disabled"}
     assert captured["tool_choice"] == "auto"
     assert captured["tools"][0]["function"]["name"] == "read_file"
 
@@ -216,7 +217,7 @@ def test_request_body_uses_prompt_composer_system_prompt() -> None:
     assert messages[0]["role"] == "system"
     system_text = messages[0]["content"]
     assert "HarnessLab's agent" in system_text
-    assert "deepseek-chat" in system_text  # ${model_name} interpolated
+    assert "deepseek-v4-flash" in system_text  # ${model_name} interpolated
     assert "${model_name}" not in system_text
     assert "# Harness" in system_text
     assert "# Safety" in system_text

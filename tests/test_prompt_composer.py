@@ -87,10 +87,10 @@ def test_build_substitutes_template_variables() -> None:
     composer = PromptComposer()
     composed = composer.build(
         _session_with_messages(),
-        variables={"model_name": "deepseek-chat"},
+        variables={"model_name": "deepseek-v4-flash"},
     )
     identity_text = composed.blocks[0].content
-    assert "deepseek-chat" in identity_text
+    assert "deepseek-v4-flash" in identity_text
     assert "${model_name}" not in identity_text
 
 
@@ -168,6 +168,58 @@ def test_as_openai_messages_collapses_system_blocks() -> None:
     assert msgs[1] == {"role": "user", "content": "hello"}
     assert msgs[2] == {"role": "assistant", "content": "hi back"}
     assert len(msgs) == 3
+
+
+def test_as_openai_messages_serializes_tool_turns() -> None:
+    composed = ComposedPrompt(
+        blocks=[
+            PromptBlock(name="u", content="run it", origin="s:1", role="user"),
+            PromptBlock(
+                name="a",
+                content="",
+                origin="s:2",
+                role="assistant",
+                tool_calls=[
+                    {
+                        "id": "tool_abc",
+                        "type": "function",
+                        "function": {
+                            "name": "read_file",
+                            "arguments": '{"path":"a.txt"}',
+                        },
+                    }
+                ],
+            ),
+            PromptBlock(
+                name="t",
+                content="ok",
+                origin="s:3",
+                role="tool",
+                tool_call_id="tool_abc",
+            ),
+        ]
+    )
+    msgs = composed.as_openai_messages()
+    assert msgs[1]["role"] == "assistant"
+    assert msgs[1]["tool_calls"][0]["id"] == "tool_abc"
+    assert msgs[2] == {"role": "tool", "tool_call_id": "tool_abc", "content": "ok"}
+
+
+def test_as_openai_messages_skips_orphan_tool_blocks() -> None:
+    composed = ComposedPrompt(
+        blocks=[
+            PromptBlock(name="u", content="hi", origin="s:1", role="user"),
+            PromptBlock(
+                name="t",
+                content="legacy orphan",
+                origin="s:2",
+                role="tool",
+                tool_call_id="tool_old",
+            ),
+        ]
+    )
+    msgs = composed.as_openai_messages()
+    assert msgs == [{"role": "user", "content": "hi"}]
 
 
 def test_as_openai_messages_keeps_system_when_no_conversation() -> None:

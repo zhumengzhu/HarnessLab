@@ -27,6 +27,9 @@ class TaskTurn(BaseModel):
     # original single-step contract used by existing eval tasks; raise to
     # let the model react to tool results inside the same turn.
     max_steps: int = 1
+    # When true, start a fresh session before this turn (cross-session eval).
+    new_session: bool = False
+    goal: str | None = None
 
 
 class TaskLimits(BaseModel):
@@ -43,6 +46,12 @@ class TaskLimits(BaseModel):
     shell_timeout_seconds: int | None = None
 
 
+class TaskPolicy(BaseModel):
+    """Per-task policy overrides (eval / isolated runs)."""
+
+    shell_profile: str | None = None
+
+
 class TaskExpected(BaseModel):
     final_reply_contains: list[str] = Field(default_factory=list)
     events_include: list[ExpectedEvent] = Field(default_factory=list)
@@ -53,9 +62,11 @@ class Task(BaseModel):
     name: str
     goal: str
     description: str = ""
+    tags: list[str] = Field(default_factory=list)
     decisions: list[Decision] | None = None
     turns: list[TaskTurn]
     limits: TaskLimits | None = None
+    policy: TaskPolicy | None = None
     expected: TaskExpected = Field(default_factory=TaskExpected)
 
 

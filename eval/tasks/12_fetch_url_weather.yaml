@@ -1,0 +1,28 @@
+name: fetch_url_weather
+goal: fetch weather via allowlisted host
+description: |
+  Phase 3.4 MVP relaxation: ``fetch_url`` may GET allowlisted hosts
+  (``wttr.in``). The model fetches ASCII weather and summarizes it.
+tags:
+  - network
+decisions:
+  - kind: tool
+    tool_name: fetch_url
+    tool_args:
+      url: https://wttr.in/Beijing?format=3
+  - kind: final
+    assistant_message: Beijing weather fetched from wttr.in.
+turns:
+  - input: what is the weather in Beijing tomorrow
+    max_steps: 2
+expected:
+  final_reply_contains:
+    - Beijing weather
+  events_include:
+    - event_type: tool_executed
+      payload_contains:
+        tool: fetch_url
+        ok: true
+  no_event_types:
+    - tool_denied
+    - tool_invalid_args

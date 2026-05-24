@@ -104,10 +104,9 @@ to the allowlist.
 
 **Sandbox claim.** The expanded allowlist defends against the
 agent issuing a single obviously-destructive command directly.
-It does not promise that `python` / `pytest` / `uv run`
-invocations cannot run arbitrary code through user-authored
-files — the workspace sandbox (`cwd`) and the file tools' path
-checks remain the primary defenses for that.
+``fetch_url`` is **not** a general browser: only hosts on
+``DEFAULT_FETCH_HOST_ALLOWLIST`` (currently ``wttr.in``) may be
+fetched. ``curl`` / ``wget`` remain on the shell denylist.
 
 ### Tool Executor
 
@@ -149,7 +148,23 @@ stateDiagram-v2
 | `apply_patch` | Unified-diff hunk application (Phase 3.4); context must match exactly | `_check_path` |
 | `grep` | UTF-8 regex search across the workspace, returns `path:lineno: line` matches with `glob` filter; default `max_matches=50`, hard cap `1000`; binary files and noise dirs skipped (Phase 2.5) | `_check_optional_path` |
 | `glob` | Workspace-relative glob match returning sorted relative paths; default `max_results=100`, hard cap `5000`; same noise-dir skip list (Phase 2.5) | `_check_optional_path` |
+| `fetch_url` | Read-only HTTP GET for allowlisted hosts only (MVP: `wttr.in` for weather); response body capped | `_check_fetch_url` |
 | `run_shell_safe` | Argv shell invocation against the expanded allowlist + git subcommand gate (Phase 2.5) | `_check_shell` |
+
+### Shell allowlist profiles (Phase 3.4)
+
+``run_shell_safe`` allowlists are selected by **profile name** (config
+``policy.shell_profile``, default ``dev``). Explicit ``shell_allowlist``
+constructor args still override profiles for tests.
+
+| Profile | Intent |
+| --- | --- |
+| ``dev`` / ``default`` | Historical expanded allowlist (includes ``pytest``, ``uv``, ``python``, …) |
+| ``read_only`` | Inspection + search + read-only ``git``; no dev runners |
+| ``strict`` | Minimal file inspection + read-only ``git`` |
+
+Denylist and git subcommand gate apply in every profile. Template:
+``scripts/harnesslab.config.example.json``.
 
 The "noise dir" skip list applied to `grep` / `glob`:
 `.git`, `.venv`, `node_modules`, `__pycache__`, `dist`, `build`,

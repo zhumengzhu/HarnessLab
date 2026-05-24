@@ -33,6 +33,7 @@ erDiagram
       text content
       datetime created_at
       string tool_call_id
+      json tool_calls
     }
     TOOL_CALL {
       string id
@@ -111,6 +112,9 @@ Suggested fields:
 - `content`: text payload
 - `created_at`: timestamp
 - `tool_call_id` (optional): linkage for tool-originated messages
+- `tool_calls` (optional): OpenAI-style assistant tool request payload
+  recorded immediately before a tool result message so chat providers
+  can replay the turn without a 400 invalid-history error
 
 ## ToolCall
 
@@ -173,10 +177,12 @@ shapes are what `harnesslab metrics` aggregates.
 | `step_completed` | `step_index: int`, `outcome: "final" \| "ask_user" \| "assistant" \| "tool_ok" \| "tool_error" \| "tool_denied" \| "tool_invalid_args"` |
 | `compaction_started` | `trigger: "threshold" \| "overflow"`, `before_messages: int`, `before_tokens: int`, `keep_last: int` |
 | `compaction_completed` | `after_messages: int`, `after_tokens: int` |
-| `session_finished` | `reason: "final" \| "ask_user" \| "max_steps" \| "overflow"`, `steps: int` |
+| `session_finished` | `reason: "final" \| "ask_user" \| "max_steps" \| "overflow" \| "remember" \| "remember_global"`, `steps: int` |
 | `session_titled` | `title: str`, `previous_title: str \| null`, `source: "llm"` |
 | `memory_read` | `key: str`, `line_count: int` |
 | `memory_written` | `key: str`, `line: str`, `line_count: int`, `source: "remember"` |
+| `workspace_memory_read` | `key: str`, `line_count: int` |
+| `workspace_memory_written` | `key: str`, `line: str`, `line_count: int`, `source: "remember_global"` |
 
 `tool_executed`'s `output_*` fields, model telemetry fields
 (`model_name`, `provider`, token counters), timing fields
@@ -264,6 +270,7 @@ CREATE TABLE messages (
     content TEXT NOT NULL,
     created_at TEXT NOT NULL,
     tool_call_id TEXT,
+    tool_calls TEXT,
     ord INTEGER NOT NULL
 );
 

@@ -10,9 +10,59 @@ them. Blocks are immutable; the composer assembles a fresh
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Literal
+from typing import Any, Literal
 
 PromptRole = Literal["system", "user", "assistant", "tool"]
+
+
+def _assistant_tool_call_ids(tool_calls: list[dict[str, Any]] | None) -> set[str]:
+    if not tool_calls:
+        return set()
+    ids: set[str] = set()
+    for tc in tool_calls:
+        if isinstance(tc, dict):
+            tc_id = tc.get("id")
+            if isinstance(tc_id, str):
+                ids.add(tc_id)
+    return ids
+
+
+def _openai_message_from_block(block: PromptBlock) -> dict[str, Any]:
+    if block.role == "assistant" and block.tool_calls:
+        payload: dict[str, Any] = {
+            "role": "assistant",
+            "tool_calls": block.tool_calls,
+            "content": block.content or None,
+        }
+        return payload
+    if block.role == "tool":
+        return {
+            "role": "tool",
+            "tool_call_id": block.tool_call_id or "",
+            "content": block.content,
+        }
+    return {"role": block.role, "content": block.content}
+
+
+def _should_emit_conversation_block(
+    block: PromptBlock,
+    messages: list[dict[str, Any]],
+) -> bool:
+    """Skip legacy tool messages that lack a preceding assistant tool_calls."""
+
+    if block.role != "tool":
+        return True
+    if not block.tool_call_id:
+        return False
+    if not messages:
+        return False
+    prev = messages[-1]
+    if prev.get("role") != "assistant":
+        return False
+    tool_calls = prev.get("tool_calls")
+    if not isinstance(tool_calls, list):
+        return False
+    return block.tool_call_id in _assistant_tool_call_ids(tool_calls)
 
 
 @dataclass(frozen=True)
@@ -35,6 +85,8 @@ class PromptBlock:
     content: str
     origin: str
     role: PromptRole = "system"
+    tool_call_id: str | None = None
+    tool_calls: list[dict[str, Any]] | None = None
 
 
 @dataclass(frozen=True)
@@ -54,7 +106,7 @@ class ComposedPrompt:
 
         return "\n\n".join(b.content for b in self.blocks if b.content)
 
-    def as_openai_messages(self) -> list[dict[str, str]]:
+    def as_openai_messages(self) -> list[dict[str, Any]]:
         """Group consecutive ``system`` blocks into a single system
         message, then append non-system blocks in order.
 
@@ -65,7 +117,7 @@ class ComposedPrompt:
         unchanged.
         """
 
-        messages: list[dict[str, str]] = []
+        messages: list[dict[str, Any]] = []
         system_parts: list[str] = []
 
         for block in self.blocks:
@@ -78,7 +130,9 @@ class ComposedPrompt:
                     {"role": "system", "content": "\n\n".join(system_parts)}
                 )
                 system_parts = []
-            messages.append({"role": block.role, "content": block.content})
+            if not _should_emit_conversation_block(block, messages):
+                continue
+            messages.append(_openai_message_from_block(block))
 
         if system_parts:
             # No non-system block appeared; emit the system message at

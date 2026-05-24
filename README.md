@@ -61,8 +61,8 @@ uv run harnesslab run "hello" --max-steps 3
 ```
 
 Built-in tools: `read_file`, `write_file`, `edit_file`, `apply_patch`, `grep`, `glob`,
-`run_shell_safe`. See `docs/architecture/tool-runtime.md` for policy
-details.
+`fetch_url`, `run_shell_safe`. See `docs/architecture/tool-runtime.md` for policy
+details. ``fetch_url`` currently allowlists ``wttr.in`` for read-only HTTP (e.g. weather).
 
 ### Web chat UI (`serve`)
 
@@ -72,16 +72,38 @@ uv run harnesslab serve --workspace-root .
 # open http://127.0.0.1:8787/
 ```
 
+**Quick lifecycle helper** (repo root):
+
+```bash
+./hl-serve start      # or: stop | restart | status
+./hl-serve            # print full help
+
+# Optional secrets file (see scripts/hl-serve.example.env):
+#   ~/.config/harnesslab/env
+```
+
+`./hl-serve` wraps `uv run harnesslab serve` with pid/log under
+`.harnesslab/` and reads `HL_SERVE_*` env vars (port, model, workspace, …).
+
 The browser UI shares the SQLite session store with the CLI — sessions
 created in the web UI appear in `harnesslab session ls`, and vice versa.
 When using DeepSeek, session titles in the sidebar are auto-generated
 after the first message (short LLM call, low token; falls back silently).
 The UI streams turn progress over SSE, shows tool/step events in a
 side panel, supports session fork, and exposes `/remember` for
-session-scoped memory notes.
+session-scoped memory notes. The main chat shows user and assistant
+text only; raw `tool` messages stay in the session store for the model
+and appear in the trace inspector panel.
 
 Use `--model simple` for offline smoke tests without network access.
 Only `127.0.0.1` is allowed; the server refuses public bind addresses.
+
+There is no global JSON config file yet — model provider settings use
+environment variables plus CLI / `HL_SERVE_*` flags, or optional
+`~/.config/harnesslab/config.json` for non-secret defaults (see
+[Phase 3.5 in the roadmap](docs/roadmap.md#phase-35--operator-configuration--done)
+and [`scripts/harnesslab.config.example.json`](scripts/harnesslab.config.example.json)).
+Secrets: [`scripts/hl-serve.example.env`](scripts/hl-serve.example.env).
 
 ### Model backends (`run`)
 
@@ -100,7 +122,7 @@ uv run harnesslab run "summarize current workspace safety posture" --model deeps
 Optional env overrides:
 
 - `DEEPSEEK_BASE_URL` (default: `https://api.deepseek.com/v1`)
-- `DEEPSEEK_MODEL` (default: `deepseek-chat`)
+- `DEEPSEEK_MODEL` (default: `deepseek-v4-flash`; also `deepseek-v4-pro`)
 
 ### Storage backends
 

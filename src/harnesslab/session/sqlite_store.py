@@ -11,6 +11,7 @@ migration in :mod:`harnesslab.storage.sqlite`.
 
 from __future__ import annotations
 
+import json
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -119,8 +120,8 @@ class SqliteSessionStore:
         self._conn.executemany(
             """
             INSERT INTO messages(
-                id, session_id, role, content, created_at, tool_call_id, ord
-            ) VALUES (?, ?, ?, ?, ?, ?, ?);
+                id, session_id, role, content, created_at, tool_call_id, tool_calls, ord
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?);
             """,
             [
                 (
@@ -130,6 +131,7 @@ class SqliteSessionStore:
                     msg.content,
                     msg.created_at.isoformat(),
                     msg.tool_call_id,
+                    _encode_tool_calls(msg.tool_calls),
                     ord_,
                 )
                 for ord_, msg in enumerate(messages)
@@ -139,7 +141,7 @@ class SqliteSessionStore:
     def _load_messages(self, session_id: str) -> list[Message]:
         rows = self._conn.execute(
             """
-            SELECT id, role, content, created_at, tool_call_id
+            SELECT id, role, content, created_at, tool_call_id, tool_calls
             FROM messages
             WHERE session_id = ?
             ORDER BY ord ASC;
@@ -154,6 +156,7 @@ class SqliteSessionStore:
                 created_at=datetime.fromisoformat(row["created_at"]),
                 session_id=session_id,
                 tool_call_id=row["tool_call_id"],
+                tool_calls=_decode_tool_calls(row["tool_calls"]),
             )
             for row in rows
         ]
@@ -189,3 +192,18 @@ def _session_from_row(row: sqlite3.Row, messages: list[Message]) -> Session:
         title=row["title"],
         messages=messages,
     )
+
+
+def _encode_tool_calls(tool_calls: list[dict] | None) -> str | None:
+    if not tool_calls:
+        return None
+    return json.dumps(tool_calls, ensure_ascii=False)
+
+
+def _decode_tool_calls(raw: str | None) -> list[dict] | None:
+    if not raw:
+        return None
+    parsed = json.loads(raw)
+    if not isinstance(parsed, list):
+        return None
+    return parsed

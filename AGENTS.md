@@ -22,8 +22,8 @@ Must include (current):
 - Single-process runtime
 - Multi-step agent loop (`run_session` with `max_steps`; terminal decisions
   `final` / `ask_user`)
-- Policy-gated tool execution (six built-in tools; expanded read-only shell
-  allowlist with git subcommand gate)
+- Policy-gated tool execution (eight built-in tools; expanded read-only shell
+  allowlist with git subcommand gate; ``fetch_url`` host allowlist for wttr.in)
 - Modular prompt composition (`PromptComposer` + static/dynamic blocks)
 - Session as first-class citizen (persist, list, resume, fork)
 - Automatic context compaction (threshold + overflow recovery)
@@ -73,7 +73,8 @@ Must NOT include yet:
 - `src/harnesslab/eval`: YAML task suite and regression runner
 - `src/harnesslab/replay`: trace reader, replayer, divergence detector
 - `src/harnesslab/improve`: advisory proposal generator
-- `src/harnesslab/web`: localhost Web UI (`harnesslab serve`)
+- `src/harnesslab/web`: localhost Web UI (`harnesslab serve`); lifecycle
+  helper `./hl-serve` (`scripts/hl_serve.py`)
 - `tests`: unit and contract tests
 - `docs`: roadmap and architecture documentation
 

@@ -12,9 +12,23 @@ import httpx
 from harnesslab.core.compaction import ModelOverflowError, estimate_tokens
 from harnesslab.core.models import Decision, Session
 from harnesslab.core.prompt import ComposedPrompt, PromptBlock, PromptComposer
+from harnesslab.providers.model_resolve import (
+    DEFAULT_DEEPSEEK_MODEL,
+    resolve_deepseek_model_name,
+)
 
 DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
-DEFAULT_MODEL = "deepseek-chat"
+# Official API models (2026): deepseek-v4-flash, deepseek-v4-pro.
+# deepseek-chat → v4-flash non-thinking (deprecated alias).
+DEFAULT_MODEL = DEFAULT_DEEPSEEK_MODEL
+SUPPORTED_API_MODELS: frozenset[str] = frozenset(
+    {
+        "deepseek-v4-flash",
+        "deepseek-v4-pro",
+        "deepseek-chat",
+        "deepseek-reasoner",
+    }
+)
 DEFAULT_TIMEOUT_SECONDS = 30.0
 
 DynamicBlocksProvider = Callable[[Session], list[PromptBlock]]
@@ -41,6 +55,7 @@ class DeepSeekModel:
         api_key: str | None = None,
         base_url: str | None = None,
         model_name: str | None = None,
+        thinking_mode: str = "disabled",
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         transport: httpx.BaseTransport | None = None,
         composer: PromptComposer | None = None,
@@ -54,7 +69,8 @@ class DeepSeekModel:
             )
         self._tool_specs_provider = tool_specs_provider
         self._base_url = base_url or os.getenv("DEEPSEEK_BASE_URL") or DEFAULT_BASE_URL
-        self._model_name = model_name or os.getenv("DEEPSEEK_MODEL") or DEFAULT_MODEL
+        self._model_name = resolve_deepseek_model_name(model_name=model_name)
+        self._thinking_mode = (thinking_mode or "disabled").strip().lower()
         self._client = httpx.Client(
             base_url=self._base_url.rstrip("/"),
             timeout=timeout_seconds,
@@ -124,6 +140,8 @@ class DeepSeekModel:
             "messages": composed.as_openai_messages(),
             "temperature": 0,
         }
+        if self._thinking_mode in {"enabled", "disabled"}:
+            body["thinking"] = {"type": self._thinking_mode}
         tools = self._tool_specs_provider()
         if tools:
             body["tools"] = tools

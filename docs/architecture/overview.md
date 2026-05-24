@@ -166,7 +166,7 @@ sequenceDiagram
             else allowed
                 CoreLoop->>ToolRuntime: execute(call)
                 ToolRuntime-->>CoreLoop: tool result
-                CoreLoop->>SessionStore: append tool message
+                CoreLoop->>SessionStore: append assistant tool_calls + tool message
                 CoreLoop->>TraceRecorder: tool_executed
             end
         else assistant (continue)
@@ -208,9 +208,10 @@ should be replaceable behind these contracts.
 - Single process runtime for fast iteration
 - JSONL trace output for transparent debugging
 - Policy-first tool execution (deny by default for unknown tools)
-- Built-in tool surface (Phase 2.5): `read_file`, `write_file`,
-  `edit_file`, `grep`, `glob`, `run_shell_safe` with expanded read-only
-  shell allowlist and git subcommand gate
+- Built-in tool surface: `read_file`, `write_file`, `edit_file`,
+  `apply_patch`, `grep`, `glob`, `fetch_url`, `run_shell_safe` with
+  expanded read-only shell allowlist, git subcommand gate, and
+  `fetch_url` host allowlist (MVP: `wttr.in`)
 - Deterministic core via injected `ClockPort` and `IdPort` (replay-ready by construction)
 - Shell tool runs argv with `shell=False`; policy bans shell metacharacters
 - `ToolRegistry` normalizes both "unknown tool" and tool exceptions into
@@ -340,6 +341,12 @@ under `src/harnesslab/providers/`:
 - `SimpleModel`: deterministic parser model for eval/replay and offline
   workflows.
 - `DeepSeekModel`: networked provider for `harnesslab run --model deepseek`.
+  Default API model is `deepseek-v4-flash` (non-thinking); config/env may
+  select `deepseek-v4-pro`. Legacy `deepseek-chat` aliases remain accepted.
+
+Phase 4.1 adds `providers/registry.py`: `create_model(backend, config, …)`
+maps `config.model.default_backend` to `SimpleModel` or `DeepSeekModel`
+without inlining provider construction in `cli.build_runtime`.
 
 This split keeps deterministic quality gates intact:
 
@@ -448,6 +455,7 @@ flowchart LR
 Endpoints:
 
 - `GET /` — static chat page (`web/static/`)
+- `GET /api/settings` — read-only operator config snapshot (no secrets)
 - `GET /api/sessions` — list sessions (newest first)
 - `GET /api/sessions/{id}` — session metadata, messages, `memory_notes`
 - `GET /api/sessions/{id}/trace` — tool/step events for inspector panel
@@ -457,7 +465,13 @@ Endpoints:
 
 The default browser client uses **SSE** (`Accept: text/event-stream`)
 so tool/step trace events stream live into the right-hand inspector
-panel during each turn. Composer buttons expose **Fork** and
+panel during each turn. The message list shows **user** and non-empty
+**assistant** replies only; internal `tool` / `system` rows remain in
+SQLite for the model loop. The latest turn may also include structured
+**tool cards** in the JSON/SSE `done` payload (derived from
+`tool_executed` trace events, not raw `[tool:…]` message text). The
+sidebar **settings** panel shows model label, workspace path, and
+config path from `/api/settings`. Composer buttons expose **Fork** and
 **`/remember`** (session-scoped memory writes).
 
 ## Session auto-titles (Phase 3.2)
@@ -488,8 +502,21 @@ the loop appends a `system` message and emits `memory_read`.
 stores an explicit note (no model call) and emits ``memory_written``.
 Ordinary ``final`` turns do **not** auto-write memory.
 
-**Out of scope (Phase 3.3):** cross-session retrieval, vector search,
-rich ``MemoryRecord`` schema (see ``data-model.md``).
+**Out of scope (Phase 3.3):** vector search, rich ``MemoryRecord``
+schema (see ``data-model.md``).
+
+### Workspace memory lite (Phase 4.5)
+
+Optional cross-session notes keyed by workspace root hash
+(``workspace:{sha16}:notes``):
+
+| Command | Scope | Trace events |
+| --- | --- | --- |
+| ``/remember <text>`` | Current session only | `memory_written` / `memory_read` |
+| ``/remember-global <text>`` | All sessions in workspace | `workspace_memory_written` / `workspace_memory_read` |
+
+Writes are explicit user commands only (no LLM extraction). The loop
+requires ``workspace_root`` on ``HarnessLoop`` for inject/write.
 
 ```mermaid
 flowchart LR
@@ -515,4 +542,5 @@ flowchart LR
    (Phase 2.1–2.6)
 7. Web chat UI + LLM session auto-titles — DONE (Phase 3.2)
 8. Memory on session (read/write policy) — DONE (Phase 3.3)
-9. Cross-session memory / vector retrieval — planned (post-3.3)
+9. Cross-session memory / vector retrieval — **lite workspace notes
+   shipped (Phase 4.5)**; vector RAG still planned

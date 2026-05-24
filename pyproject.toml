@@ -35,6 +35,9 @@ packages = ["src/harnesslab"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q"
+markers = [
+    "network: tests requiring live network access",
+]
 
 [tool.ruff]
 line-length = 100

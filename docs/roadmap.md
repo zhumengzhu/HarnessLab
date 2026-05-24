@@ -62,27 +62,29 @@ flowchart TD
     S6 --> P11 --> P21 --> P22 --> P23 --> P24 --> P25 --> P26
 ```
 
-## Current State (Post-MVP Phase 2 — complete)
+## Current State (Post-MVP Phase 3 — in progress)
 
-HarnessLab is no longer a one-turn MVP loop. The shipped runtime includes:
+HarnessLab is a daily-usable local agent harness. The shipped runtime includes
+everything from Phase 2 **plus**:
+
+- **Web chat UI** (`harnesslab serve`, `./hl-serve`) with SSE trace panel,
+  fork, `/remember`, auto session titles (DeepSeek)
+- **Session-scoped memory** (`/remember`, inject-on-read)
+- **Eight built-in tools** including `apply_patch` and allowlisted `fetch_url`
+- **Twelve eval tasks** + GitHub Actions gate
+- **Provider message round-trip** — assistant `tool_calls` + tool results
+  persisted for DeepSeek/OpenAI-compatible replay
+
+**In flight:** Phase 3.4 shell allowlist profiles; operator config file
+(Phase 3.5). See [Post-MVP Phase 3](#post-mvp-phase-3--usability--production-feedback-in-progress)
+and [Post-MVP Phase 4 proposal](#post-mvp-phase-4--hardening--operator-ergonomics-proposal).
+
+Historical Phase 2 snapshot (for context):
 
 - **Multi-step agent loop** (`run_session`, `--max-steps`; terminal
   decisions `final` / `ask_user`)
-- **Prompt composer** (static markdown blocks + dynamic env / AGENTS.md /
-  tool guide; consumed by DeepSeek)
-- **Session first-class** (status, step_count, title, fork/resume CLI;
-  SQLite v2 schema)
-- **Auto compaction** (threshold + overflow recovery with optional
-  `LiveSummarizer`)
-- **Six built-in tools** + expanded read-only shell allowlist
-- **Context observability** (`ContextSnapshot` on every `model_call`;
-  `harnesslab context show/series`)
-- **DeepSeek provider** for `harnesslab run --model deepseek`
-- **Eval / replay / propose** unchanged as quality gates
-
-**Deferred:** cross-session memory retrieval/writeback (Phase 3.3),
-static HTML metrics dashboards, eval task expansion from production
-failures (Phase 3.1). See [Post-MVP Phase 3](#post-mvp-phase-3--usability--production-feedback-in-progress).
+- **Prompt composer**, **session first-class**, **auto compaction**
+- **Context observability**, **DeepSeek provider**, **eval / replay / propose**
 
 ## MVP Deliverables (historical — Step 1 baseline)
 
@@ -511,8 +513,9 @@ flowchart TD
     P32[Phase 3.2<br/>Web Chat UI + auto session titles]
     P33[Phase 3.3<br/>Memory on Session]
     P34[Phase 3.4<br/>Tool & edit enhancements]
+    P35[Phase 3.5<br/>Operator config JSON]
 
-    P31 --> P32 --> P33 --> P34
+    P31 --> P32 --> P33 --> P34 --> P35
 ```
 
 ### Phase 3.1 — Eval expansion from real tasks — DONE
@@ -520,8 +523,9 @@ flowchart TD
 - Codify recurring `harnesslab propose` clusters as YAML eval tasks
   before merging fixes — see `eval/README.md` (propose→eval workflow).
 - Shipped tasks: `grep_then_edit`, `compaction_on_threshold`,
-  `session_resume_second_turn` (nine tasks total).
-- Eval runner registers all six built-in tools; optional per-task
+  `session_resume_second_turn`, `apply_patch_unified_diff`,
+  `fetch_url_weather` (twelve tasks total).
+- Eval runner registers all eight built-in tools; optional per-task
   `limits:` overrides for compaction tests.
 - GitHub Actions workflow `.github/workflows/eval.yml` runs
   `pytest` + `harnesslab eval` on pull requests.
@@ -560,6 +564,8 @@ workflow documented.
 - `src/harnesslab/web/` — stdlib `http.server` + static assets (no
   new runtime dependencies).
 - `harnesslab serve [--port 8787] [--model deepseek|simple]`.
+- `./hl-serve` — Python lifecycle helper at repo root (`start|stop|
+  restart|status`); optional `~/.config/harnesslab/env` for secrets.
 - `src/harnesslab/core/title.py` — `derive_title_from_text`,
   `LiveTitleNamer`, loop hook `_maybe_auto_title`.
 
@@ -588,22 +594,136 @@ sees the same SQLite rows; streaming turn shows tool/step events.
 - **Not in scope:** cross-session RAG, vector index, LLM memory
   extraction.
 
-### Phase 3.4 — Tool & edit enhancements — IN PROGRESS
+### Phase 3.4 — Tool & edit enhancements — DONE
 
-- `apply_patch` unified-diff editing — **shipped** (`src/harnesslab/tools/patch.py`).
-- Optional shell allowlist profiles — planned.
-- UI affordances for tool output — partial (3.2.2 inspector panel;
-  richer inline tool cards remain optional).
+- `apply_patch` unified-diff editing — **shipped**.
+- `fetch_url` read-only HTTP for allowlisted hosts (MVP: `wttr.in`) — **shipped**.
+- Shell allowlist profiles (`dev`, `read_only`, `strict`) — **shipped**
+  (`policy/shell_profiles.py`; config `policy.shell_profile`).
+- Eval task `shell_profile_strict` guards profile-specific denial.
+- UI affordances for tool output — partial (main chat hides raw `tool`
+  messages; richer inline tool cards remain optional).
+
+### Phase 3.5 — Operator configuration — DONE
+
+- `core/operator_config.py` loads `~/.config/harnesslab/config.json`.
+- Precedence: CLI > env > config > defaults; secrets stay in
+  [`scripts/hl-serve.example.env`](../scripts/hl-serve.example.env).
+- Example schema: [`scripts/harnesslab.config.example.json`](../scripts/harnesslab.config.example.json).
+- `harnesslab run` / `serve` consume shared defaults; `./hl-serve` too.
+- Eval: `--skip-tags network` + pytest `network` marker for CI (Phase 4.4
+  partial — shipped early).
+
+**Configuration ladder (shipped)**
+
+| Layer | Location | Purpose |
+|-------|----------|---------|
+| Secrets | `~/.config/harnesslab/env` | API keys only. Template: [`scripts/hl-serve.example.env`](../scripts/hl-serve.example.env) |
+| Operator defaults | `~/.config/harnesslab/config.json` | Non-secret defaults. Example: [`scripts/harnesslab.config.example.json`](../scripts/harnesslab.config.example.json) |
+| Serve lifecycle | `./hl-serve` + `HL_SERVE_*` | start/stop/restart overrides |
+| CLI flags | `harnesslab run/serve/eval …` | per-invocation overrides (highest precedence) |
+
+Precedence: `CLI flag > process env > config.json > built-in default`.
+
+---
+
+## Post-MVP Phase 4 — Hardening & operator ergonomics (proposal)
+
+Phase 3 made the harness *usable*. Phase 4 should make it *trustworthy
+under daily use* without violating AGENTS.md non-goals (no multi-agent
+orchestration, no distributed runtime, no plugin marketplace, no
+auto-applied proposal pipelines).
+
+```mermaid
+flowchart TD
+    P35[Phase 3.5<br/>Operator config JSON]
+    P41[Phase 4.1<br/>Provider registry]
+    P42[Phase 4.2<br/>Shell policy profiles]
+    P43[Phase 4.3<br/>Web settings + UX]
+    P44[Phase 4.4<br/>Eval / CI hardening]
+    P45[Phase 4.5<br/>Cross-session memory lite]
+
+    P35 --> P41
+    P35 --> P42
+    P41 --> P43
+    P42 --> P44
+    P43 --> P44
+    P44 --> P45
+```
+
+Each item below uses the same **Entry / Deliverables / Exit** bar as
+Steps 1–6. Nothing starts until its Entry criteria are objectively true.
+
+### Phase 4.1 — Provider registry (config-driven backends) — DONE
+
+- **Entry**: Phase 3.5 config loader shipped; `ModelPort` unchanged.
+- **Deliverables**: map `config.model.default_backend` → adapter
+  factory (`simple`, `deepseek`, future `openai`-compatible); CLI
+  `--model` overrides config; provider failures still normalize to
+  `Decision(kind=final, …)` per AGENTS.md.
+- **Exit**: switching backend requires config edit only (no code change);
+  contract tests per adapter; eval stays on `simple`/`ReplayModel` by
+  default in CI.
+
+### Phase 4.2 — Shell allowlist profiles (finish 3.4 remainder)
+
+- **Entry**: policy tests cover current monolithic allowlist.
+- **Deliverables**: named profiles (`read_only`, `dev`, `strict`) in
+  config; `DefaultPolicy` selects profile at runtime; denylist unchanged;
+  document in `tool-runtime.md`.
+- **Exit**: eval task asserts profile-specific allow/deny; default profile
+  matches today's behavior (no silent regression).
+
+### Phase 4.3 — Web UI settings & tool UX — DONE
+
+- **Entry**: config.json readable from Python; serve already on SQLite.
+- **Deliverables**: optional settings panel (model label, workspace path,
+  read-only config snapshot); optional inline tool result cards in chat
+  (structured from trace, not raw `[tool:…]` strings).
+- **Exit**: manual QA checklist + one integration test for settings API;
+  chat still hides internal `tool` role rows by default.
+
+### Phase 4.4 — Eval / CI hardening
+
+- **Entry**: twelve tasks green locally; `fetch_url_weather` may need network.
+- **Deliverables**: tag network-dependent tasks; document offline CI
+  strategy (`pytest -m "not network"` or recorded replay stub); baseline
+  update discipline in `eval/README.md`; wire `.github/workflows/eval.yml`
+  if not already on PRs.
+- **Exit**: CI green without live API keys; network tasks skippable but
+  run in manual/`RUN_LIVE=1` lane.
+
+### Phase 4.5 — Cross-session memory (lite) — DONE
+
+- **Entry**: Phase 3.3 session memory stable; config loader exists.
+- **Deliverables**: optional workspace-scoped notes key (not vector RAG);
+  explicit write path (CLI or `/remember-global` TBD); trace events;
+  **no** LLM-extracted memory (AGENTS.md proposal rules unchanged).
+- **Exit**: eval task for read/inject across two sessions; docs updated;
+  replay compare ignores volatile memory timestamps only.
+
+**Explicitly deferred beyond Phase 4**
+
+- Multi-agent orchestration, distributed workers, plugin marketplace
+- Metrics HTML dashboard (JSON CLI remains sufficient)
+- TS migration (Ports stay stable; migration is a separate program)
+- Auto-apply improvement proposals
+
+**Recommended execution order**
+
+1. Close **3.4** (shell profiles) — small, policy-bound, testable.
+2. Ship **3.5** (config.json) — unblocks everything else; link env template.
+3. **4.2** can merge with 3.4 if profiles are the same feature.
+4. **4.4** early — protects main while 4.1/4.3 land.
+5. **4.1** then **4.3** — user-visible provider switch.
+6. **4.5** last — highest design risk; needs session + config substrate.
 
 ---
 
 ## Deferred (longer horizon)
 
-- **Memory retrieval/writeback policy** — now tracked as
-  [Phase 3.3](#phase-33--memory-on-session--planned); remains
-  deferred until session UX (Phase 3.2) is exercised in production.
 - **Metrics dashboard artifact.** Static HTML report on top of
   `harnesslab metrics` / `harnesslab context`. The JSON CLI surfaces
-  are sufficient for now; external tooling can render trends.
-- **Eval task expansion from real failures** — now tracked as
-  [Phase 3.1](#phase-31--eval-expansion-from-real-tasks--planned).
+  are sufficient for Phase 4; revisit after operator config exists.
+- **TypeScript migration.** Stable Ports reduce risk; not scheduled until
+  Phase 4 hardening exits are met.

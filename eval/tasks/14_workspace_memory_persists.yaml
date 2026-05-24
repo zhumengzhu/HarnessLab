@@ -1,0 +1,31 @@
+name: workspace_memory_persists
+goal: workspace memory across sessions
+description: |
+  Phase 4.5 cross-session memory lite. ``/remember-global <text>`` appends
+  an explicit note keyed by workspace root. A new session in the same
+  workspace injects those notes and emits ``workspace_memory_read`` /
+  ``workspace_memory_written`` events.
+decisions:
+  - kind: final
+    assistant_message: saw workspace notes
+turns:
+  - input: '/remember-global deploy on Fridays'
+  - input: follow up
+    new_session: true
+expected:
+  final_reply_contains:
+    - saw workspace notes
+  events_include:
+    - event_type: workspace_memory_written
+      payload_contains:
+        line_count: 1
+        source: remember_global
+    - event_type: session_finished
+      payload_contains:
+        reason: remember_global
+    - event_type: workspace_memory_read
+      payload_contains:
+        line_count: 1
+  no_event_types:
+    - tool_denied
+    - tool_invalid_args

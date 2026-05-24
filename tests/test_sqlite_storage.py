@@ -84,6 +84,42 @@ def test_session_round_trip_preserves_messages(tmp_path: Path) -> None:
         store.close()
 
 
+def test_session_round_trip_preserves_assistant_tool_calls(tmp_path: Path) -> None:
+    store = SqliteSessionStore(tmp_path / "s.sqlite")
+    try:
+        session = Session(goal="tool calls")
+        tool_calls = [
+            {
+                "id": "tool_xyz",
+                "type": "function",
+                "function": {"name": "grep", "arguments": '{"pattern":"x"}'},
+            }
+        ]
+        session.messages.extend(
+            [
+                Message(role="user", content="find x", session_id=session.id),
+                Message(
+                    role="assistant",
+                    content="",
+                    session_id=session.id,
+                    tool_calls=tool_calls,
+                ),
+                Message(
+                    role="tool",
+                    content="match",
+                    session_id=session.id,
+                    tool_call_id="tool_xyz",
+                ),
+            ]
+        )
+        store.create(session)
+        loaded = store.get(session.id)
+        assert loaded.messages[1].tool_calls == tool_calls
+        assert loaded.messages[2].tool_call_id == "tool_xyz"
+    finally:
+        store.close()
+
+
 def test_session_save_rewrites_messages(tmp_path: Path) -> None:
     store = SqliteSessionStore(tmp_path / "s.sqlite")
     try:

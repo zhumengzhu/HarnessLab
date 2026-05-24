@@ -9,19 +9,41 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from harnesslab.eval.loader import load_suite
 from harnesslab.eval.runner import TaskRunner
+from harnesslab.eval.task import TaskSuite
 
 TASKS_DIR = Path(__file__).resolve().parents[1] / "eval" / "tasks"
 
 
 def test_shipped_tasks_all_pass() -> None:
     suite = load_suite(TASKS_DIR)
-    assert suite.tasks, "no eval tasks found"
+    offline = TaskSuite(
+        tasks=[t for t in suite.tasks if "network" not in t.tags]
+    )
+    assert offline.tasks, "no offline eval tasks found"
 
-    results = TaskRunner().run(suite)
+    results = TaskRunner().run(offline)
     failures = [(r.task_name, r.failures) for r in results if not r.passed]
     assert not failures, f"failing tasks: {failures}"
+
+
+@pytest.mark.network
+def test_network_tasks_pass_when_live() -> None:
+    import os
+
+    if os.getenv("RUN_LIVE_EVAL") != "1":
+        pytest.skip("set RUN_LIVE_EVAL=1 to run network-dependent eval tasks")
+
+    suite = load_suite(TASKS_DIR)
+    network = TaskSuite(tasks=[t for t in suite.tasks if "network" in t.tags])
+    assert network.tasks, "expected at least one network-tagged task"
+
+    results = TaskRunner().run(network)
+    failures = [(r.task_name, r.failures) for r in results if not r.passed]
+    assert not failures, f"failing network tasks: {failures}"
 
 
 def test_shipped_tasks_cover_expected_paths() -> None:
@@ -40,4 +62,6 @@ def test_shipped_tasks_cover_expected_paths() -> None:
         "session_resume_second_turn",
         "session_memory_persists",
         "apply_patch_unified_diff",
+        "fetch_url_weather",
+        "shell_profile_strict",
     } <= names

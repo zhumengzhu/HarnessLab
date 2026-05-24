@@ -117,6 +117,8 @@ class PromptComposer:
                     content=msg.content,
                     origin=f"session:{msg.id}",
                     role=msg.role,
+                    tool_call_id=msg.tool_call_id,
+                    tool_calls=msg.tool_calls,
                 )
             )
         return ComposedPrompt(blocks=blocks)

@@ -11,6 +11,7 @@ import urllib.request
 from pathlib import Path
 
 from harnesslab.cli import build_runtime
+from harnesslab.core.operator_config import OperatorConfig, config_settings_snapshot
 from harnesslab.telemetry.jsonl_recorder import JsonlTraceRecorder
 from harnesslab.web.server import WebRuntime, serve
 from harnesslab.web.trace_hub import TraceHub
@@ -86,6 +87,11 @@ def _web_runtime(tmp_path: Path, *, max_steps: int = 1) -> WebRuntime:
         default_max_steps=max_steps,
         trace_hub=hub,
         trace_path=trace_path,
+        settings=config_settings_snapshot(
+            OperatorConfig(model_backend="simple"),
+            workspace_root=tmp_path,
+            model_backend="simple",
+        ),
     )
 
 
@@ -179,6 +185,19 @@ def test_web_trace_endpoint(tmp_path: Path) -> None:
     trace = _get(f"{base}/api/sessions/{session_id}/trace")
     assert trace["session_id"] == session_id
     assert any(e["event_type"] == "decision_made" for e in trace["events"])
+
+
+def test_web_settings_api(tmp_path: Path) -> None:
+    port = _free_port()
+    runtime = _web_runtime(tmp_path)
+    _start_server(runtime, port)
+    base = f"http://127.0.0.1:{port}"
+
+    data = _get(f"{base}/api/settings")
+    settings = data["settings"]
+    assert settings["model_backend"] == "simple"
+    assert settings["workspace"] == str(tmp_path.resolve())
+    assert "shell_profile" in settings
 
 
 def test_web_static_index_served(tmp_path: Path) -> None:

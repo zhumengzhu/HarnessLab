@@ -110,6 +110,36 @@
         "denials": 0,
         "invalid_args": 0
       }
+    },
+    "fetch_url_weather": {
+      "passed": true,
+      "metrics": {
+        "turns": 1,
+        "tool_calls": 1,
+        "tool_failures": 0,
+        "denials": 0,
+        "invalid_args": 0
+      }
+    },
+    "shell_profile_strict": {
+      "passed": true,
+      "metrics": {
+        "turns": 1,
+        "tool_calls": 0,
+        "tool_failures": 0,
+        "denials": 1,
+        "invalid_args": 0
+      }
+    },
+    "workspace_memory_persists": {
+      "passed": true,
+      "metrics": {
+        "turns": 2,
+        "tool_calls": 0,
+        "tool_failures": 0,
+        "denials": 0,
+        "invalid_args": 0
+      }
     }
   }
 }

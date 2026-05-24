@@ -18,6 +18,9 @@ class Message(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     session_id: str | None = None
     tool_call_id: str | None = None
+    # OpenAI/DeepSeek assistant ``tool_calls`` payload when the loop
+    # records a model-initiated tool request before the tool result.
+    tool_calls: list[dict[str, Any]] | None = None
 
 
 SessionStatus = Literal[

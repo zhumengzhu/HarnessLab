@@ -64,6 +64,14 @@ MIGRATIONS: list[tuple[int, str]] = [
             ON sessions(parent_session_id);
         """,
     ),
+    (
+        3,
+        # Persist assistant tool_calls alongside tool result messages so
+        # DeepSeek/OpenAI chat history round-trips correctly.
+        """
+        ALTER TABLE messages ADD COLUMN tool_calls TEXT;
+        """,
+    ),
 ]
 
 

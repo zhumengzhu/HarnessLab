@@ -31,6 +31,8 @@ TOOL_PANEL_EVENT_TYPES = frozenset(
         "tool_invalid_args",
         "memory_read",
         "memory_written",
+        "workspace_memory_read",
+        "workspace_memory_written",
         "compaction_started",
         "compaction_completed",
         "session_titled",
@@ -46,6 +48,7 @@ class WebRuntime:
     default_max_steps: int = DEFAULT_MAX_STEPS
     trace_hub: TraceHub | None = None
     trace_path: Path | None = None
+    settings: dict[str, Any] = field(default_factory=dict)
     _locks: dict[str, threading.Lock] = field(default_factory=dict)
     _global: threading.Lock = field(default_factory=threading.Lock)
 
@@ -85,6 +88,40 @@ def _message_json(msg) -> dict[str, Any]:  # type: ignore[no-untyped-def]
 
 def _trace_event_json(event: TraceEvent) -> dict[str, Any]:
     return event.model_dump(mode="json")
+
+
+def _tool_card_json(event: TraceEvent) -> dict[str, Any]:
+    payload = event.payload
+    return {
+        "tool": payload.get("tool"),
+        "ok": payload.get("ok", True),
+        "error": payload.get("error"),
+        "output_preview": payload.get("output_preview", ""),
+        "output_truncated": payload.get("output_truncated", False),
+        "duration_ms": payload.get("duration_ms"),
+    }
+
+
+def _tool_cards_for_turn(events: list[TraceEvent], turn_index: int) -> list[dict[str, Any]]:
+    cards: list[dict[str, Any]] = []
+    capturing = False
+    for event in events:
+        if event.event_type == "user_input_received":
+            if event.payload.get("turn_index") == turn_index:
+                capturing = True
+                cards = []
+            elif capturing:
+                break
+        if capturing and event.event_type == "tool_executed":
+            cards.append(_tool_card_json(event))
+    return cards
+
+
+def _session_trace_events(runtime: WebRuntime, session_id: str) -> list[TraceEvent]:
+    path = runtime.trace_path
+    if path is None or not path.is_file():
+        return []
+    return [e for e in read_trace(path) if e.session_id == session_id]
 
 
 def _memory_notes_for(loop: HarnessLoop, session_id: str) -> str | None:
@@ -146,6 +183,9 @@ class _Handler(BaseHTTPRequestHandler):
         if path.startswith("/static/"):
             rel = path[len("/static/") :]
             return self._serve_static(rel)
+
+        if path == "/api/settings":
+            return self._json_ok({"settings": self.runtime.settings})
 
         if path == "/api/health":
             return self._json_ok(
@@ -260,10 +300,14 @@ class _Handler(BaseHTTPRequestHandler):
 
     def _turn_payload(self, session: Session, reply: str) -> dict[str, Any]:
         notes = _memory_notes_for(self.runtime.loop, session.id)
+        finished_turn = max(session.turn_count - 1, 0)
+        trace_events = _session_trace_events(self.runtime, session.id)
+        tool_cards = _tool_cards_for_turn(trace_events, finished_turn)
         return {
             "session": _session_json(session, memory_notes=notes),
             "reply": reply,
             "messages": [_message_json(m) for m in session.messages],
+            "tool_cards": tool_cards,
         }
 
     def _run_turn_sse(
@@ -319,10 +363,7 @@ class _Handler(BaseHTTPRequestHandler):
         return write
 
     def _trace_events_for(self, session_id: str) -> list[TraceEvent]:
-        path = self.runtime.trace_path
-        if path is None or not path.is_file():
-            return []
-        return [e for e in read_trace(path) if e.session_id == session_id]
+        return _session_trace_events(self.runtime, session_id)
 
     def _serve_static(self, rel: str) -> None:
         safe = Path(rel)

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 from datetime import datetime
+from pathlib import Path
 
 from harnesslab.core.compaction import (
     ModelOverflowError,
@@ -26,9 +28,13 @@ from harnesslab.core.contracts import (
 from harnesslab.core.memory_policy import (
     append_note,
     format_memory_message,
+    format_remember_global_note,
     format_remember_note,
+    format_workspace_memory_message,
     parse_remember_command,
+    parse_remember_global_command,
     session_memory_key,
+    workspace_memory_key,
 )
 from harnesslab.core.models import (
     TERMINAL_DECISION_KINDS,
@@ -75,6 +81,7 @@ class HarnessLoop:
         summarizer: Summarizer | None = None,
         title_namer: TitleNamer | None = None,
         memory: MemoryStorePort | None = None,
+        workspace_root: Path | None = None,
     ) -> None:
         self._model = model
         self._policy = policy
@@ -87,6 +94,7 @@ class HarnessLoop:
         self._summarizer: Summarizer | None = summarizer
         self._title_namer: TitleNamer | None = title_namer
         self._memory: MemoryStorePort | None = memory
+        self._workspace_root = workspace_root.resolve() if workspace_root else None
 
     def start(self, goal: str) -> Session:
         session = Session(
@@ -99,7 +107,7 @@ class HarnessLoop:
         self._record(
             session=session,
             event_type="session_started",
-            payload={"goal": goal},
+            payload=self._session_started_payload(goal=goal),
         )
         return session
 
@@ -138,7 +146,10 @@ class HarnessLoop:
         self._record(
             session=forked,
             event_type="session_started",
-            payload={"goal": forked.goal, "parent_session_id": parent.id},
+            payload={
+                **self._session_started_payload(goal=forked.goal),
+                "parent_session_id": parent.id,
+            },
         )
         return forked
 
@@ -185,11 +196,16 @@ class HarnessLoop:
         session.messages.append(
             self._make_message(role="user", content=user_input, session=session)
         )
+        self._inject_workspace_memory(session)
         self._inject_session_memory(session)
 
         remember_body = parse_remember_command(user_input)
         if remember_body is not None:
             return self._run_remember_turn(session, remember_body)
+
+        global_body = parse_remember_global_command(user_input)
+        if global_body is not None:
+            return self._run_remember_global_turn(session, global_body)
 
         last_response = ""
         terminal_reason = "max_steps"
@@ -325,6 +341,54 @@ class HarnessLoop:
         self._sessions.save(session)
         return reply
 
+    def _run_remember_global_turn(self, session: Session, body: str) -> str:
+        """Handle ``/remember-global`` without calling the model."""
+
+        if self._memory is None or self._workspace_root is None:
+            reply = "Workspace memory is not configured."
+        else:
+            self._write_remember_global_note(session, body)
+            reply = "Stored in workspace memory."
+
+        session.messages.append(
+            self._make_message(role="assistant", content=reply, session=session)
+        )
+        self._record(
+            session=session,
+            event_type="session_finished",
+            payload={"reason": "remember_global", "steps": 0},
+        )
+        session.turn_count += 1
+        session.status = "running"
+        self._maybe_auto_title(session)
+        self._sessions.save(session)
+        return reply
+
+    def _inject_workspace_memory(self, session: Session) -> None:
+        """Load workspace-scoped notes into the message list for this turn."""
+
+        if self._memory is None or self._workspace_root is None:
+            return
+        key = workspace_memory_key(self._workspace_root)
+        notes = self._memory.get(key)
+        if not notes:
+            return
+        session.messages.append(
+            self._make_message(
+                role="system",
+                content=format_workspace_memory_message(notes),
+                session=session,
+            )
+        )
+        self._record(
+            session=session,
+            event_type="workspace_memory_read",
+            payload={
+                "key": key,
+                "line_count": notes.count("\n") + 1,
+            },
+        )
+
     def _inject_session_memory(self, session: Session) -> None:
         """Load session-scoped notes into the message list for this turn."""
 
@@ -366,6 +430,27 @@ class HarnessLoop:
                 "line": line,
                 "line_count": updated.count("\n") + 1,
                 "source": "remember",
+            },
+        )
+
+    def _write_remember_global_note(self, session: Session, body: str) -> None:
+        """Append an explicit ``/remember-global`` note to workspace memory."""
+
+        if self._workspace_root is None:
+            return
+        key = workspace_memory_key(self._workspace_root)
+        line = format_remember_global_note(body)
+        previous = self._memory.get(key) if self._memory else None
+        updated = append_note(previous, line)
+        self._memory.put(key, updated)  # type: ignore[union-attr]
+        self._record(
+            session=session,
+            event_type="workspace_memory_written",
+            payload={
+                "key": key,
+                "line": line,
+                "line_count": updated.count("\n") + 1,
+                "source": "remember_global",
             },
         )
 
@@ -583,14 +668,7 @@ class HarnessLoop:
         schema_ok, schema_error = self._tools.validate_args(call)
         if not schema_ok:
             invalid_msg = f"Tool args invalid: {schema_error}"
-            session.messages.append(
-                self._make_message(
-                    role="tool",
-                    content=invalid_msg,
-                    session=session,
-                    tool_call_id=call.id,
-                )
-            )
+            self._append_tool_exchange(session, call, invalid_msg)
             self._record(
                 session=session,
                 event_type="tool_invalid_args",
@@ -608,14 +686,7 @@ class HarnessLoop:
 
         if not allowed:
             denied_msg = f"Tool denied by policy: {reason}"
-            session.messages.append(
-                self._make_message(
-                    role="tool",
-                    content=denied_msg,
-                    session=session,
-                    tool_call_id=call.id,
-                )
-            )
+            self._append_tool_exchange(session, call, denied_msg)
             self._record(
                 session=session,
                 event_type="tool_denied",
@@ -634,14 +705,7 @@ class HarnessLoop:
         call.ended_at = self._clock.now()
 
         tool_message = self._format_tool_message(call=call, result=result)
-        session.messages.append(
-            self._make_message(
-                role="tool",
-                content=tool_message,
-                session=session,
-                tool_call_id=call.id,
-            )
-        )
+        self._append_tool_exchange(session, call, tool_message)
         self._record(
             session=session,
             event_type="tool_executed",
@@ -670,12 +734,38 @@ class HarnessLoop:
             "output_truncated": truncated,
         }
 
+    def _append_tool_exchange(
+        self,
+        session: Session,
+        call: ToolCall,
+        tool_content: str,
+    ) -> None:
+        """Record assistant ``tool_calls`` plus the tool result message."""
+
+        session.messages.append(
+            self._make_message(
+                role="assistant",
+                content="",
+                session=session,
+                tool_calls=_tool_calls_payload(call),
+            )
+        )
+        session.messages.append(
+            self._make_message(
+                role="tool",
+                content=tool_content,
+                session=session,
+                tool_call_id=call.id,
+            )
+        )
+
     def _make_message(
         self,
         role: str,
         content: str,
         session: Session,
         tool_call_id: str | None = None,
+        tool_calls: list[dict] | None = None,
     ) -> Message:
         return Message(
             id=self._ids.new_id("msg"),
@@ -684,6 +774,7 @@ class HarnessLoop:
             created_at=self._clock.now(),
             session_id=session.id,
             tool_call_id=tool_call_id,
+            tool_calls=tool_calls,
         )
 
     def _make_tool_call(self, session_id: str, name: str, args: dict) -> ToolCall:
@@ -693,6 +784,13 @@ class HarnessLoop:
             args=args,
             session_id=session_id,
         )
+
+    def _session_started_payload(self, *, goal: str) -> dict:
+        payload: dict = {"goal": goal}
+        profile = getattr(self._policy, "_shell_profile", None)
+        if profile:
+            payload["shell_profile"] = profile
+        return payload
 
     def _record(self, session: Session, event_type: str, payload: dict) -> None:
         self._trace.record(
@@ -710,3 +808,16 @@ class HarnessLoop:
         if result.ok:
             return f"[tool:{call.name}] {result.output}"
         return f"[tool:{call.name}] failed: {result.error or 'unknown error'}"
+
+
+def _tool_calls_payload(call: ToolCall) -> list[dict]:
+    return [
+        {
+            "id": call.id,
+            "type": "function",
+            "function": {
+                "name": call.name,
+                "arguments": json.dumps(call.args, ensure_ascii=False),
+            },
+        }
+    ]

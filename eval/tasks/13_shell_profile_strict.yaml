@@ -1,0 +1,19 @@
+name: shell_profile_strict
+goal: strict shell profile denies dev runners
+description: |
+  Phase 3.4 shell profiles: ``strict`` keeps a minimal inspection
+  allowlist. ``pytest`` is not permitted even though it is allowed
+  under the default ``dev`` profile.
+tags: []
+policy:
+  shell_profile: strict
+turns:
+  - input: '/tool run_shell_safe {"command":"pytest -q"}'
+expected:
+  events_include:
+    - event_type: tool_denied
+      payload_contains:
+        tool: run_shell_safe
+  no_event_types:
+    - tool_executed
+    - tool_invalid_args

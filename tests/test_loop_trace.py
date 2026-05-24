@@ -56,7 +56,7 @@ def test_trace_records_denied_with_policy_decision(tmp_path: Path) -> None:
     assert "out of workspace" in payload["reason"]
 
 
-def test_tool_path_appends_single_tool_message(tmp_path: Path) -> None:
+def test_tool_path_appends_assistant_tool_calls_and_tool_message(tmp_path: Path) -> None:
     loop = build_runtime(tmp_path)
     session = loop.start(goal="single message")
     loop.run_turn(session.id, '/tool write_file {"path":"b.txt","content":"x"}')
@@ -64,7 +64,9 @@ def test_tool_path_appends_single_tool_message(tmp_path: Path) -> None:
     tool_messages = [m for m in session.messages if m.role == "tool"]
     assistant_messages = [m for m in session.messages if m.role == "assistant"]
     assert len(tool_messages) == 1
-    assert len(assistant_messages) == 0
+    assert len(assistant_messages) == 1
+    assert assistant_messages[0].tool_calls is not None
+    assert assistant_messages[0].tool_calls[0]["id"] == tool_messages[0].tool_call_id
     assert tool_messages[0].tool_call_id is not None
     assert tool_messages[0].tool_call_id.startswith("tool_")
 
@@ -89,7 +91,7 @@ def test_invalid_args_short_circuit_before_policy(tmp_path: Path) -> None:
     assert not any(e["event_type"] == "tool_executed" for e in events)
 
 
-def test_invalid_args_writes_only_one_tool_message(tmp_path: Path) -> None:
+def test_invalid_args_writes_assistant_tool_calls_and_tool_message(tmp_path: Path) -> None:
     loop = build_runtime(tmp_path)
     session = loop.start(goal="schema msg")
     loop.run_turn(session.id, '/tool write_file {"path":123}')
@@ -97,7 +99,8 @@ def test_invalid_args_writes_only_one_tool_message(tmp_path: Path) -> None:
     tool_messages = [m for m in session.messages if m.role == "tool"]
     assistant_messages = [m for m in session.messages if m.role == "assistant"]
     assert len(tool_messages) == 1
-    assert len(assistant_messages) == 0
+    assert len(assistant_messages) == 1
+    assert assistant_messages[0].tool_calls is not None
     assert "Tool args invalid" in tool_messages[0].content
     assert tool_messages[0].tool_call_id is not None
 

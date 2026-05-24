@@ -30,6 +30,7 @@ from harnesslab.eval.task import (
 from harnesslab.memory.in_memory import InMemoryMemoryStore
 from harnesslab.policy.default_policy import DefaultPolicy
 from harnesslab.session.in_memory import InMemorySessionStore
+from harnesslab.tools.fetch_url_tool import FetchUrlTool
 from harnesslab.tools.file_tools import (
     EditFileTool,
     GlobTool,
@@ -57,6 +58,7 @@ def _build_tool_registry(workspace: Path, limits: RuntimeLimits) -> ToolRegistry
     tools.register(ApplyPatchTool(workspace, limits=limits))
     tools.register(GrepTool(workspace, limits=limits))
     tools.register(GlobTool(workspace, limits=limits))
+    tools.register(FetchUrlTool(limits=limits))
     tools.register(RunShellSafeTool(workspace, limits=limits))
     return tools
 
@@ -167,7 +169,12 @@ class TaskRunner:
 
         loop = HarnessLoop(
             model=model,
-            policy=DefaultPolicy(workspace_root=workspace),
+            policy=DefaultPolicy(
+                workspace_root=workspace,
+                shell_profile=(
+                    task.policy.shell_profile if task.policy is not None else None
+                ),
+            ),
             sessions=InMemorySessionStore(),
             tools=tools,
             trace=recorder,
@@ -175,18 +182,29 @@ class TaskRunner:
             ids=SeqIdProvider(),
             limits=limits,
             memory=memory,
+            workspace_root=workspace,
         )
 
         session = loop.start(goal=task.goal)
-        replies = _drive_turns(loop, session.id, task.turns)
+        replies = _drive_turns(loop, session.id, task.turns, default_goal=task.goal)
         final_reply = replies[-1] if replies else ""
         return recorder.events, final_reply
 
 
-def _drive_turns(loop: HarnessLoop, session_id: str, turns: Iterable[Any]) -> list[str]:
+def _drive_turns(
+    loop: HarnessLoop,
+    session_id: str,
+    turns: Iterable[Any],
+    *,
+    default_goal: str,
+) -> list[str]:
     replies: list[str] = []
+    current_id = session_id
     for turn in turns:
+        if turn.new_session:
+            session = loop.start(goal=turn.goal or default_goal)
+            current_id = session.id
         replies.append(
-            loop.run_session(session_id, turn.input, max_steps=turn.max_steps)
+            loop.run_session(current_id, turn.input, max_steps=turn.max_steps)
         )
     return replies

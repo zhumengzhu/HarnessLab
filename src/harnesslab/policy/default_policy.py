@@ -4,58 +4,13 @@ import shlex
 from pathlib import Path
 
 from harnesslab.core.models import ToolCall
+from harnesslab.policy.shell_profiles import (
+    DEFAULT_SHELL_PROFILE,
+    resolve_shell_profile,
+)
+from harnesslab.tools.fetch_url_tool import validate_fetch_url
 
 SHELL_METACHARS: frozenset[str] = frozenset("&|;<>`$()\n\r")
-
-# Commands the agent is permitted to invoke through ``run_shell_safe``.
-#
-# Scope: this allowlist defends against the agent issuing a single
-# obviously-destructive command directly. It does NOT promise that
-# ``python``/``pytest``/``uv run`` invocations cannot run arbitrary
-# code — a malicious or buggy script can. The workspace sandbox
-# (``cwd``) and the file tools' path checks remain the primary
-# defenses for that. Add commands here only when they are clearly
-# read-only or scoped to the workspace.
-DEFAULT_SHELL_ALLOWLIST: frozenset[str] = frozenset(
-    {
-        # Original Phase 1 minimum.
-        "ls",
-        "pwd",
-        "echo",
-        "cat",
-        # File inspection.
-        "head",
-        "tail",
-        "wc",
-        "file",
-        "du",
-        "df",
-        "stat",
-        # Discovery / introspection.
-        "which",
-        "env",
-        "date",
-        "whoami",
-        "hostname",
-        "uname",
-        # Search and tree (the grep/glob tools cover this too, but
-        # models sometimes reach for the shell out of habit).
-        "find",
-        "tree",
-        # Dev tooling (Python-first stack).
-        "python",
-        "python3",
-        "pytest",
-        "ruff",
-        "mypy",
-        "uv",
-        # Git is special-cased: only the read-only subcommands in
-        # SAFE_GIT_SUBCOMMANDS are accepted; everything else
-        # (push/reset/clean/checkout/…) is denied even though the
-        # head ``git`` appears here.
-        "git",
-    }
-)
 
 DEFAULT_SHELL_DENYLIST: frozenset[str] = frozenset(
     {
@@ -109,11 +64,16 @@ class DefaultPolicy:
         workspace_root: Path,
         shell_allowlist: set[str] | frozenset[str] | None = None,
         shell_denylist: set[str] | frozenset[str] | None = None,
+        shell_profile: str | None = None,
     ) -> None:
         self._workspace_root = workspace_root.resolve()
-        self._shell_allowlist = (
-            frozenset(shell_allowlist) if shell_allowlist is not None else DEFAULT_SHELL_ALLOWLIST
-        )
+        if shell_allowlist is not None:
+            self._shell_allowlist = frozenset(shell_allowlist)
+            self._shell_profile = "custom"
+        else:
+            profile_name = shell_profile or DEFAULT_SHELL_PROFILE
+            self._shell_allowlist = resolve_shell_profile(profile_name)
+            self._shell_profile = profile_name.strip().lower()
         self._shell_denylist = (
             frozenset(shell_denylist) if shell_denylist is not None else DEFAULT_SHELL_DENYLIST
         )
@@ -124,6 +84,9 @@ class DefaultPolicy:
 
         if call.name in {"grep", "glob"}:
             return self._check_optional_path(call)
+
+        if call.name == "fetch_url":
+            return self._check_fetch_url(call)
 
         if call.name == "run_shell_safe":
             return self._check_shell(call)
@@ -158,6 +121,9 @@ class DefaultPolicy:
         except ValueError:
             return False, "path out of workspace"
         return True, "ok"
+
+    def _check_fetch_url(self, call: ToolCall) -> tuple[bool, str]:
+        return validate_fetch_url(str(call.args.get("url", "")))
 
     def _check_shell(self, call: ToolCall) -> tuple[bool, str]:
         command = str(call.args.get("command", "")).strip()

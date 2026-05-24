@@ -31,11 +31,8 @@ from harnesslab.session.in_memory import InMemorySessionStore
 TASKS_DIR = Path(__file__).resolve().parents[1] / "eval" / "tasks"
 
 
-def _capture_task_trace(task: Task) -> list[TraceEvent]:
-    """Drive a task end-to-end against the production loop with deterministic
-    clock/ids, and return the recorded trace events. This is the same
-    machinery the eval runner uses, expressed locally so the replay tests
-    don't depend on the runner's private surface."""
+def _capture_task_trace(task: Task) -> tuple[list[TraceEvent], Path]:
+    """Drive a task end-to-end; return trace events and workspace path."""
 
     workspace = Path(tempfile.mkdtemp(prefix="hl-replay-trace-"))
     limits = _limits_for_task(task)
@@ -44,7 +41,12 @@ def _capture_task_trace(task: Task) -> list[TraceEvent]:
     model = ReplayModel(decisions=task.decisions) if task.decisions else SimpleModel()
     loop = HarnessLoop(
         model=model,
-        policy=DefaultPolicy(workspace_root=workspace),
+        policy=DefaultPolicy(
+            workspace_root=workspace,
+            shell_profile=(
+                task.policy.shell_profile if task.policy is not None else None
+            ),
+        ),
         sessions=InMemorySessionStore(),
         tools=tools,
         trace=recorder,
@@ -52,11 +54,16 @@ def _capture_task_trace(task: Task) -> list[TraceEvent]:
         ids=SeqIdProvider(),
         limits=limits,
         memory=InMemoryMemoryStore(),
+        workspace_root=workspace,
     )
     session = loop.start(goal=task.goal)
+    current_id = session.id
     for turn in task.turns:
-        loop.run_session(session.id, turn.input, max_steps=turn.max_steps)
-    return recorder.events
+        if turn.new_session:
+            session = loop.start(goal=turn.goal or task.goal)
+            current_id = session.id
+        loop.run_session(current_id, turn.input, max_steps=turn.max_steps)
+    return recorder.events, workspace
 
 
 # ---------- trace_reader ----------
@@ -102,8 +109,8 @@ def test_replay_matches_eval_task_traces() -> None:
     report. This is the headline guarantee of Step 5."""
     suite = load_suite(TASKS_DIR)
     for task in suite.tasks:
-        original = _capture_task_trace(task)
-        replayed = replay_session(original)
+        original, workspace = _capture_task_trace(task)
+        replayed = replay_session(original, workspace_root=workspace)
         report = detect_divergence(original, replayed)
         assert report.matched, (
             f"{task.name} diverged after replay:\n{report.render()}"
@@ -119,7 +126,7 @@ def test_replay_round_trips_multi_step_turn() -> None:
     remain stable."""
     suite = load_suite(TASKS_DIR)
     task = next(t for t in suite.tasks if t.name == "multi_step_tool_then_final")
-    original = _capture_task_trace(task)
+    original, workspace = _capture_task_trace(task)
 
     # Sanity: the captured trace genuinely contains 2 decisions in 1 turn.
     decisions_per_turn = sum(1 for e in original if e.event_type == "decision_made")
@@ -127,7 +134,7 @@ def test_replay_round_trips_multi_step_turn() -> None:
     assert user_inputs == 1
     assert decisions_per_turn == 2
 
-    replayed = replay_session(original)
+    replayed = replay_session(original, workspace_root=workspace)
     report = detect_divergence(original, replayed)
     assert report.matched, report.render()
 
@@ -144,7 +151,7 @@ def test_replay_returns_session_started_only_when_no_turns() -> None:
     replayed = replay_session(events)
     assert len(replayed) == 1
     assert replayed[0].event_type == "session_started"
-    assert replayed[0].payload == {"goal": "noop"}
+    assert replayed[0].payload == {"goal": "noop", "shell_profile": "dev"}
 
 
 # ---------- replayer error cases ----------
@@ -217,7 +224,7 @@ def test_replay_user_input_missing_payload_raises() -> None:
 def _eval_trace_for(task_name: str) -> list[TraceEvent]:
     suite = load_suite(TASKS_DIR)
     task = next(t for t in suite.tasks if t.name == task_name)
-    return _capture_task_trace(task)
+    return _capture_task_trace(task)[0]
 
 
 def test_divergence_detects_tampered_decision() -> None:
@@ -317,7 +324,7 @@ def test_replay_from_disk_round_trip(tmp_path: Path) -> None:
 
     suite = load_suite(TASKS_DIR)
     task = next(t for t in suite.tasks if t.name == "write_then_read")
-    events = _capture_task_trace(task)
+    events, workspace = _capture_task_trace(task)
 
     trace_path = tmp_path / "trace.jsonl"
     recorder = JsonlTraceRecorder(trace_path)
@@ -325,6 +332,6 @@ def test_replay_from_disk_round_trip(tmp_path: Path) -> None:
         recorder.record(e)
 
     loaded = read_trace(trace_path)
-    replayed = replay_session(loaded)
+    replayed = replay_session(loaded, workspace_root=workspace)
     report = detect_divergence(loaded, replayed)
     assert report.matched, report.render()

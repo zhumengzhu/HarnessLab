@@ -19,6 +19,7 @@ const els = {
   rememberInline: document.getElementById("remember-inline"),
   traceList: document.getElementById("trace-list"),
   clearTrace: document.getElementById("clear-trace"),
+  settingsList: document.getElementById("settings-list"),
 };
 
 async function api(path, options = {}) {
@@ -33,16 +34,39 @@ async function api(path, options = {}) {
   return data;
 }
 
-function renderMessages(messages) {
+function visibleChatMessages(messages) {
+  return messages.filter((m) => {
+    if (m.role === "user") return true;
+    if (m.role === "assistant") return Boolean((m.content || "").trim());
+    // tool / system turns stay in session history for the model and trace panel.
+    return false;
+  });
+}
+
+function renderMessages(messages, toolCards = []) {
   els.messages.innerHTML = "";
-  if (!messages.length) {
+  const visible = visibleChatMessages(messages);
+  if (!visible.length && !toolCards.length) {
     els.messages.innerHTML = '<p class="empty-hint">发送第一条消息开始对话</p>';
     return;
   }
-  for (const m of messages) {
+  for (const m of visible) {
     const div = document.createElement("div");
     div.className = `msg ${m.role}`;
     div.textContent = m.content;
+    els.messages.appendChild(div);
+  }
+  for (const card of toolCards) {
+    const div = document.createElement("div");
+    div.className = `tool-card ${card.ok ? "ok" : "fail"}`;
+    const title = document.createElement("div");
+    title.className = "tool-card-title";
+    title.textContent = `${card.tool || "tool"} · ${card.ok ? "ok" : "error"}`;
+    const preview = document.createElement("pre");
+    preview.className = "tool-card-preview";
+    preview.textContent = card.error || card.output_preview || "";
+    div.appendChild(title);
+    div.appendChild(preview);
     els.messages.appendChild(div);
   }
   els.messages.scrollTop = els.messages.scrollHeight;
@@ -110,6 +134,33 @@ async function loadTraceForSession(id) {
     renderTraceEvents(data.events || []);
   } catch {
     clearTracePanel();
+  }
+}
+
+async function loadSettings() {
+  try {
+    const data = await api("/api/settings");
+    const s = data.settings || {};
+    const rows = [
+      ["模型", s.model_label || s.model_backend],
+      ["DeepSeek", s.deepseek_model],
+      ["Thinking", s.deepseek_thinking],
+      ["Shell profile", s.shell_profile],
+      ["Workspace", s.workspace],
+      ["Config", s.config_path],
+    ];
+    els.settingsList.innerHTML = "";
+    for (const [label, value] of rows) {
+      if (!value) continue;
+      const dt = document.createElement("dt");
+      dt.textContent = label;
+      const dd = document.createElement("dd");
+      dd.textContent = value;
+      els.settingsList.appendChild(dt);
+      els.settingsList.appendChild(dd);
+    }
+  } catch {
+    els.settingsList.innerHTML = '<p class="empty-hint">无法加载设置</p>';
   }
 }
 
@@ -230,7 +281,7 @@ async function sendMessage(text) {
     if (!currentSessionId) currentSessionId = data.session.id;
     els.title.textContent = data.session.title || data.session.goal;
     els.status.textContent = data.session.status;
-    renderMessages(data.messages);
+    renderMessages(data.messages, data.tool_cards || []);
     renderMemoryNotes(data.session.memory_notes);
     await loadSessions();
   } catch (err) {
@@ -314,4 +365,5 @@ els.clearTrace.addEventListener("click", clearTracePanel);
 
 clearTracePanel();
 updateSessionActions();
+loadSettings().catch(() => {});
 loadSessions().catch((err) => showError(err.message));

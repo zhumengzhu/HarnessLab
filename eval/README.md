@@ -8,9 +8,11 @@ are compared to `eval/baseline.json` for regression detection.
 
 ```bash
 uv run harnesslab eval                    # full suite vs baseline
+uv run harnesslab eval --skip-tags network  # CI / offline (skips wttr.in task)
 uv run harnesslab eval --task 07_grep_then_edit
 uv run harnesslab eval --update-baseline  # refresh baseline (reviewed commit)
-uv run pytest tests/test_eval_tasks.py    # CI-style gate (all tasks must pass)
+uv run pytest tests/test_eval_tasks.py    # offline tasks (excludes network tag)
+RUN_LIVE_EVAL=1 uv run pytest -m network  # optional live network tasks
 ```
 
 Exit codes: `0` ok, `2` task failure, `3` baseline regression.
@@ -49,7 +51,11 @@ When `harnesslab propose` surfaces a recurring failure cluster:
 5. **Proposal status** — human moves the proposal to `accepted` or
    `rejected` (see `AGENTS.md`); agents do not auto-apply proposals.
 
-## Shipped coverage (Phase 3.1)
+## Shipped coverage (Phase 3.1+)
+
+Twelve tasks as of Phase 3.4 (`eval/baseline.json`); task 13 adds shell
+profiles (`13_shell_profile_strict`). Task `fetch_url_weather` is tagged
+``network`` and skipped by default in CI.
 
 | Task | Path exercised |
 |------|----------------|
@@ -64,3 +70,5 @@ When `harnesslab propose` surfaces a recurring failure cluster:
 | `session_resume_second_turn` | session resume / turn index |
 | `session_memory_persists` | session-scoped memory read/write |
 | `apply_patch_unified_diff` | unified-diff patch tool |
+| `fetch_url_weather` | allowlisted HTTP fetch (wttr.in); tag: ``network`` |
+| `shell_profile_strict` | named shell profile denies dev runners |

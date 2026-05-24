@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Literal
@@ -10,6 +11,15 @@ from harnesslab.core.config import RuntimeLimits
 from harnesslab.core.contracts import MemoryStorePort, SessionStorePort, TraceRecorderPort
 from harnesslab.core.loop import DEFAULT_MAX_STEPS, HarnessLoop
 from harnesslab.core.models import Session
+from harnesslab.core.operator_config import (
+    OperatorConfig,
+    apply_provider_env,
+    config_settings_snapshot,
+    load_operator_config,
+    resolve_model_backend,
+    resolve_runtime_limits,
+    resolve_shell_profile,
+)
 from harnesslab.core.prompt import (
     PromptBlock,
     build_agents_md_block,
@@ -17,7 +27,6 @@ from harnesslab.core.prompt import (
     build_tool_guide_block,
 )
 from harnesslab.core.runtime import SystemClock, UuidIdProvider
-from harnesslab.core.simple_model import SimpleModel
 from harnesslab.core.title import LiveTitleNamer
 from harnesslab.eval.baseline import compare, load_baseline, save_baseline
 from harnesslab.eval.loader import load_suite, load_task
@@ -32,7 +41,8 @@ from harnesslab.improve import (
 from harnesslab.memory.in_memory import InMemoryMemoryStore
 from harnesslab.memory.sqlite_store import SqliteMemoryStore
 from harnesslab.policy.default_policy import DefaultPolicy
-from harnesslab.providers.deepseek import DeepSeekModel, tool_specs_from_registry
+from harnesslab.providers.deepseek import tool_specs_from_registry
+from harnesslab.providers.registry import create_model, normalize_backend
 from harnesslab.replay import (
     UnreplayableTraceError,
     detect_divergence,
@@ -44,6 +54,7 @@ from harnesslab.session.in_memory import InMemorySessionStore
 from harnesslab.session.sqlite_store import SqliteSessionStore
 from harnesslab.telemetry.aggregate import aggregate, render_metrics
 from harnesslab.telemetry.jsonl_recorder import JsonlTraceRecorder
+from harnesslab.tools.fetch_url_tool import FetchUrlTool
 from harnesslab.tools.file_tools import (
     EditFileTool,
     GlobTool,
@@ -84,6 +95,30 @@ EXIT_TASK_FAILED = 2
 EXIT_REGRESSED = 3
 EXIT_DIVERGED = 4
 EXIT_USAGE = 64
+
+
+def _load_operator_config() -> OperatorConfig:
+    try:
+        return load_operator_config()
+    except ValueError as exc:
+        raise SystemExit(str(exc)) from exc
+
+
+def _eval_skip_tags(args: argparse.Namespace) -> set[str]:
+    tags: set[str] = set()
+    if getattr(args, "skip_tags", None):
+        tags.update(t.strip() for t in args.skip_tags.split(",") if t.strip())
+    env = os.environ.get("HARNESSLAB_EVAL_SKIP_TAGS", "")
+    if env.strip():
+        tags.update(t.strip() for t in env.split(",") if t.strip())
+    return tags
+
+
+def _filter_suite_by_tags(suite: TaskSuite, skip_tags: set[str]) -> TaskSuite:
+    if not skip_tags:
+        return suite
+    kept = [t for t in suite.tasks if not skip_tags.intersection(t.tags)]
+    return TaskSuite(tasks=kept)
 
 
 def _make_dynamic_blocks_provider(
@@ -132,11 +167,13 @@ def build_runtime(
     sqlite_path: Path | None = None,
     model_backend: ModelBackend = "simple",
     trace: TraceRecorderPort | None = None,
+    shell_profile: str | None = None,
+    operator_config: OperatorConfig | None = None,
 ) -> HarnessLoop:
     limits = limits or RuntimeLimits()
     # Memory store is wired into the loop for session-scoped notes (Phase 3.3).
     sessions, memory = _build_stores(storage_backend, workspace_root, sqlite_path)
-    policy = DefaultPolicy(workspace_root=workspace_root)
+    policy = DefaultPolicy(workspace_root=workspace_root, shell_profile=shell_profile)
     tools = ToolRegistry()
     tools.register(ReadFileTool(workspace_root, limits=limits))
     tools.register(WriteFileTool(workspace_root, limits=limits))
@@ -144,20 +181,18 @@ def build_runtime(
     tools.register(ApplyPatchTool(workspace_root, limits=limits))
     tools.register(GrepTool(workspace_root, limits=limits))
     tools.register(GlobTool(workspace_root, limits=limits))
+    tools.register(FetchUrlTool(limits=limits))
     tools.register(RunShellSafeTool(workspace_root, limits=limits))
     if trace is None:
         trace = JsonlTraceRecorder(workspace_root / ".harnesslab" / "trace.jsonl")
-    if model_backend == "deepseek":
-        model = DeepSeekModel(
-            tool_specs_provider=lambda: tool_specs_from_registry(tools.list()),
-            dynamic_blocks_provider=_make_dynamic_blocks_provider(
-                workspace_root, tools
-            ),
-        )
-        title_namer = LiveTitleNamer(model)
-    else:
-        model = SimpleModel()
-        title_namer = None
+    backend = normalize_backend(model_backend)
+    model = create_model(
+        backend,
+        config=operator_config,
+        tool_specs_provider=lambda: tool_specs_from_registry(tools.list()),
+        dynamic_blocks_provider=_make_dynamic_blocks_provider(workspace_root, tools),
+    )
+    title_namer = LiveTitleNamer(model) if backend == "deepseek" else None
     return HarnessLoop(
         model=model,
         policy=policy,
@@ -169,6 +204,7 @@ def build_runtime(
         limits=limits,
         title_namer=title_namer,
         memory=memory,
+        workspace_root=workspace_root,
     )
 
 
@@ -212,11 +248,11 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     run.add_argument(
         "--model",
-        default="simple",
+        default=None,
         choices=["simple", "deepseek"],
         help=(
-            "Model backend for `run` (default: simple). "
-            "Use `deepseek` to call DeepSeek with DEEPSEEK_API_KEY."
+            "Model backend for `run` (default: simple, or model.default_backend "
+            "from ~/.config/harnesslab/config.json when set)."
         ),
     )
     run.add_argument(
@@ -263,6 +299,14 @@ def _build_parser() -> argparse.ArgumentParser:
         "--reports-dir",
         default=DEFAULT_REPORTS_DIR,
         help=f"Where to write JSON reports (default: {DEFAULT_REPORTS_DIR}).",
+    )
+    ev.add_argument(
+        "--skip-tags",
+        default=None,
+        help=(
+            "Comma-separated task tags to skip (e.g. network). Also reads "
+            "HARNESSLAB_EVAL_SKIP_TAGS."
+        ),
     )
 
     # ----- replay -----
@@ -496,14 +540,14 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sv.add_argument(
         "--host",
-        default="127.0.0.1",
-        help="Bind address (default: 127.0.0.1 — local only).",
+        default=None,
+        help="Bind address (default: config serve.host or 127.0.0.1).",
     )
     sv.add_argument(
         "--port",
         type=int,
-        default=8787,
-        help="TCP port (default: 8787).",
+        default=None,
+        help="TCP port (default: config serve.port or 8787).",
     )
     sv.add_argument(
         "--sqlite-path",
@@ -515,15 +559,15 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sv.add_argument(
         "--model",
-        default="deepseek",
+        default=None,
         choices=["simple", "deepseek"],
-        help="Model backend (default: deepseek).",
+        help="Model backend (default: config model.default_backend or deepseek).",
     )
     sv.add_argument(
         "--max-steps",
         type=int,
-        default=DEFAULT_MAX_STEPS,
-        help="Default inner-loop step budget per message.",
+        default=None,
+        help="Default inner-loop step budget per message (default: config or 20).",
     )
 
     return parser
@@ -584,12 +628,19 @@ def _cmd_run(args: argparse.Namespace) -> int:
             file=sys.stderr,
         )
         return EXIT_USAGE
+    config = _load_operator_config()
+    apply_provider_env(config)
     try:
         loop = build_runtime(
             workspace_root=workspace_root,
             storage_backend=args.storage,
             sqlite_path=sqlite_path,
-            model_backend=args.model,
+            model_backend=resolve_model_backend(
+                args.model, config=config, fallback="simple"
+            ),  # type: ignore[arg-type]
+            limits=resolve_runtime_limits(None, config=config),
+            shell_profile=resolve_shell_profile(None, config=config),
+            operator_config=config,
         )
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
@@ -601,15 +652,23 @@ def _cmd_run(args: argparse.Namespace) -> int:
 
 
 def _cmd_serve(args: argparse.Namespace) -> int:
-    if args.host not in ("127.0.0.1", "localhost", "::1"):
+    config = _load_operator_config()
+    apply_provider_env(config)
+    host = args.host or config.serve_host
+    port = args.port if args.port is not None else config.serve_port
+    max_steps = args.max_steps if args.max_steps is not None else config.serve_max_steps
+    model_backend = resolve_model_backend(
+        args.model, config=config, fallback="deepseek"
+    )
+    if host not in ("127.0.0.1", "localhost", "::1"):
         print(
             "Refusing to bind to a non-local address. "
             "HarnessLab serve is localhost-only.",
             file=sys.stderr,
         )
         return EXIT_USAGE
-    if args.max_steps < 1:
-        print(f"--max-steps must be >= 1, got {args.max_steps}", file=sys.stderr)
+    if max_steps < 1:
+        print(f"--max-steps must be >= 1, got {max_steps}", file=sys.stderr)
         return EXIT_USAGE
     workspace_root = Path(args.workspace_root).resolve()
     sqlite_path = Path(args.sqlite_path) if args.sqlite_path else None
@@ -620,21 +679,29 @@ def _cmd_serve(args: argparse.Namespace) -> int:
             workspace_root=workspace_root,
             storage_backend="sqlite",
             sqlite_path=sqlite_path,
-            model_backend=args.model,
+            model_backend=model_backend,  # type: ignore[arg-type]
             trace=trace_hub,
+            limits=resolve_runtime_limits(None, config=config),
+            shell_profile=resolve_shell_profile(None, config=config),
+            operator_config=config,
         )
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return EXIT_USAGE
     runtime = WebRuntime(
         loop=loop,
-        model_backend=args.model,
+        model_backend=model_backend,  # type: ignore[arg-type]
         workspace_root=workspace_root,
-        default_max_steps=args.max_steps,
+        default_max_steps=max_steps,
         trace_hub=trace_hub,
         trace_path=trace_path,
+        settings=config_settings_snapshot(
+            config,
+            workspace_root=workspace_root,
+            model_backend=model_backend,
+        ),
     )
-    serve(runtime, host=args.host, port=args.port)
+    serve(runtime, host=host, port=port)
     return EXIT_OK
 
 
@@ -644,6 +711,7 @@ def _cmd_eval(args: argparse.Namespace) -> int:
     reports_dir = Path(args.reports_dir)
 
     suite = _load_suite_or_single(tasks_dir, args.task)
+    suite = _filter_suite_by_tags(suite, _eval_skip_tags(args))
     results = TaskRunner().run(suite)
 
     if args.update_baseline:

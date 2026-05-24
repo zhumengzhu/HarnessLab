@@ -48,9 +48,8 @@ def replay_session(
             f"first event must be session_started, got {events[0].event_type!r}"
         )
 
-    goal = events[0].payload.get("goal", "")
-    turns = _extract_turns(events)
-    return _drive_loop(goal, turns, workspace_root, events)
+    segments = _session_segments(events)
+    return _drive_loop(segments, workspace_root, events)
 
 
 def _extract_turns(events: list[TraceEvent]) -> list[TurnPlan]:
@@ -68,7 +67,7 @@ def _extract_turns(events: list[TraceEvent]) -> list[TurnPlan]:
             )
         decisions, next_i = _collect_turn_decisions(events, start=i + 1)
         if not decisions:
-            if not _turn_ends_with_remember(events, i + 1, next_i):
+            if not _turn_ends_without_model_call(events, i + 1, next_i):
                 raise UnreplayableTraceError(
                     f"user_input_received at #{i} not followed by any decision_made"
                 )
@@ -105,12 +104,26 @@ def _collect_turn_decisions(
     return decisions, j
 
 
-def _turn_ends_with_remember(events: list[TraceEvent], start: int, end: int) -> bool:
+def _turn_ends_without_model_call(events: list[TraceEvent], start: int, end: int) -> bool:
     for j in range(start, end):
         e = events[j]
-        if e.event_type == "session_finished" and e.payload.get("reason") == "remember":
+        reason = e.payload.get("reason") if e.event_type == "session_finished" else None
+        if reason in ("remember", "remember_global"):
             return True
     return False
+
+
+def _session_segments(events: list[TraceEvent]) -> list[list[TraceEvent]]:
+    segments: list[list[TraceEvent]] = []
+    current: list[TraceEvent] = []
+    for event in events:
+        if event.event_type == "session_started" and current:
+            segments.append(current)
+            current = []
+        current.append(event)
+    if current:
+        segments.append(current)
+    return segments
 
 
 def _decision_from_payload(payload: dict, index: int) -> Decision:
@@ -150,32 +163,49 @@ def _limits_from_events(events: list[TraceEvent]) -> RuntimeLimits:
 
 
 def _drive_loop(
-    goal: str,
-    turns: list[TurnPlan],
+    segments: list[list[TraceEvent]],
     workspace_root: Path | None,
     source_events: list[TraceEvent],
 ) -> list[TraceEvent]:
     if workspace_root is None:
         with tempfile.TemporaryDirectory() as ws:
-            return _run(Path(ws), goal, turns, source_events)
-    return _run(workspace_root, goal, turns, source_events)
+            return _run(Path(ws), segments, source_events)
+    return _run(workspace_root, segments, source_events)
+
+
+def _shell_profile_from_segments(segments: list[list[TraceEvent]]) -> str | None:
+    for segment in segments:
+        for event in segment:
+            if event.event_type != "session_started":
+                continue
+            profile = event.payload.get("shell_profile")
+            if profile:
+                return str(profile)
+    return None
 
 
 def _run(
     workspace: Path,
-    goal: str,
-    turns: list[TurnPlan],
+    segments: list[list[TraceEvent]],
     source_events: list[TraceEvent],
 ) -> list[TraceEvent]:
     limits = _limits_from_events(source_events)
     tools = _build_tool_registry(workspace, limits)
+    shell_profile = _shell_profile_from_segments(segments)
 
-    flat_decisions: list[Decision] = [d for _, ds in turns for d in ds]
+    session_plans: list[tuple[str, list[TurnPlan]]] = []
+    for segment in segments:
+        goal = segment[0].payload.get("goal", "") if segment else ""
+        session_plans.append((str(goal), _extract_turns(segment)))
+
+    flat_decisions: list[Decision] = [
+        d for _, turns in session_plans for _, ds in turns for d in ds
+    ]
 
     recorder = ReplayTraceRecorder()
     loop = HarnessLoop(
         model=ReplayModel(decisions=flat_decisions),
-        policy=DefaultPolicy(workspace_root=workspace),
+        policy=DefaultPolicy(workspace_root=workspace, shell_profile=shell_profile),
         sessions=InMemorySessionStore(),
         tools=tools,
         trace=recorder,
@@ -183,10 +213,12 @@ def _run(
         ids=SeqIdProvider(),
         limits=limits,
         memory=InMemoryMemoryStore(),
+        workspace_root=workspace,
     )
 
-    session = loop.start(goal=goal)
-    for user_input, decisions in turns:
-        max_steps = max(1, len(decisions))
-        loop.run_session(session.id, user_input, max_steps=max_steps)
+    for goal, turns in session_plans:
+        session = loop.start(goal=goal)
+        for user_input, decisions in turns:
+            max_steps = max(1, len(decisions))
+            loop.run_session(session.id, user_input, max_steps=max_steps)
     return recorder.events
