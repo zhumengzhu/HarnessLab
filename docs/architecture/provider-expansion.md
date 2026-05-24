@@ -399,6 +399,7 @@ When adding a model:
 4. If thinking + tools: add **tool-loop replay test** (mock 400 on missing reasoning).
 5. Update this doc’s matrix (§2.1) if vendor changes semantics.
 6. Run `uv run pytest`, `uv run harnesslab eval --skip-tags network`.
+7. Optional live smoke: `RUN_DEEPSEEK_LIVE=1 DEEPSEEK_API_KEY=... uv run pytest tests/manual/test_deepseek_live.py -m network` (thinking on/off + tool replay; not CI).
 
 ---
 

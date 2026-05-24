@@ -13,9 +13,19 @@ uv run harnesslab eval --task 07_grep_then_edit
 uv run harnesslab eval --update-baseline  # refresh baseline (reviewed commit)
 uv run pytest tests/test_eval_tasks.py    # offline tasks (excludes network tag)
 RUN_LIVE_EVAL=1 uv run pytest -m network  # optional live network tasks
+RUN_DEEPSEEK_LIVE=1 DEEPSEEK_API_KEY=... uv run pytest tests/manual/test_deepseek_live.py -m network
 ```
 
 Exit codes: `0` ok, `2` task failure, `3` baseline regression.
+
+## Optional live lanes (not in CI)
+
+| Lane | Env | What it exercises |
+|------|-----|-------------------|
+| Eval network tasks | `RUN_LIVE_EVAL=1` | wttr.in fetch (`fetch_url_weather`) |
+| DeepSeek provider | `RUN_DEEPSEEK_LIVE=1` + `DEEPSEEK_API_KEY` | Real `deepseek-v4-flash`: thinking on/off, tool + reasoning replay, short loop |
+
+CI runs `pytest -m "not network"` and `eval --skip-tags network` only.
 
 ## Adding a task
 
