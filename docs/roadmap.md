@@ -724,14 +724,262 @@ Steps 1–6. Nothing starts until its Entry criteria are objectively true.
 
 ---
 
+## Post-MVP Phase 5 — Research-capable harness (next)
+
+Phase 4 made the harness *trustworthy under daily use*. Phase 5 broadens the
+**tool reach** and the **task shape** the harness can credibly take on:
+from "local code helper" to "research-capable single agent". It deliberately
+stops short of multi-agent (see Phase 6) and stays inside AGENTS.md's
+"single-process runtime, no plugin marketplace, no auto-applied proposals"
+constraints.
+
+```mermaid
+flowchart TD
+    P51[Phase 5.1<br/>Web tool surface]
+    P52[Phase 5.2<br/>Artifact store]
+    P53[Phase 5.3<br/>Plan-then-execute]
+    P54[Phase 5.4<br/>MCP adapter]
+    P55[Phase 5.5<br/>Python sandbox tool]
+    P56[Phase 5.6<br/>OTel metrics histograms]
+    P57[Phase 5.7<br/>Proposal review in Web UI]
+
+    P51 --> P53
+    P52 --> P53
+    P51 --> P54
+    P53 --> P55
+    P53 --> P57
+    P56 -.-> P57
+```
+
+Same **Entry / Deliverables / Exit** bar as previous phases.
+
+### Phase 5.1 — Web tool surface — Not started
+
+- **Entry**: `fetch_url` host allowlist is the only network surface; eval
+  has a `network` tag.
+- **Deliverables**:
+  - `web_search` tool with pluggable backend (Brave / Tavily / SerpAPI /
+    DuckDuckGo HTML); selected via `tools.web_search.backend` in config;
+    secrets via env (`*_API_KEY`).
+  - `fetch_url` allowlist becomes tiered:
+    - `strict` profile: today's host allowlist (`wttr.in`)
+    - `dev` / `read_only` profiles: arbitrary HTTPS hosts, with
+      `robots.txt` advisory check, response size + content-type caps,
+      and an env-deny list.
+  - `html_to_markdown` and `read_pdf` (via `pypdfium2`) for ingest.
+  - One eval task `research_summary` (network-tagged) that searches +
+    fetches + summarizes a stable URL.
+- **Exit**: `harnesslab eval --skip-tags network` stays green; the new task
+  runs cleanly under `RUN_LIVE=1`; policy denials still produce normalized
+  `ToolResult(ok=False)`; docs in `tool-runtime.md` updated.
+
+### Phase 5.2 — Artifact store — Not started
+
+- **Entry**: Phase 5.1's larger outputs make message-embedded content
+  expensive.
+- **Deliverables**:
+  - New stable Port `ArtifactStorePort` (`put(bytes, mime, *,
+    session_id) -> ArtifactRef`, `get(ref) -> bytes`,
+    `metadata(ref) -> ArtifactMeta`).
+  - SQLite-backed default implementation (`storage/sqlite.py` schema
+    bump); large blobs live on disk under `.harnesslab/artifacts/`
+    with hashed filenames, the table stores metadata + ref.
+  - Tools opt in via `RuntimeLimits.artifact_threshold_bytes`: large
+    `output` is stored, `ToolResult.output` carries a short preview
+    + `artifact_ref`; trace `tool_executed` payload includes
+    `artifact_ref` (treated as volatile by semantic compare).
+  - CLI: `harnesslab artifact show REF` / `ls --session ID`.
+- **Exit**: trace size for a 50-step research task drops materially;
+  `replay` still works (refs treated as volatile); contract tests for
+  put/get/list; data-model.md updated.
+
+### Phase 5.3 — Plan-then-execute loop mode — Not started
+
+- **Entry**: Phase 5.1 + 5.2 shipped (research-class tasks already feasible).
+- **Deliverables**:
+  - `Decision.kind` gains optional `plan`; loop appends the plan as a
+    persisted assistant message with `provider_extra={"is_plan": true}`,
+    emits `plan_emitted` trace event, and continues to the next step.
+  - New static prompt block `05_planning.md` describing the "research
+    plan → execute → re-check" pattern; opt-in via config
+    `loop.planning_mode: off|hint|required`.
+  - `HarnessLoop` gains `replan_after_steps` knob: after N steps without
+    a terminal decision, the loop nudges with a system reminder to
+    re-evaluate the plan (no extra model call beyond the normal one).
+  - Eval task `plan_then_execute` (deterministic via `SimpleModel`
+    extension `/plan <msg>`).
+- **Exit**: existing eval baseline unchanged when `planning_mode=off`;
+  new task green; AGENTS.md Phase 2 Loop Contract gains `plan` as
+  non-terminal kind (alongside `assistant`).
+
+### Phase 5.4 — MCP (Model Context Protocol) adapter — Not started
+
+- **Entry**: Phase 5.1 web tools exist as native baseline (so MCP is
+  additive, not the only path).
+- **Deliverables**:
+  - New `tools/mcp_adapter.py`: maps an MCP server's tool catalog into
+    `ToolPort` instances at startup; tool args + result schemas are
+    translated 1:1, name-prefixed (`mcp_{server}_{tool}`).
+  - Each MCP server entry in `config.tools.mcp_servers[]` carries
+    `name`, `command` (or `url`), `args`, `env_names` (env keys to
+    forward), and an explicit `policy_profile` defaulting to `strict`.
+  - `PolicyPort` extension: per-tool name allowlist for MCP tools
+    (operator must opt each one in; default deny matches existing rules).
+  - Health: `harnesslab serve` settings panel lists configured MCP
+    servers + last contact status.
+  - Contract test against a local stdio MCP echo server.
+- **Exit**: starting harnesslab with no MCP config does not depend on the
+  MCP SDK at import time (lazy import); one documented server
+  (e.g. `@modelcontextprotocol/server-filesystem`) round-trips a tool
+  call end-to-end; eval/replay unaffected.
+
+### Phase 5.5 — Python sandbox tool — Not started
+
+- **Entry**: Phase 5.3 plan mode exists (gives the model a structured way
+  to use a sandbox in research tasks).
+- **Deliverables**:
+  - `run_python_sandboxed` tool: subprocess `python -I -S` (isolated
+    + no site-packages by default) under `resource` rlimits (CPU /
+    address space / file descriptors / open files), bounded stdout
+    bytes, no network namespace (best-effort on Linux via `unshare`,
+    documented degraded mode on macOS).
+  - Working directory is a fresh per-call tmpdir; only files inside it
+    (and an opt-in workspace read-only mount on Linux) are visible.
+  - New `policy.python_sandbox` profile knob: `disabled` (default) /
+    `local` / `strict`; integrated with existing shell profiles.
+  - Eval task `python_sandbox_compute` (deterministic seed; asserts
+    a numeric answer in the final message).
+- **Exit**: explicit docs in `tool-runtime.md` covering platform
+  asymmetry (macOS vs Linux); default profile keeps the tool off;
+  `harnesslab run --model simple` still passes existing eval.
+
+### Phase 5.6 — OTel metrics histograms — Not started
+
+- **Entry**: Phase 5.x telemetry on `model_call` / `tool_executed`
+  unchanged; P7 OTel spans already shipped.
+- **Deliverables**:
+  - `telemetry/otel_metrics.py`: optional `OtelMetricsRecorder` that
+    listens to the same `TraceEvent` stream and emits OTel metric
+    instruments:
+    - `harnesslab.model.latency_ms` (histogram, attrs: provider,
+      api_family, decision_kind)
+    - `harnesslab.model.tokens.total` (counter)
+    - `harnesslab.tool.duration_ms` (histogram, attrs: tool, ok)
+    - `harnesslab.session.steps` (histogram)
+  - Wraps the existing `OtelTraceRecorder` fan-out; both ship in the
+    same factory and respect `HARNESSLAB_OTEL` / OTLP env.
+  - Sample Grafana dashboard JSON under `docs/observability/`.
+- **Exit**: enabling OTel metrics changes neither JSONL trace nor eval
+  baseline; metrics appear in a local OTel collector smoke test.
+
+### Phase 5.7 — Proposal review surface (Web UI) — Not started
+
+- **Entry**: `harnesslab propose` is shipped (Step 6); proposals on disk
+  follow the AGENTS.md lifecycle.
+- **Deliverables**:
+  - Web UI panel `/#proposals`: list `open` proposals (id, cluster
+    signature, occurrences); show full markdown rendering; "diff
+    against suggested actions" view; **read-only** affordances for
+    accept / reject with mandatory reason field — clicking does not
+    apply code; it updates the proposal markdown's front-matter
+    (`status: accepted|rejected`) and appends a `## Decision` section.
+  - Gate buttons: "Run `uv run pytest`" / "Run `uv run harnesslab eval`"
+    that execute via the existing local runtime and show pass/fail
+    before allowing the `accepted` transition (AGENTS.md rule 2).
+  - No auto-applied code changes. No background daemon. Manual
+    "rebuild proposal list" from the disk.
+- **Exit**: AGENTS.md "Proposal Handling" rules preserved verbatim;
+  acceptance still requires the green eval + pytest gate; UI surfaces
+  the gate result but never bypasses it; integration test asserts the
+  read-only nature of the API.
+
+**Phase 5 explicitly does NOT include**
+
+- Multi-agent orchestration (Phase 6 below)
+- Vector / semantic memory retrieval (deferred — see "Deferred")
+- Browser automation that ships its own driver (deferred — when needed,
+  reach for an MCP Playwright server instead, see Phase 5.4)
+- Plugin marketplace, distributed runtime, TS migration
+
+**Recommended execution order for Phase 5**
+
+1. **5.1** — Web tools first; immediate value, lowest architectural risk.
+2. **5.2** — Artifact store before 5.3/5.4 so long outputs don't bloat
+   sessions on day one.
+3. **5.3** — Plan mode; foundation for both 5.5 and 5.7.
+4. **5.4** — MCP adapter; pure expansion, no behavior change for existing
+   tools.
+5. **5.5** — Python sandbox; higher-risk, do after 5.3 to give the model a
+   structured way to invoke it.
+6. **5.6** — Metrics histograms; small, isolated.
+7. **5.7** — Proposal Web UI; last because it must layer cleanly over a
+   stable Web UI and stable eval gate.
+
+---
+
+## Post-MVP Phase 6 — Multi-agent exploration (design only)
+
+> **Status: not approved for implementation.** AGENTS.md still forbids
+> multi-agent orchestration; entering Phase 6 requires (a) finishing
+> Phase 5, (b) accepting the recommendation written in
+> [`docs/architecture/multi-agent-exploration.md`](architecture/multi-agent-exploration.md),
+> and (c) updating AGENTS.md "Must NOT include yet" in the same commit.
+
+Goals of the exploration:
+
+- Enumerate the candidate multi-agent **product shapes** (pipeline,
+  supervisor / sub-agent, peer debate, background agents) and pick the
+  one that fits HarnessLab's "single, observable, replayable" ethos.
+- Map each shape onto the existing stable Ports — especially
+  `SessionStorePort` (child sessions vs. one session with role tags)
+  and `TraceRecorderPort` (per-agent fan-in).
+- Decide whether multi-agent is implemented as:
+  - **A.** A supervisor pattern using nested `Session` rows (child
+    `parent_session_id` already exists; reuse it), or
+  - **B.** A pure in-process role-tagging extension to a single
+    session, or
+  - **C.** A worker-pool model that shares one trace stream but uses
+    isolated message lists.
+- Identify the **minimum PoC** that yields product feedback without
+  committing to a long-lived architecture.
+- Identify which AGENTS.md rules must change and which must hold.
+
+Phase 6 ships **a design document and a 1-task PoC**, not a feature.
+See the full RFC for the candidate product shapes, decision criteria,
+and recommended PoC.
+
+---
+
 ## Deferred (longer horizon)
 
-- **Metrics dashboard artifact.** Static HTML report on top of
-  `harnesslab metrics` / `harnesslab context`. The JSON CLI surfaces
-  are sufficient for Phase 4; revisit after operator config exists.
+> Items here have a recorded reason and, where possible, a "trigger to
+> revisit". They are not abandoned; they are postponed until their entry
+> conditions are objectively met.
+
+- **Vector / semantic memory retrieval (`SemanticMemoryStorePort`).**
+  - *Why deferred:* the AGENTS.md "Memory is built on Session, not the
+    other way around" stance still holds; KV memory plus Phase 5.2
+    artifact refs cover near-term research needs.
+  - *Revisit when:* Phase 5 has produced ≥ 3 real research sessions that
+    visibly suffered from missing cross-session recall.
+  - *Sketch when picked up:* `SemanticMemoryStorePort` (`upsert(text,
+    metadata) / search(query, k)`); local embedding (e.g.
+    `sentence-transformers` or a Voyage/OpenAI API behind a
+    `ModelPort`-style adapter); SQLite-vec or Chroma backend; reads only,
+    no LLM auto-write (preserve "explicit `/remember`" rule).
+- **Browser automation with in-process driver.**
+  - *Why deferred:* shipping Playwright in-tree duplicates a sandboxed
+    environment HarnessLab does not own.
+  - *Revisit when:* Phase 5.4 MCP adapter is shipped and a Playwright
+    MCP server proves insufficient.
+- **Metrics dashboard HTML artifact.** Static report on top of
+  `harnesslab metrics` / `harnesslab context`. Phase 5.6 OTel metrics +
+  external Grafana cover most of this need; revisit only if an offline,
+  zero-collector dashboard becomes important.
 - **TypeScript migration.** Stable Ports reduce risk; not scheduled until
-  Phase 4 hardening exits are met.
-- **Multi-agent orchestration, distributed workers, plugin marketplace.**
-- **OTel metrics histograms** (`harnesslab.model.latency_ms`, token histograms) — spans
-  ship in P7; metric instruments remain future work.
-- **Auto-apply improvement proposals** (human review required per AGENTS.md).
+  Phase 5 is complete and Phase 6 has a settled multi-agent shape (so
+  the migration target is not a moving target).
+- **Distributed runtime / plugin marketplace.** No path to a "must
+  include" until at least Phase 6 closes.
+- **Auto-apply improvement proposals.** Always requires human review per
+  AGENTS.md; will remain deferred unless that contract changes.

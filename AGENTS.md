@@ -14,8 +14,20 @@ Secondary objective:
 
 ## Current Phase
 
-MVP (Steps 1–6), Post-MVP Phase 2, and Phase 3–4 operator hardening are
+MVP (Steps 1–6), Post-MVP Phase 2, Phase 3–4 operator hardening, and the
+provider expansion (P0–P7: catalog, transforms, DeepSeek / Anthropic /
+OpenAI / Gemini adapters, optional failover, optional OTel fan-out) are
 **complete**. The runtime is a daily-usable local agent harness.
+
+**Next planned phase:** Phase 5 — Research-capable harness (web tools,
+artifact store, plan mode, MCP adapter, Python sandbox, OTel metrics,
+proposal Web UI). See [`docs/roadmap.md`](docs/roadmap.md) Phase 5.
+
+**Multi-agent (Phase 6):** design-only RFC at
+[`docs/architecture/multi-agent-exploration.md`](docs/architecture/multi-agent-exploration.md).
+**Not approved for implementation.** Multi-agent orchestration remains
+on the "Must NOT include yet" list until that RFC has an explicit
+acceptance commit that updates this file.
 
 Must include (current):
 
