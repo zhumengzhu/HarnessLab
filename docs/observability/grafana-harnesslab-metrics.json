@@ -1,0 +1,25 @@
+{
+  "title": "HarnessLab OTel Metrics",
+  "panels": [
+    {
+      "title": "Model latency (ms)",
+      "type": "histogram",
+      "metric": "harnesslab.model.latency_ms"
+    },
+    {
+      "title": "Model tokens total",
+      "type": "counter",
+      "metric": "harnesslab.model.tokens.total"
+    },
+    {
+      "title": "Tool duration (ms)",
+      "type": "histogram",
+      "metric": "harnesslab.tool.duration_ms"
+    },
+    {
+      "title": "Session steps",
+      "type": "histogram",
+      "metric": "harnesslab.session.steps"
+    }
+  ]
+}

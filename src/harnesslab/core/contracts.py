@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Protocol
 
-from harnesslab.core.models import Decision, Session, ToolCall, ToolResult, TraceEvent
+from harnesslab.core.models import ArtifactMeta, Decision, Session, ToolCall, ToolResult, TraceEvent
 
 
 class ModelPort(Protocol):
@@ -48,6 +48,24 @@ class MemoryStorePort(Protocol):
     def put(self, key: str, value: str) -> None: ...
 
     def get(self, key: str) -> str | None: ...
+
+
+class SemanticMemoryStorePort(Protocol):
+    def upsert(self, key: str, text: str, metadata: dict[str, Any] | None = None) -> None: ...
+
+    def search(self, query: str, k: int = 5) -> list[Any]: ...
+
+    def get(self, key: str) -> str | None: ...
+
+
+class ArtifactStorePort(Protocol):
+    def put(self, data: bytes, *, mime: str, session_id: str, artifact_id: str) -> str: ...
+
+    def get(self, ref: str) -> bytes: ...
+
+    def metadata(self, ref: str) -> ArtifactMeta: ...
+
+    def list(self, *, session_id: str | None = None, limit: int = 50) -> list[ArtifactMeta]: ...
 
 
 class TraceRecorderPort(Protocol):

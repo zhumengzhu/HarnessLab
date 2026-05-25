@@ -546,8 +546,10 @@ def serve(
 
 
 def _select_static_dir() -> Path:
-    requested = os.environ.get("HARNESSLAB_WEB_UI_VERSION", "legacy").strip().lower()
-    if requested == "ts" and _TS_STATIC_DIR.is_dir():
+    requested = os.environ.get("HARNESSLAB_WEB_UI_VERSION", "ts").strip().lower()
+    if requested == "legacy":
+        return _LEGACY_STATIC_DIR
+    if _TS_STATIC_DIR.is_dir():
         return _TS_STATIC_DIR
     return _LEGACY_STATIC_DIR
 

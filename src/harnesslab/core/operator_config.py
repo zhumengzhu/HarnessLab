@@ -75,6 +75,12 @@ class OperatorConfig:
     budget_max_session_tokens_total: int | None = None
     budget_max_session_tool_calls_total: int | None = None
     budget_max_session_wall_time_ms_total: int | None = None
+    budget_max_session_cost_usd_total: float | None = None
+    mcp_servers: tuple[dict[str, Any], ...] = ()
+    mcp_allowed_tools: tuple[str, ...] = ()
+    python_sandbox_profile: Literal["disabled", "local", "strict"] = "disabled"
+    multi_agent_enabled: bool = False
+    web_ui_version: Literal["legacy", "ts"] = "ts"
     pre_tool_hooks: tuple[dict[str, Any], ...] = ()
     post_tool_hooks: tuple[dict[str, Any], ...] = ()
     serve_host: str = "127.0.0.1"
@@ -205,7 +211,13 @@ def config_settings_snapshot(
             "max_session_tokens_total": config.budget_max_session_tokens_total,
             "max_session_tool_calls_total": config.budget_max_session_tool_calls_total,
             "max_session_wall_time_ms_total": config.budget_max_session_wall_time_ms_total,
+            "max_session_cost_usd_total": config.budget_max_session_cost_usd_total,
         },
+        "mcp_servers": list(config.mcp_servers),
+        "mcp_allowed_tools": list(config.mcp_allowed_tools),
+        "python_sandbox_profile": config.python_sandbox_profile,
+        "multi_agent_enabled": config.multi_agent_enabled,
+        "web_ui_version": config.web_ui_version,
         "hooks": {
             "pre_tool": list(config.pre_tool_hooks),
             "post_tool": list(config.post_tool_hooks),
@@ -335,6 +347,14 @@ def _parse_config(data: dict[str, Any]) -> OperatorConfig:
         budget_max_session_wall_time_ms_total=_optional_int(
             budget.get("max_session_wall_time_ms_total")
         ),
+        budget_max_session_cost_usd_total=_optional_float(
+            budget.get("max_session_cost_usd_total")
+        ),
+        mcp_servers=_parse_mcp_servers(tools.get("mcp_servers")),
+        mcp_allowed_tools=_parse_str_list(tools.get("mcp_allowed_tools")),
+        python_sandbox_profile=_python_sandbox_profile(policy),
+        multi_agent_enabled=bool(loop.get("multi_agent", {}).get("enabled", False)),
+        web_ui_version=_web_ui_version(data.get("web", {})),
         pre_tool_hooks=_parse_hook_list(hooks.get("pre_tool")),
         post_tool_hooks=_parse_hook_list(hooks.get("post_tool")),
         serve_host=str(serve.get("host", "127.0.0.1")),
@@ -469,3 +489,65 @@ def _parse_hook_list(value: Any) -> tuple[dict[str, Any], ...]:
             config = {}
         out.append({"name": name, "type": hook_type, "config": config})
     return tuple(out)
+
+
+def _optional_float(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_str_list(value: Any) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    out: list[str] = []
+    for item in value:
+        text = str(item).strip()
+        if text and text not in out:
+            out.append(text)
+    return tuple(out)
+
+
+def _parse_mcp_servers(value: Any) -> tuple[dict[str, Any], ...]:
+    if not isinstance(value, list):
+        return ()
+    out: list[dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        name = _optional_str(item.get("name"))
+        command = _optional_str(item.get("command"))
+        if not name or not command:
+            continue
+        args_raw = item.get("args", [])
+        args = tuple(str(a) for a in args_raw) if isinstance(args_raw, list) else ()
+        env_names = _parse_str_list(item.get("env_names"))
+        out.append(
+            {
+                "name": name,
+                "command": command,
+                "args": args,
+                "env_names": env_names,
+                "policy_profile": str(item.get("policy_profile", "strict")),
+            }
+        )
+    return tuple(out)
+
+
+def _python_sandbox_profile(policy: dict[str, Any]) -> Literal["disabled", "local", "strict"]:
+    mode = str(policy.get("python_sandbox", "disabled")).strip().lower()
+    if mode not in {"disabled", "local", "strict"}:
+        return "disabled"
+    return mode  # type: ignore[return-value]
+
+
+def _web_ui_version(web: Any) -> Literal["legacy", "ts"]:
+    if not isinstance(web, dict):
+        return "ts"
+    mode = str(web.get("ui_version", "ts")).strip().lower()
+    if mode not in {"legacy", "ts"}:
+        return "ts"
+    return mode  # type: ignore[return-value]

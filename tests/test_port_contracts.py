@@ -11,7 +11,9 @@ from pathlib import Path
 
 import pytest
 
+from harnesslab.artifact.in_memory import InMemoryArtifactStore
 from harnesslab.core.contracts import (
+    ArtifactStorePort,
     ClockPort,
     IdPort,
     MemoryStorePort,
@@ -131,6 +133,16 @@ def test_trace_recorder_port_contract(tmp_path: Path) -> None:
     lines = trace_path.read_text(encoding="utf-8").splitlines()
     assert len(lines) == 1
     assert "contract_probe" in lines[0]
+
+
+def test_artifact_store_port_contract() -> None:
+    store: ArtifactStorePort = InMemoryArtifactStore()
+    ref = store.put(b"hello", mime="text/plain", session_id="ses_a", artifact_id="art_a")
+    assert ref == "art_a"
+    assert store.get(ref) == b"hello"
+    meta = store.metadata(ref)
+    assert meta.id == "art_a"
+    assert meta.session_id == "ses_a"
 
 
 def test_clock_port_contract() -> None:

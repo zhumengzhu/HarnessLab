@@ -91,6 +91,54 @@ MIGRATIONS: list[tuple[int, str]] = [
         ALTER TABLE sessions ADD COLUMN budget_usage TEXT;
         """,
     ),
+    (
+        6,
+        # Phase 5.2: artifact metadata (blobs on disk under .harnesslab/artifacts/).
+        """
+        CREATE TABLE IF NOT EXISTS artifacts (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+            mime TEXT NOT NULL,
+            size_bytes INTEGER NOT NULL,
+            sha256 TEXT NOT NULL,
+            storage_path TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_artifacts_session_created
+            ON artifacts(session_id, created_at);
+        """,
+    ),
+    (
+        7,
+        # Phase 5.9: session checkpoints before mutating tools.
+        """
+        CREATE TABLE IF NOT EXISTS checkpoints (
+            id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE,
+            tool_name TEXT NOT NULL,
+            tool_args TEXT NOT NULL,
+            snapshots TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_checkpoints_session_created
+            ON checkpoints(session_id, created_at);
+        """,
+    ),
+    (
+        8,
+        # Semantic memory retrieval (FTS5 keyword search PoC).
+        """
+        CREATE VIRTUAL TABLE IF NOT EXISTS semantic_memory USING fts5(
+            key UNINDEXED,
+            text,
+            metadata UNINDEXED,
+            updated_at UNINDEXED,
+            tokenize='porter'
+        );
+        """,
+    ),
 ]
 
 

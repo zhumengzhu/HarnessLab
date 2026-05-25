@@ -19,15 +19,14 @@ provider expansion (P0–P7: catalog, transforms, DeepSeek / Anthropic /
 OpenAI / Gemini adapters, optional failover, optional OTel fan-out) are
 **complete**. The runtime is a daily-usable local agent harness.
 
-**Next planned phase:** Phase 5 — Research-capable harness (web tools,
-artifact store, plan mode, MCP adapter, Python sandbox, OTel metrics,
-proposal Web UI). See [`docs/roadmap.md`](docs/roadmap.md) Phase 5.
+**Next planned phase:** Phase 5 — Research-capable harness is **substantially complete**
+(web tools, artifact store, plan mode, MCP adapter, Python sandbox, OTel metrics,
+proposal Web UI, checkpoint/rewind, cost budgets, TS Web UI default). See
+[`docs/roadmap.md`](docs/roadmap.md) Phase 5.
 
-**Multi-agent (Phase 6):** design-only RFC at
-[`docs/architecture/multi-agent-exploration.md`](docs/architecture/multi-agent-exploration.md).
-**Not approved for implementation.** Multi-agent orchestration remains
-on the "Must NOT include yet" list until that RFC has an explicit
-acceptance commit that updates this file.
+**Multi-agent (Phase 6):** supervisor PoC shipped (`spawn_sub_agent` tool,
+`start_child`, deterministic eval path). Full orchestration remains
+incremental; see [`docs/architecture/multi-agent-exploration.md`](docs/architecture/multi-agent-exploration.md).
 
 Must include (current):
 
@@ -52,8 +51,8 @@ Must include (current):
 
 Must NOT include yet:
 
-- Vector RAG / semantic memory retrieval
-- Multi-agent orchestration
+- Full multi-agent fleet orchestration / distributed scheduling
+- Vector embedding RAG with auto-write (FTS5 semantic search PoC only)
 - Distributed runtime
 - Plugin marketplace complexity
 - Uncontrolled self-modifying pipelines
@@ -113,6 +112,7 @@ Stable contract names:
 - `ToolPort`
 - `SessionStorePort`
 - `MemoryStorePort`
+- `ArtifactStorePort`
 - `TraceRecorderPort`
 - `ClockPort`
 - `IdPort`

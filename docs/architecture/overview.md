@@ -216,6 +216,7 @@ The following contracts should remain stable across implementations:
 - `ToolPort`
 - `SessionStorePort`
 - `MemoryStorePort`
+- `ArtifactStorePort`
 - `TraceRecorderPort`
 - `ClockPort`
 - `IdPort`

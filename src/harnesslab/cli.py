@@ -4,12 +4,21 @@ import argparse
 import json
 import os
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Literal
 
+from harnesslab.artifact.in_memory import InMemoryArtifactStore
+from harnesslab.artifact.sqlite_store import SqliteArtifactStore
+from harnesslab.checkpoint.store import SqliteCheckpointStore, restore_snapshots
 from harnesslab.core.budget import BudgetLimits
 from harnesslab.core.config import RuntimeLimits
-from harnesslab.core.contracts import MemoryStorePort, SessionStorePort, TraceRecorderPort
+from harnesslab.core.contracts import (
+    ArtifactStorePort,
+    MemoryStorePort,
+    SessionStorePort,
+    TraceRecorderPort,
+)
 from harnesslab.core.loop import DEFAULT_MAX_STEPS, HarnessLoop
 from harnesslab.core.models import Session
 from harnesslab.core.operator_config import (
@@ -48,6 +57,7 @@ from harnesslab.improve import (
     write_proposal,
 )
 from harnesslab.memory.in_memory import InMemoryMemoryStore
+from harnesslab.memory.semantic_sqlite import SqliteSemanticMemoryStore
 from harnesslab.memory.sqlite_store import SqliteMemoryStore
 from harnesslab.policy.default_policy import DefaultPolicy
 from harnesslab.providers.deepseek import tool_specs_from_registry
@@ -64,6 +74,7 @@ from harnesslab.session.sqlite_store import SqliteSessionStore
 from harnesslab.telemetry.aggregate import aggregate, render_metrics
 from harnesslab.telemetry.jsonl_recorder import JsonlTraceRecorder
 from harnesslab.telemetry.log import configure_logging, get_logger
+from harnesslab.telemetry.otel_metrics import wrap_trace_recorder_with_metrics
 from harnesslab.telemetry.otel_recorder import wrap_trace_recorder
 from harnesslab.tools.fetch_url_tool import FetchUrlTool
 from harnesslab.tools.file_tools import (
@@ -73,10 +84,13 @@ from harnesslab.tools.file_tools import (
     ReadFileTool,
     WriteFileTool,
 )
+from harnesslab.tools.mcp_adapter import McpServerConfig, register_mcp_servers
 from harnesslab.tools.patch import ApplyPatchTool
+from harnesslab.tools.python_sandbox_tool import RunPythonSandboxedTool
 from harnesslab.tools.registry import ToolRegistry
 from harnesslab.tools.research_tools import HtmlToMarkdownTool, ReadPdfTool, WebSearchTool
 from harnesslab.tools.shell_tool import RunShellSafeTool
+from harnesslab.tools.spawn_sub_agent import SpawnSubAgentTool
 from harnesslab.web.server import WebRuntime, serve
 from harnesslab.web.trace_hub import TraceHub
 
@@ -97,8 +111,10 @@ SUBCOMMANDS = (
     "metrics",
     "propose",
     "session",
+    "artifact",
     "context",
     "serve",
+    "tui",
 )
 
 EXIT_OK = 0
@@ -228,6 +244,83 @@ def _build_stores(
     raise ValueError(f"unknown storage backend: {backend}")
 
 
+def _env_optional_float(name: str, default: float | None) -> float | None:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        return float(raw.strip())
+    except ValueError:
+        return default
+
+
+def _build_checkpoint_store(
+    backend: StorageBackend,
+    workspace_root: Path,
+    sqlite_path: Path | None,
+) -> SqliteCheckpointStore | None:
+    if backend != "sqlite":
+        return None
+    db_path = sqlite_path or (workspace_root / DEFAULT_SQLITE_PATH)
+    if not db_path.is_absolute():
+        db_path = workspace_root / db_path
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    return SqliteCheckpointStore(db_path)
+
+
+def _build_semantic_memory(
+    backend: StorageBackend,
+    workspace_root: Path,
+    sqlite_path: Path | None,
+) -> SqliteSemanticMemoryStore | None:
+    if backend != "sqlite":
+        return None
+    db_path = sqlite_path or (workspace_root / DEFAULT_SQLITE_PATH)
+    if not db_path.is_absolute():
+        db_path = workspace_root / db_path
+    return SqliteSemanticMemoryStore(db_path)
+
+
+def _mcp_configs_from_operator(
+    operator_config: OperatorConfig | None,
+) -> tuple[McpServerConfig, ...]:
+    if operator_config is None:
+        return ()
+    out: list[McpServerConfig] = []
+    for item in operator_config.mcp_servers:
+        out.append(
+            McpServerConfig(
+                name=str(item["name"]),
+                command=str(item["command"]),
+                args=tuple(item.get("args", ())),
+                env_names=tuple(item.get("env_names", ())),
+                policy_profile=str(item.get("policy_profile", "strict")),
+                allowed_tools=frozenset(operator_config.mcp_allowed_tools),
+            )
+        )
+    return tuple(out)
+
+
+def _build_artifact_store(
+    backend: StorageBackend,
+    workspace_root: Path,
+    sqlite_path: Path | None,
+    *,
+    enabled: bool,
+) -> ArtifactStorePort | None:
+    if not enabled:
+        return None
+    if backend == "memory":
+        return InMemoryArtifactStore()
+    if backend == "sqlite":
+        db_path = sqlite_path or (workspace_root / DEFAULT_SQLITE_PATH)
+        if not db_path.is_absolute():
+            db_path = workspace_root / db_path
+        db_path.parent.mkdir(parents=True, exist_ok=True)
+        return SqliteArtifactStore(db_path, workspace_root=workspace_root)
+    raise ValueError(f"unknown storage backend: {backend}")
+
+
 def build_runtime(
     workspace_root: Path,
     limits: RuntimeLimits | None = None,
@@ -239,6 +332,9 @@ def build_runtime(
     operator_config: OperatorConfig | None = None,
 ) -> HarnessLoop:
     limits = limits or RuntimeLimits()
+    env_artifact_threshold = _env_int("HARNESSLAB_ARTIFACT_THRESHOLD_BYTES", None)
+    if env_artifact_threshold is not None:
+        limits = replace(limits, artifact_threshold_bytes=env_artifact_threshold)
     effective_shell_profile = (
         shell_profile
         or (operator_config.shell_profile if operator_config is not None else None)
@@ -284,6 +380,23 @@ def build_runtime(
 
     # Memory store is wired into the loop for session-scoped notes (Phase 3.3).
     sessions, memory = _build_stores(storage_backend, workspace_root, sqlite_path)
+    artifacts = _build_artifact_store(
+        storage_backend,
+        workspace_root,
+        sqlite_path,
+        enabled=bool(limits.artifact_threshold_bytes),
+    )
+    checkpoint_store = _build_checkpoint_store(storage_backend, workspace_root, sqlite_path)
+    semantic_memory = _build_semantic_memory(storage_backend, workspace_root, sqlite_path)
+    python_profile = (
+        operator_config.python_sandbox_profile if operator_config is not None else "disabled"
+    )
+    if operator_config is not None and operator_config.limits.python_sandbox_profile != "disabled":
+        python_profile = operator_config.limits.python_sandbox_profile
+    mcp_allowed = frozenset(
+        operator_config.mcp_allowed_tools if operator_config is not None else ()
+    )
+    multi_agent = bool(operator_config.multi_agent_enabled if operator_config else False)
     policy = DefaultPolicy(
         workspace_root=workspace_root,
         shell_profile=effective_shell_profile,
@@ -298,6 +411,9 @@ def build_runtime(
             if operator_config is not None
             else None
         ),
+        mcp_allowed_tools=mcp_allowed,
+        python_sandbox_profile=python_profile,
+        enable_spawn_sub_agent=multi_agent,
     )
     tools = ToolRegistry()
     tools.register(ReadFileTool(workspace_root, limits=limits))
@@ -337,9 +453,26 @@ def build_runtime(
     tools.register(HtmlToMarkdownTool(limits=limits))
     tools.register(ReadPdfTool(workspace_root, limits=limits))
     tools.register(RunShellSafeTool(workspace_root, limits=limits))
+    if python_profile != "disabled":
+        tools.register(RunPythonSandboxedTool(workspace_root, limits=limits))
+    mcp_health: dict[str, dict] = {}
+    mcp_configs = _mcp_configs_from_operator(operator_config)
+    if mcp_configs:
+        mcp_health = register_mcp_servers(tools, mcp_configs)
+    loop_holder: list[HarnessLoop] = []
+    if multi_agent:
+        tools.register(
+            SpawnSubAgentTool(
+                lambda: loop_holder[0],
+                max_depth=limits.max_sub_agent_depth,
+                max_per_session=limits.max_sub_agents_per_session,
+            )
+        )
     if trace is None:
-        trace = wrap_trace_recorder(
-            JsonlTraceRecorder(workspace_root / ".harnesslab" / "trace.jsonl")
+        trace = wrap_trace_recorder_with_metrics(
+            wrap_trace_recorder(
+                JsonlTraceRecorder(workspace_root / ".harnesslab" / "trace.jsonl")
+            )
         )
     raw_skill_mode = (
         os.environ.get("HARNESSLAB_SKILL_SELECTION_MODE")
@@ -421,6 +554,10 @@ def build_runtime(
             "HARNESSLAB_BUDGET_MAX_SESSION_WALL_TIME_MS_TOTAL",
             operator_config.budget_max_session_wall_time_ms_total if operator_config else None,
         ),
+        max_session_cost_usd_total=_env_optional_float(
+            "HARNESSLAB_BUDGET_MAX_SESSION_COST_USD_TOTAL",
+            operator_config.budget_max_session_cost_usd_total if operator_config else None,
+        ),
     )
     hook_runner = build_hook_runner(
         operator_config.pre_tool_hooks if operator_config is not None else (),
@@ -445,7 +582,7 @@ def build_runtime(
         storage_backend,
     )
     title_namer = LiveTitleNamer(model) if backend == "deepseek" else None
-    return HarnessLoop(
+    loop = HarnessLoop(
         model=model,
         policy=policy,
         sessions=sessions,
@@ -456,11 +593,18 @@ def build_runtime(
         limits=limits,
         title_namer=title_namer,
         memory=memory,
+        artifacts=artifacts,
+        checkpoint_store=checkpoint_store,
+        semantic_memory=semantic_memory,
         workspace_root=workspace_root,
         replan_after_steps=effective_replan_after_steps,
         budget_limits=budget_limits,
         hook_runner=hook_runner,
     )
+    if multi_agent:
+        loop_holder.append(loop)
+    loop._mcp_health = mcp_health  # type: ignore[attr-defined]
+    return loop
 
 
 # ---------------------------------------------------------------------------
@@ -740,6 +884,33 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Override the goal/title of the new session (defaults to parent's).",
     )
 
+    cp = se_sub.add_parser("checkpoints", help="List checkpoints for a session.")
+    cp.add_argument("session_id")
+
+    rw = se_sub.add_parser("rewind", help="Restore files from a checkpoint.")
+    rw.add_argument("session_id")
+    rw.add_argument("checkpoint_id")
+
+    # ----- artifact -----
+    ar = sub.add_parser(
+        "artifact",
+        help="List or show stored tool-output artifacts.",
+    )
+    ar.add_argument("--workspace-root", default=".", help="Workspace root.")
+    ar.add_argument(
+        "--sqlite-path",
+        default=None,
+        help=f"SQLite DB path (default: {DEFAULT_SQLITE_PATH!r}).",
+    )
+    ar_sub = ar.add_subparsers(dest="artifact_action", required=True, metavar="ACTION")
+    ar_ls = ar_sub.add_parser("ls", help="List artifact metadata.")
+    ar_ls.add_argument("--session-id", default=None, help="Filter by session id.")
+    ar_ls.add_argument("--limit", type=int, default=20, help="Max rows.")
+    ar_show = ar_sub.add_parser("show", help="Show artifact bytes (UTF-8).")
+    ar_show.add_argument("artifact_id")
+
+    sub.add_parser("tui", help="Launch the Textual terminal UI.")
+
     # ----- context -----
     ctx = sub.add_parser(
         "context",
@@ -879,10 +1050,14 @@ def main() -> None:
         sys.exit(_cmd_propose(args))
     if args.command == "session":
         sys.exit(_cmd_session(args))
+    if args.command == "artifact":
+        sys.exit(_cmd_artifact(args))
     if args.command == "context":
         sys.exit(_cmd_context(args))
     if args.command == "serve":
         sys.exit(_cmd_serve(args))
+    if args.command == "tui":
+        sys.exit(_cmd_tui(args))
 
     parser.print_help(sys.stderr)
     sys.exit(EXIT_USAGE)
@@ -1152,6 +1327,10 @@ def _cmd_session(args: argparse.Namespace) -> int:
         return _cmd_session_resume(args)
     if args.session_action == "fork":
         return _cmd_session_fork(args)
+    if args.session_action == "checkpoints":
+        return _cmd_session_checkpoints(args)
+    if args.session_action == "rewind":
+        return _cmd_session_rewind(args)
     print(f"unknown session action: {args.session_action}", file=sys.stderr)
     return EXIT_USAGE
 
@@ -1225,6 +1404,93 @@ def _cmd_session_fork(args: argparse.Namespace) -> int:
         return EXIT_USAGE
     print(forked.id)
     return EXIT_OK
+
+
+def _cmd_session_checkpoints(args: argparse.Namespace) -> int:
+    workspace_root = Path(args.workspace_root).resolve()
+    sqlite_path = Path(args.sqlite_path) if args.sqlite_path else None
+    store = _build_checkpoint_store("sqlite", workspace_root, sqlite_path)
+    if store is None:
+        print("checkpoints require sqlite storage", file=sys.stderr)
+        return EXIT_USAGE
+    try:
+        rows = store.list(args.session_id)
+        if not rows:
+            print("(no checkpoints)")
+            return EXIT_OK
+        for row in rows:
+            print(f"{row.id}\t{row.tool_name}\t{row.created_at.isoformat()}")
+        return EXIT_OK
+    finally:
+        store.close()
+
+
+def _cmd_session_rewind(args: argparse.Namespace) -> int:
+    workspace_root = Path(args.workspace_root).resolve()
+    sqlite_path = Path(args.sqlite_path) if args.sqlite_path else None
+    store = _build_checkpoint_store("sqlite", workspace_root, sqlite_path)
+    if store is None:
+        print("rewind requires sqlite storage", file=sys.stderr)
+        return EXIT_USAGE
+    try:
+        checkpoint = store.get(args.checkpoint_id)
+        if checkpoint.session_id != args.session_id:
+            print("checkpoint does not belong to session", file=sys.stderr)
+            return EXIT_USAGE
+        touched = restore_snapshots(workspace_root, checkpoint.snapshots)
+        print(f"restored {len(touched)} path(s): {', '.join(touched)}")
+        return EXIT_OK
+    except KeyError:
+        print(f"checkpoint not found: {args.checkpoint_id}", file=sys.stderr)
+        return EXIT_USAGE
+    finally:
+        store.close()
+
+
+def _cmd_tui(args: argparse.Namespace) -> int:
+    try:
+        from harnesslab.tui.app import run_tui
+    except ImportError as exc:
+        print(f"TUI requires textual: {exc}", file=sys.stderr)
+        return EXIT_USAGE
+    workspace_root = Path(getattr(args, "workspace_root", ".")).resolve()
+    run_tui(workspace_root)
+    return EXIT_OK
+
+
+def _artifact_store_for_cli(args: argparse.Namespace) -> SqliteArtifactStore:
+    workspace_root = Path(args.workspace_root).resolve()
+    sqlite_path = Path(args.sqlite_path) if args.sqlite_path else None
+    db_path = sqlite_path or (workspace_root / DEFAULT_SQLITE_PATH)
+    if not db_path.is_absolute():
+        db_path = workspace_root / db_path
+    return SqliteArtifactStore(db_path, workspace_root=workspace_root)
+
+
+def _cmd_artifact(args: argparse.Namespace) -> int:
+    store = _artifact_store_for_cli(args)
+    try:
+        if args.artifact_action == "ls":
+            rows = store.list(session_id=args.session_id, limit=args.limit)
+            if not rows:
+                print("(no artifacts)")
+                return EXIT_OK
+            for meta in rows:
+                print(
+                    f"{meta.id}\t{meta.session_id}\t{meta.mime}\t"
+                    f"{meta.size_bytes}\t{meta.created_at.isoformat()}"
+                )
+            return EXIT_OK
+        if args.artifact_action == "show":
+            data = store.get(args.artifact_id)
+            print(data.decode("utf-8", errors="replace"))
+            return EXIT_OK
+    except KeyError as exc:
+        print(str(exc), file=sys.stderr)
+        return EXIT_USAGE
+    finally:
+        store.close()
+    return EXIT_USAGE
 
 
 def _format_session_table(sessions) -> str:

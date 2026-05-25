@@ -3,7 +3,10 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
+from harnesslab.checkpoint.store import MUTATING_TOOLS, collect_file_snapshots
+from harnesslab.core.artifact_policy import maybe_externalize_tool_output
 from harnesslab.core.budget import (
     BudgetBreach,
     BudgetLimits,
@@ -23,11 +26,13 @@ from harnesslab.core.context import (
     merge_adapter_breakdown,
 )
 from harnesslab.core.contracts import (
+    ArtifactStorePort,
     ClockPort,
     IdPort,
     MemoryStorePort,
     ModelPort,
     PolicyPort,
+    SemanticMemoryStorePort,
     SessionStorePort,
     TraceRecorderPort,
 )
@@ -61,6 +66,7 @@ from harnesslab.core.skill_policy import (
 )
 from harnesslab.core.title import TitleNamer, derive_title_from_text
 from harnesslab.core.tool_hooks import ToolHookRunner
+from harnesslab.providers.pricing import estimate_call_cost_usd
 from harnesslab.telemetry.log import get_logger
 from harnesslab.tools.registry import ToolRegistry
 
@@ -97,6 +103,9 @@ class HarnessLoop:
         summarizer: Summarizer | None = None,
         title_namer: TitleNamer | None = None,
         memory: MemoryStorePort | None = None,
+        artifacts: ArtifactStorePort | None = None,
+        checkpoint_store: Any | None = None,
+        semantic_memory: SemanticMemoryStorePort | None = None,
         workspace_root: Path | None = None,
         replan_after_steps: int | None = None,
         budget_limits: BudgetLimits | None = None,
@@ -113,6 +122,9 @@ class HarnessLoop:
         self._summarizer: Summarizer | None = summarizer
         self._title_namer: TitleNamer | None = title_namer
         self._memory: MemoryStorePort | None = memory
+        self._artifacts: ArtifactStorePort | None = artifacts
+        self._checkpoint_store = checkpoint_store
+        self._semantic_memory = semantic_memory
         self._workspace_root = workspace_root.resolve() if workspace_root else None
         self._replan_after_steps = (
             replan_after_steps
@@ -136,6 +148,27 @@ class HarnessLoop:
             payload=self._session_started_payload(goal=goal),
         )
         _log.info("session started id=%s goal=%r", session.id, goal[:80])
+        return session
+
+    def start_child(self, goal: str, parent_session_id: str) -> Session:
+        """Start a child session linked to ``parent_session_id`` (multi-agent PoC)."""
+
+        session = Session(
+            id=self._ids.new_id("ses"),
+            goal=goal,
+            created_at=self._clock.now(),
+            title=derive_title_from_text(goal),
+            parent_session_id=parent_session_id,
+        )
+        self._sessions.create(session)
+        self._record(
+            session=session,
+            event_type="session_started",
+            payload={
+                **self._session_started_payload(goal=goal),
+                "parent_session_id": parent_session_id,
+            },
+        )
         return session
 
     def fork(self, source_id: str, *, goal: str | None = None) -> Session:
@@ -293,6 +326,7 @@ class HarnessLoop:
             token_total = self._model_total_tokens()
             if token_total is not None:
                 session.budget_usage.tokens_total += token_total
+            self._accumulate_model_cost(session)
             self._record(
                 session=session,
                 event_type="model_call",
@@ -828,6 +862,46 @@ class HarnessLoop:
         }
         return {k: raw[k] for k in allowed if k in raw}
 
+    def _accumulate_model_cost(self, session: Session) -> None:
+        raw = self._model_raw_meta()
+        if not raw:
+            return
+        req_tokens = raw.get("request_tokens")
+        resp_tokens = raw.get("response_tokens")
+        cost = estimate_call_cost_usd(
+            model_name=str(raw.get("model_name", "")) or None,
+            request_tokens=req_tokens if isinstance(req_tokens, int) else None,
+            response_tokens=resp_tokens if isinstance(resp_tokens, int) else None,
+        )
+        if cost > 0:
+            session.budget_usage.cost_usd_total += cost
+
+    def _maybe_create_checkpoint(self, session: Session, call: ToolCall) -> None:
+        store = self._checkpoint_store
+        root = self._workspace_root
+        if store is None or root is None or call.name not in MUTATING_TOOLS:
+            return
+        snapshots = collect_file_snapshots(root, call.name, call.args)
+        if not snapshots:
+            return
+        checkpoint_id = self._ids.new_id("cp")
+        store.create(
+            checkpoint_id=checkpoint_id,
+            session_id=session.id,
+            tool_name=call.name,
+            tool_args=call.args,
+            snapshots=snapshots,
+        )
+        self._record(
+            session=session,
+            event_type="checkpoint_created",
+            payload={
+                "checkpoint_id": checkpoint_id,
+                "tool_name": call.name,
+                "paths": sorted(snapshots.keys()),
+            },
+        )
+
     def _apply_decision(
         self,
         session: Session,
@@ -1084,7 +1158,22 @@ class HarnessLoop:
                 },
             )
             return denied_msg, "tool_denied"
+        self._maybe_create_checkpoint(session, call)
         result = self._tools.execute(call)
+        if result.ok and self._artifacts is not None:
+            ext = maybe_externalize_tool_output(
+                result.output,
+                artifact_store=self._artifacts,
+                ids=self._ids,
+                session_id=session.id,
+                threshold_bytes=self._limits.artifact_threshold_bytes,
+            )
+            result = ToolResult(
+                ok=result.ok,
+                output=ext.output,
+                error=result.error,
+                artifact_ref=ext.artifact_ref,
+            )
         call.ended_at = self._clock.now()
         self._run_post_tool_hooks(session, call, result)
 
@@ -1190,7 +1279,7 @@ class HarnessLoop:
             duration_ms = (call.ended_at - call.started_at).total_seconds() * 1000.0
         output_preview = result.output[:_TRACE_OUTPUT_PREVIEW_BYTES]
         truncated = len(result.output) > _TRACE_OUTPUT_PREVIEW_BYTES
-        return {
+        payload: dict = {
             "tool_call_id": call.id,
             "tool": call.name,
             "args": call.args,
@@ -1204,6 +1293,12 @@ class HarnessLoop:
             "output_preview": output_preview,
             "output_truncated": truncated,
         }
+        if result.artifact_ref:
+            payload["artifact_ref"] = result.artifact_ref
+        return payload
+        if result.artifact_ref:
+            payload["artifact_ref"] = result.artifact_ref
+        return payload
 
     def _append_tool_exchange(
         self,

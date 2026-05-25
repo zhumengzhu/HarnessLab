@@ -16,6 +16,7 @@ dependencies = [
   "pydantic>=2.7.0",
   "pypdfium2>=5.8.0",
   "pyyaml>=6.0.3",
+  "textual>=1.0.0",
 ]
 
 [project.scripts]

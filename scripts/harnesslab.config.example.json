@@ -32,7 +32,8 @@
     "max_steps": 20
   },
   "policy": {
-    "shell_profile": "dev"
+    "shell_profile": "dev",
+    "python_sandbox": "disabled"
   },
   "loop": {
     "planning_mode": "off",
@@ -41,13 +42,15 @@
       "enabled": false,
       "soft_ratio": 0.8,
       "action_on_hard": "ask_user",
-      "max_llm_calls_per_turn": 12,
-      "max_tool_calls_per_turn": 16,
-      "max_turn_wall_time_ms": 120000,
       "max_session_tokens_total": 500000,
-      "max_session_tool_calls_total": 200,
-      "max_session_wall_time_ms_total": 1800000
+      "max_session_cost_usd_total": 5.0
+    },
+    "multi_agent": {
+      "enabled": false
     }
+  },
+  "web": {
+    "ui_version": "ts"
   },
   "tools": {
     "fetch_url": {

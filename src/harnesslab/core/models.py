@@ -20,6 +20,15 @@ class BudgetUsage(BaseModel):
     last_budget_status: Literal["ok", "soft_exceeded", "hard_exceeded"] = "ok"
 
 
+class ArtifactMeta(BaseModel):
+    id: str
+    session_id: str
+    mime: str
+    size_bytes: int
+    sha256: str
+    created_at: datetime
+
+
 class Message(BaseModel):
     id: str = Field(default_factory=lambda: _new_id("msg"))
     role: Literal["system", "user", "assistant", "tool"]
@@ -94,6 +103,7 @@ class ToolResult(BaseModel):
     ok: bool
     output: str
     error: str | None = None
+    artifact_ref: str | None = None
 
 
 class TraceEvent(BaseModel):

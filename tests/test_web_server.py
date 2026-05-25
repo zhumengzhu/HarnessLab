@@ -405,8 +405,8 @@ def test_web_static_index_served(tmp_path: Path) -> None:
     with urllib.request.urlopen(f"{base}/", timeout=5) as resp:  # noqa: S310
         body = resp.read().decode("utf-8")
     assert "HarnessLab" in body
-    assert "/static/app.js" in body
-    assert "tool-panel" in body
+    assert ("/static/app.js" in body) or ('id="root"' in body and "/assets/" in body)
+    assert ("tool-panel" in body) or ('id="root"' in body)
 
 
 def test_web_can_switch_to_ts_static_bundle(

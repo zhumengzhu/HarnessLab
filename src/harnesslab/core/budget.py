@@ -21,6 +21,7 @@ class BudgetLimits:
     max_session_tokens_total: int | None = None
     max_session_tool_calls_total: int | None = None
     max_session_wall_time_ms_total: int | None = None
+    max_session_cost_usd_total: float | None = None
 
 
 @dataclass
@@ -86,6 +87,12 @@ def detect_budget_breaches(
             _as_float(limits.max_session_wall_time_ms_total),
             "session",
         ),
+        (
+            "max_session_cost_usd_total",
+            float(session.cost_usd_total),
+            limits.max_session_cost_usd_total,
+            "session",
+        ),
     ]
     out: list[BudgetBreach] = []
     for dim, current, limit, scope in checks:
@@ -118,7 +125,7 @@ def detect_budget_breaches(
     return out
 
 
-def _as_float(value: int | None) -> float | None:
+def _as_float(value: int | float | None) -> float | None:
     if value is None:
         return None
     return float(value)

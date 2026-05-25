@@ -75,6 +75,9 @@ class DefaultPolicy:
         fetch_url_mode: Literal["strict", "open"] = DEFAULT_FETCH_MODE,
         fetch_url_allowlist: frozenset[str] | None = None,
         fetch_url_deny_hosts: frozenset[str] | None = None,
+        mcp_allowed_tools: frozenset[str] | None = None,
+        python_sandbox_profile: Literal["disabled", "local", "strict"] = "disabled",
+        enable_spawn_sub_agent: bool = False,
     ) -> None:
         self._workspace_root = workspace_root.resolve()
         if shell_allowlist is not None:
@@ -91,6 +94,9 @@ class DefaultPolicy:
         self._fetch_url_allowlist = fetch_url_allowlist or DEFAULT_FETCH_HOST_ALLOWLIST
         env_deny_hosts = parse_csv_hosts(os.environ.get("HARNESSLAB_FETCH_URL_DENY_HOSTS"))
         self._fetch_url_deny_hosts = (fetch_url_deny_hosts or frozenset()) | env_deny_hosts
+        self._mcp_allowed_tools = mcp_allowed_tools or frozenset()
+        self._python_sandbox_profile = python_sandbox_profile
+        self._enable_spawn_sub_agent = enable_spawn_sub_agent
 
     def allow_tool(self, call: ToolCall) -> tuple[bool, str]:
         if call.name in {"read_file", "write_file", "edit_file", "apply_patch", "read_pdf"}:
@@ -107,6 +113,19 @@ class DefaultPolicy:
 
         if call.name == "run_shell_safe":
             return self._check_shell(call)
+
+        if call.name == "run_python_sandboxed":
+            return self._check_python_sandbox(call)
+
+        if call.name == "spawn_sub_agent":
+            if not self._enable_spawn_sub_agent:
+                return False, "spawn_sub_agent disabled (enable in config loop.multi_agent)"
+            return True, "ok"
+
+        if call.name.startswith("mcp_"):
+            if call.name in self._mcp_allowed_tools:
+                return True, "ok"
+            return False, f"mcp tool '{call.name}' not in operator allowlist"
 
         return False, f"unknown tool '{call.name}'"
 
@@ -182,4 +201,17 @@ class DefaultPolicy:
                 f"git subcommand '{sub}' not allowed "
                 f"(safe set: {', '.join(sorted(SAFE_GIT_SUBCOMMANDS))})",
             )
+        return True, "ok"
+
+    def _check_python_sandbox(self, call: ToolCall) -> tuple[bool, str]:
+        profile = self._python_sandbox_profile
+        if profile == "disabled":
+            return False, "run_python_sandboxed disabled (policy.python_sandbox=disabled)"
+        code = str(call.args.get("code", ""))
+        if profile == "strict":
+            blocked = ("import os", "import subprocess", "open(", "__import__")
+            lowered = code.lower()
+            for pattern in blocked:
+                if pattern in lowered:
+                    return False, f"python sandbox strict mode blocks pattern: {pattern}"
         return True, "ok"

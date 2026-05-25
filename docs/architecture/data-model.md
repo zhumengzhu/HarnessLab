@@ -269,7 +269,11 @@ Suggested fields:
 1. In-memory stores for MVP — shipped (Step 1)
 2. SQLite persistence for sessions/messages/memory — shipped (Step 3)
 3. Optional vector index or retrieval index for memory records — planned
-4. Artifact storage references for large outputs — planned
+4. Artifact storage references for large outputs — **shipped (Phase 5.2)**
+   via `ArtifactStorePort`; metadata in SQLite (`artifacts` table v6),
+   blobs under `.harnesslab/artifacts/`; enabled when
+   `limits.artifact_threshold_bytes` or `HARNESSLAB_ARTIFACT_THRESHOLD_BYTES`
+   is set.
 
 ### Current SQLite Schema (managed by `storage.sqlite.MIGRATIONS`)
 
