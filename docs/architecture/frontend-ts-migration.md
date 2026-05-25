@@ -1,6 +1,6 @@
 # Frontend TS Migration RFC (OpenClaw-style)
 
-Status: In progress (Phase A/B/C complete)
+Status: In progress (Phase A/B/C complete, Phase D started)
 
 ## Why this exists
 
@@ -29,6 +29,24 @@ Current progress snapshot:
   - session fork action
   - `/remember` and `/skill` affordance buttons/modes
   - tool cards + stream error rendering
+- Phase D started: proposal status transitions (accept/reject/supersede)
+  wired in TS UI against guarded backend API, with explicit gate
+  acknowledgements before `accepted`.
+- Proposal panel includes gate-run buttons (`pytest`/`eval`) with inline
+  pass/fail output cards to support operator decisions.
+- Feature-slice migration started in code (`features/proposals`,
+  `features/sessions`) to reduce `App.tsx` coupling.
+- Continued split for shared surfaces (`features/composer`,
+  `features/settings`) so `App.tsx` stays orchestration-focused.
+- Trace and send-flow state handling are now split (`features/trace`,
+  `features/composer/useComposerController`) to reduce top-level component
+  state coupling.
+- Frontend test skeleton started with Vitest (utility-level tests first,
+  expanding toward component tests in later phases).
+- Proposal panel component-level test coverage has started (`ProposalPanel`
+  gate run + checkbox sync path).
+- **Simple Chat Mode** (default): header toggle hides trace/proposals/settings
+  until operator switches to Advanced; reduces onboarding friction for daily chat.
 
 ## Scope and non-goals
 
@@ -63,6 +81,7 @@ Apply to HarnessLab as:
 
 - Runtime: `React` + `TypeScript`
 - Build/dev: `Vite`
+- Package manager: `bun` (primary) with npm-compatible scripts preserved
 - Data fetching/cache: `@tanstack/react-query`
 - Forms/validation: `zod` + thin helpers
 - UI primitives: minimal local components first (no heavy design system initially)
@@ -157,6 +176,29 @@ Exit: legacy JS UI can be safely removed.
 - During rollout:
   - CI runs existing Python tests + frontend TS tests.
   - No API breaking changes without schema/version notes.
+
+## Frontend testing coverage strategy
+
+The TS UI uses layered test coverage so migration can proceed without slowing
+feature delivery:
+
+- **Utility layer (fastest):** pure helpers in `features/*` and `lib/*`
+  (example: proposal gate output summarization).
+- **Component layer (current focus):** React Testing Library + Vitest around
+  feature slices; mock `/api/*` and assert user-visible states (loading, error,
+  success, disabled transitions).
+- **Stream integration layer (next):** targeted SSE flow tests for
+  `trace/done/error` ordering and tool-card rendering.
+- **E2E smoke layer (optional):** Playwright checks for core chat workflows,
+  run as a non-blocking lane until TS UI becomes default.
+
+Current baseline:
+
+- Proposal panel has utility coverage and component scenarios for:
+  - gate success -> confirmation auto-check
+  - gate failure -> confirmation reset behavior
+  - gate API error -> inline error message rendering
+- App-level mode toggle tests cover Simple default and Advanced panel visibility.
 
 ## Risks and mitigations
 

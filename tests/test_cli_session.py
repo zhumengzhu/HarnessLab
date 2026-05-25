@@ -36,6 +36,12 @@ def _seed(store) -> tuple[Session, Session]:
     )
     store.create(older)
     store.create(newer)
+    older.budget_usage.tokens_total = 100
+    older.budget_usage.last_budget_status = "ok"
+    newer.budget_usage.tokens_total = 300
+    newer.budget_usage.last_budget_status = "soft_exceeded"
+    store.save(older)
+    store.save(newer)
     return older, newer
 
 
@@ -107,6 +113,12 @@ def _seed_sqlite_with_one_session(tmp_path: Path) -> str:
             created_at=datetime(2026, 5, 23, 12, 0, tzinfo=UTC),
         )
     )
+    sess.budget_usage.llm_calls_total = 3
+    sess.budget_usage.tool_calls_total = 1
+    sess.budget_usage.tokens_total = 210
+    sess.budget_usage.wall_time_ms_total = 1550
+    sess.budget_usage.cost_usd_total = 0.0042
+    sess.budget_usage.last_budget_status = "soft_exceeded"
     store.create(sess)
     store.close()
     return sess.id
@@ -133,6 +145,8 @@ def test_session_ls_prints_table_with_seeded_row(
     assert exc.value.code == cli.EXIT_OK
     out = capsys.readouterr().out
     assert "ID" in out
+    assert "TOKENS" in out
+    assert "BUDGET" in out
     assert sess_id in out
     assert "done" in out
     assert "cli probe" in out
@@ -178,6 +192,9 @@ def test_session_show_prints_metadata_and_messages(
     assert sess_id in out
     assert "Status:    done" in out
     assert "Steps:     2" in out
+    assert "Budget:" in out
+    assert "status:   soft_exceeded" in out
+    assert "tokens:   210" in out
     assert "user: hello there" in out
     assert "assistant: hi back" in out
 

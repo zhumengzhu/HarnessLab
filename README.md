@@ -61,8 +61,9 @@ uv run harnesslab run "hello" --max-steps 3
 ```
 
 Built-in tools: `read_file`, `write_file`, `edit_file`, `apply_patch`, `grep`, `glob`,
-`fetch_url`, `run_shell_safe`. See `docs/architecture/tool-runtime.md` for policy
-details. ``fetch_url`` currently allowlists ``wttr.in`` for read-only HTTP (e.g. weather).
+`fetch_url`, `web_search`, `html_to_markdown`, `read_pdf`, `run_shell_safe`.
+See `docs/architecture/tool-runtime.md` for policy details. ``fetch_url`` currently
+allowlists ``wttr.in`` for read-only HTTP (e.g. weather).
 
 ### Web chat UI (`serve`)
 
@@ -102,12 +103,20 @@ TS frontend foundation (optional, Phase A):
 
 ```bash
 cd webui
-npm install
-npm run build
+bun install
+bun run check
+bun run test
+bun run build
 HARNESSLAB_WEB_UI_VERSION=ts uv run harnesslab serve --workspace-root .
 ```
 
+`webui` is bun-first (`bun.lock`); use bun for install/check/test/build.
+
 If the TS bundle is missing, `serve` falls back to the legacy static UI.
+
+**Simple chat (TS UI):** after `bun run build`, open the TS UI and use
+**新对话** → type in **Composer** → Enter. Header **Simple** mode hides
+trace/proposals; switch **Advanced** when debugging.
 
 There is no global JSON config file yet — model provider settings use
 environment variables plus CLI / `HL_SERVE_*` flags, or optional

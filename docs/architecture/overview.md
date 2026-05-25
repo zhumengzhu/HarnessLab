@@ -512,6 +512,8 @@ Endpoints:
 - `GET /api/sessions/{id}/trace` — tool/step events for inspector panel
 - `GET /api/proposals?status=open|all` — list proposal headers from `proposals/`
 - `GET /api/proposals/{id}` — read one proposal markdown + metadata
+- `POST /api/proposals/{id}/status` — guarded status transition (`open|accepted|rejected|superseded`) with AGENTS.md-aligned validation
+- `POST /api/proposals/gates/run` — run `pytest`/`eval` locally and return bounded output for proposal gate UX
 - `POST /api/sessions` — `start` + first `run_session`
 - `POST /api/sessions/{id}/messages` — continue conversation (JSON or SSE)
 - `POST /api/sessions/{id}/fork` — fork session branch

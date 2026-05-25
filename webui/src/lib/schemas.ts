@@ -80,7 +80,7 @@ export type TraceResponse = {
 
 export type ProposalSummary = {
   id: string;
-  status: string;
+  status: "open" | "accepted" | "rejected" | "superseded";
   kind: string;
   cluster_signature: string;
   occurrences: number;
@@ -93,15 +93,46 @@ export type ProposalsResponse = {
 
 export type ProposalDetail = {
   id: string;
-  status: string;
+  status: "open" | "accepted" | "rejected" | "superseded";
   kind: string;
   cluster_signature: string;
   occurrences: number;
   generated_at: string;
+  superseded_by?: string | null;
   related_files: string[];
   body_markdown: string;
 };
 
 export type ProposalDetailResponse = {
   proposal: ProposalDetail;
+};
+
+export type ProposalStatusUpdateRequest = {
+  status: "open" | "accepted" | "rejected" | "superseded";
+  decision_note?: string;
+  superseded_by?: string;
+  confirm_reviewed?: boolean;
+  confirm_pytest_green?: boolean;
+  confirm_eval_no_regression?: boolean;
+};
+
+export type ProposalGateRunRequest = {
+  gate: "pytest" | "eval";
+};
+
+export type ProposalGateRunResult = {
+  gate: "pytest" | "eval";
+  ok: boolean;
+  exit_code: number | null;
+  elapsed_ms: number;
+  command: string[];
+  stdout: string;
+  stderr: string;
+  stdout_truncated: boolean;
+  stderr_truncated: boolean;
+  timed_out?: boolean;
+};
+
+export type ProposalGateRunResponse = {
+  result: ProposalGateRunResult;
 };

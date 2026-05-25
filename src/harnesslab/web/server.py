@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import mimetypes
 import os
+import subprocess
 import threading
+import time
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from http import HTTPStatus
@@ -24,6 +26,8 @@ from harnesslab.web.trace_hub import TraceHub
 _LEGACY_STATIC_DIR = Path(__file__).resolve().parent / "static"
 _TS_STATIC_DIR = Path(__file__).resolve().parent / "static_ts"
 _log = get_logger("web.server")
+_GATE_TIMEOUT_SECONDS = 600
+_GATE_OUTPUT_LIMIT = 12000
 
 TOOL_PANEL_EVENT_TYPES = frozenset(
     {
@@ -160,6 +164,68 @@ def _wants_sse(handler: BaseHTTPRequestHandler, body: dict[str, Any]) -> bool:
     return bool(body.get("stream"))
 
 
+def _truncate_text(text: str, *, limit: int = _GATE_OUTPUT_LIMIT) -> tuple[str, bool]:
+    if len(text) <= limit:
+        return text, False
+    return text[:limit], True
+
+
+def _run_gate_command(
+    workspace_root: Path,
+    *,
+    gate: str,
+) -> dict[str, Any]:
+    commands: dict[str, list[str]] = {
+        "pytest": ["uv", "run", "pytest"],
+        "eval": ["uv", "run", "harnesslab", "eval"],
+    }
+    if gate not in commands:
+        raise ValueError("gate must be one of: pytest, eval")
+    argv = commands[gate]
+    started = time.perf_counter()
+    try:
+        completed = subprocess.run(  # noqa: S603
+            argv,
+            cwd=workspace_root,
+            text=True,
+            capture_output=True,
+            timeout=_GATE_TIMEOUT_SECONDS,
+            check=False,
+        )
+    except subprocess.TimeoutExpired as exc:
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+        timeout_stdout = (exc.stdout or "") if isinstance(exc.stdout, str) else ""
+        timeout_stderr = (exc.stderr or "") if isinstance(exc.stderr, str) else ""
+        stdout, out_truncated = _truncate_text(timeout_stdout)
+        stderr, err_truncated = _truncate_text(timeout_stderr)
+        return {
+            "gate": gate,
+            "ok": False,
+            "exit_code": None,
+            "elapsed_ms": elapsed_ms,
+            "command": argv,
+            "stdout": stdout,
+            "stderr": stderr,
+            "stdout_truncated": out_truncated,
+            "stderr_truncated": err_truncated,
+            "timed_out": True,
+        }
+    elapsed_ms = int((time.perf_counter() - started) * 1000)
+    stdout, out_truncated = _truncate_text(completed.stdout or "")
+    stderr, err_truncated = _truncate_text(completed.stderr or "")
+    return {
+        "gate": gate,
+        "ok": completed.returncode == 0,
+        "exit_code": completed.returncode,
+        "elapsed_ms": elapsed_ms,
+        "command": argv,
+        "stdout": stdout,
+        "stderr": stderr,
+        "stdout_truncated": out_truncated,
+        "stderr_truncated": err_truncated,
+    }
+
+
 class _Handler(BaseHTTPRequestHandler):
     runtime: WebRuntime
 
@@ -190,6 +256,10 @@ class _Handler(BaseHTTPRequestHandler):
             return self._serve_static("index.html")
         if path.startswith("/static/"):
             rel = path[len("/static/") :]
+            return self._serve_static(rel)
+        if path.startswith("/assets/"):
+            # Vite bundles reference hashed assets from /assets/* at the web root.
+            rel = path.lstrip("/")
             return self._serve_static(rel)
 
         if path == "/api/settings":
@@ -258,6 +328,30 @@ class _Handler(BaseHTTPRequestHandler):
         path = parsed.path
         body = _read_json(self)
         stream = _wants_sse(self, body)
+
+        if path.startswith("/api/proposals/") and path.endswith("/status"):
+            proposal_id = path[len("/api/proposals/") : -len("/status")].strip("/")
+            if not proposal_id:
+                raise ValueError("proposal id required")
+            status = str(body.get("status", "")).strip()
+            decision_note = str(body.get("decision_note", "")).strip()
+            superseded_by = str(body.get("superseded_by", "")).strip()
+            updated = _update_proposal_status(
+                self.runtime.workspace_root,
+                proposal_id,
+                new_status=status,
+                decision_note=decision_note,
+                superseded_by=superseded_by,
+                confirm_reviewed=bool(body.get("confirm_reviewed")),
+                confirm_pytest_green=bool(body.get("confirm_pytest_green")),
+                confirm_eval_no_regression=bool(body.get("confirm_eval_no_regression")),
+            )
+            return self._json_ok({"proposal": updated})
+
+        if path == "/api/proposals/gates/run":
+            gate = str(body.get("gate", "")).strip().lower()
+            result = _run_gate_command(self.runtime.workspace_root, gate=gate)
+            return self._json_ok({"result": result})
 
         if path == "/api/sessions":
             message = str(body.get("message", "")).strip()
@@ -497,9 +591,70 @@ def _load_one_proposal(workspace_root: Path, proposal_id: str) -> dict[str, Any]
         "cluster_signature": parsed.get("cluster_signature"),
         "occurrences": parsed.get("occurrences"),
         "generated_at": parsed.get("generated_at"),
+        "superseded_by": parsed.get("superseded_by"),
         "related_files": parsed.get("related_files", []),
         "body_markdown": parsed.get("body_markdown", ""),
     }
+
+
+def _proposal_path(workspace_root: Path, proposal_id: str) -> Path:
+    return workspace_root / "proposals" / f"{proposal_id}.md"
+
+
+def _update_proposal_status(
+    workspace_root: Path,
+    proposal_id: str,
+    *,
+    new_status: str,
+    decision_note: str = "",
+    superseded_by: str = "",
+    confirm_reviewed: bool = False,
+    confirm_pytest_green: bool = False,
+    confirm_eval_no_regression: bool = False,
+) -> dict[str, Any]:
+    if new_status not in {"open", "accepted", "rejected", "superseded"}:
+        raise ValueError("status must be one of: open, accepted, rejected, superseded")
+    path = _proposal_path(workspace_root, proposal_id)
+    if not path.is_file():
+        raise KeyError("proposal not found")
+    parsed = _parse_proposal_markdown(path)
+    if parsed is None:
+        raise ValueError("invalid proposal markdown format")
+
+    if new_status == "accepted":
+        if not (confirm_reviewed and confirm_pytest_green and confirm_eval_no_regression):
+            raise ValueError(
+                "accepted requires confirm_reviewed, confirm_pytest_green, and "
+                "confirm_eval_no_regression all true"
+            )
+    if new_status == "rejected" and not decision_note.strip():
+        raise ValueError("rejected requires non-empty decision_note")
+    if new_status == "superseded" and not superseded_by.strip():
+        raise ValueError("superseded requires non-empty superseded_by")
+
+    parsed["status"] = new_status
+    if new_status == "superseded":
+        parsed["superseded_by"] = superseded_by.strip()
+
+    body = str(parsed.get("body_markdown", "")).strip()
+    if new_status == "rejected":
+        body = _upsert_section(body, "Decision", decision_note.strip())
+    elif new_status == "superseded":
+        body = _upsert_section(body, "Superseded By", superseded_by.strip())
+    elif new_status == "accepted":
+        acceptance = (
+            "- reviewed_by_human: true\n"
+            "- pytest_green: true\n"
+            "- eval_no_regression: true"
+        )
+        body = _upsert_section(body, "Acceptance Checklist", acceptance)
+    parsed["body_markdown"] = body
+    path.write_text(_render_proposal_markdown(parsed), encoding="utf-8")
+
+    updated = _load_one_proposal(workspace_root, proposal_id)
+    if updated is None:
+        raise ValueError("failed to reload updated proposal")
+    return updated
 
 
 def _parse_proposal_markdown(path: Path) -> dict[str, Any] | None:
@@ -540,3 +695,55 @@ def _parse_proposal_markdown(path: Path) -> dict[str, Any] | None:
         parsed["occurrences"] = int(occurrences)
     parsed["body_markdown"] = body
     return parsed
+
+
+def _render_proposal_markdown(parsed: dict[str, Any]) -> str:
+    related_files = parsed.get("related_files") or []
+    if not isinstance(related_files, list):
+        related_files = []
+
+    ordered_keys = [
+        "id",
+        "status",
+        "kind",
+        "cluster_signature",
+        "occurrences",
+        "generated_at",
+        "superseded_by",
+    ]
+    lines = ["---"]
+    for key in ordered_keys:
+        value = parsed.get(key)
+        if value is None or value == "":
+            continue
+        lines.append(f"{key}: {value}")
+    lines.append("related_files:")
+    for item in related_files:
+        lines.append(f"  - {item}")
+    lines.append("---")
+    lines.append("")
+    body = str(parsed.get("body_markdown", "")).strip()
+    if body:
+        lines.append(body)
+    return "\n".join(lines) + "\n"
+
+
+def _upsert_section(body: str, heading: str, section_body: str) -> str:
+    marker = f"## {heading}"
+    chunks = body.split("\n")
+    start = -1
+    end = len(chunks)
+    for idx, line in enumerate(chunks):
+        if line.strip() == marker:
+            start = idx
+            continue
+        if start >= 0 and line.startswith("## "):
+            end = idx
+            break
+    replacement = [marker, "", section_body.strip()]
+    if start >= 0:
+        chunks = chunks[:start] + replacement + chunks[end:]
+        return "\n".join(chunks).strip()
+    if not body.strip():
+        return "\n".join(replacement).strip()
+    return f"{body.strip()}\n\n{marker}\n\n{section_body.strip()}".strip()

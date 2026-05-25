@@ -880,7 +880,13 @@ Same **Entry / Deliverables / Exit** bar as previous phases.
   - Web API endpoints:
     - `GET /api/proposals?status=open|all`
     - `GET /api/proposals/{id}`
-  - Web sidebar renders open proposal list and detail (read-only).
+    - `POST /api/proposals/{id}/status` (guarded status transitions)
+    - `POST /api/proposals/gates/run` (`pytest|eval` local gate execution)
+  - TS Web UI supports list/detail and status transition actions.
+  - `accepted` transition in UI requires explicit gate acknowledgements
+    (human review + pytest green + eval no regression).
+  - TS Web UI gate buttons can run `pytest/eval` and show captured output.
+  - UI defaults to concise gate output preview with expandable full logs.
 - **Deliverables**:
   - Web UI panel `/#proposals`: list `open` proposals (id, cluster
     signature, occurrences); show full markdown rendering; "diff
@@ -895,8 +901,8 @@ Same **Entry / Deliverables / Exit** bar as previous phases.
     "rebuild proposal list" from the disk.
 - **Exit**: AGENTS.md "Proposal Handling" rules preserved verbatim;
   acceptance still requires the green eval + pytest gate; UI surfaces
-  the gate result but never bypasses it; integration test asserts the
-  read-only nature of the API.
+  the gate result but never bypasses it; integration test asserts
+  guarded transition behavior.
 
 ### Phase 5.8 — Tool lifecycle hooks (pre/post) — In progress
 
@@ -958,11 +964,12 @@ Same **Entry / Deliverables / Exit** bar as previous phases.
     `budget_hard_exceeded`, `budget_enforcement_action`.
   - Session persists cumulative budget usage (llm/tool/tokens/time) in
     state storage.
+  - Web session detail shows cumulative budget usage and budget event
+    timeline (`soft_threshold`, `hard_exceeded`, `enforcement_action`).
 - **Remaining work**:
   - Add cost budgeting (`max_session_cost_usd_total`) with provider
     price-table mapping.
-  - Add explicit budget surfaces in CLI session detail pages
-    (Web session detail now exposes cumulative budget usage).
+  - Add explicit budget surfaces in CLI session detail pages.
   - Add eval tasks that pin deterministic soft/hard crossing behavior.
 
 **Phase 5 explicitly does NOT include**
@@ -1057,8 +1064,16 @@ and recommended PoC.
   the migration target is not a moving target). Draft plan:
   `docs/architecture/frontend-ts-migration.md`. Progress update: Phase A/B
   are complete (foundation + read surfaces), and Phase C interactive parity
-  is complete (`composer + SSE + fork + /remember + /skill`). Default UX
-  remains legacy.
+  is complete (`composer + SSE + fork + /remember + /skill`); Phase D
+  has started with proposal gate actions and feature-slice UI refactor
+  (`features/proposals`, `features/sessions`, `features/composer`,
+  `features/settings`, `features/trace`) plus send-flow hook extraction.
+  Frontend Vitest coverage includes utility + component tests (proposal
+  gates, App Simple/Advanced mode toggle), and webui package management is
+  now bun-first (`bun.lock` + bun command docs). TS bundle output
+  (`static_ts/`) is build-time only (gitignored). Default **Simple Chat**
+  mode in TS UI hides operator panels until Advanced is selected.
+  Default serve UX remains legacy.
 - **TUI client surface.** Backend remains Python. Stack options captured in
   `docs/architecture/tui-stack-options.md` (Textual-first recommendation).
 - **Distributed runtime / plugin marketplace.** No path to a "must

@@ -6,4 +6,7 @@ __pycache__/
 .harnesslab/
 scratch/
 eval/reports/
+node_modules/
+webui/node_modules/
+src/harnesslab/web/static_ts/
 

@@ -1228,7 +1228,16 @@ def _cmd_session_fork(args: argparse.Namespace) -> int:
 
 
 def _format_session_table(sessions) -> str:
-    header = ("ID", "STATUS", "STEPS", "TURNS", "CREATED", "TITLE")
+    header = (
+        "ID",
+        "STATUS",
+        "STEPS",
+        "TURNS",
+        "TOKENS",
+        "BUDGET",
+        "CREATED",
+        "TITLE",
+    )
     rows = [header]
     for s in sessions:
         rows.append(
@@ -1237,6 +1246,8 @@ def _format_session_table(sessions) -> str:
                 s.status,
                 str(s.step_count),
                 str(s.turn_count),
+                str(s.budget_usage.tokens_total),
+                s.budget_usage.last_budget_status,
                 s.created_at.strftime("%Y-%m-%d %H:%M:%S"),
                 (s.title or s.goal)[:60],
             )
@@ -1263,6 +1274,13 @@ def _format_session_detail(session, *, include_messages: bool) -> str:
         f"Created:   {session.created_at.isoformat()}",
         f"Last step: {last_step}",
         f"Parent:    {parent}",
+        "Budget:",
+        f"  status:   {session.budget_usage.last_budget_status}",
+        f"  llm_calls:{session.budget_usage.llm_calls_total}",
+        f"  tools:    {session.budget_usage.tool_calls_total}",
+        f"  tokens:   {session.budget_usage.tokens_total}",
+        f"  wall_ms:  {session.budget_usage.wall_time_ms_total}",
+        f"  cost_usd: {session.budget_usage.cost_usd_total:.6f}",
     ]
     if include_messages:
         lines.append("")

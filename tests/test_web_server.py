@@ -73,6 +73,22 @@ def _post_sse(url: str, payload: dict) -> str:
         return resp.read().decode("utf-8")
 
 
+def _post_error(url: str, payload: dict) -> tuple[int, str]:
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(  # noqa: S310
+        url,
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=30):  # noqa: S310
+            return (200, "")
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8")
+        return (int(exc.code), body)
+
+
 def _web_runtime(tmp_path: Path, *, max_steps: int = 1) -> WebRuntime:
     (tmp_path / ".harnesslab").mkdir(parents=True, exist_ok=True)
     trace_path = tmp_path / ".harnesslab" / "trace.jsonl"
@@ -266,6 +282,121 @@ related_files:
     assert "Suggested actions" in detail["proposal"]["body_markdown"]
 
 
+def test_web_proposal_status_update_enforces_rules(tmp_path: Path) -> None:
+    proposals = tmp_path / "proposals"
+    proposals.mkdir()
+    body = """---
+id: prop_20260524_abcd1234
+status: open
+kind: policy_denial
+cluster_signature: "tool_denied:run_shell_safe:command not in allowlist"
+occurrences: 3
+generated_at: 2026-05-24T00:00:00+00:00
+related_files:
+  - src/harnesslab/policy/default_policy.py
+---
+
+## Suggested actions
+
+1. tighten shell profile
+"""
+    (proposals / "prop_20260524_abcd1234.md").write_text(body, encoding="utf-8")
+
+    port = _free_port()
+    runtime = _web_runtime(tmp_path)
+    _start_server(runtime, port)
+    base = f"http://127.0.0.1:{port}"
+
+    code, _ = _post_error(
+        f"{base}/api/proposals/prop_20260524_abcd1234/status",
+        {"status": "rejected"},
+    )
+    assert code == 400
+
+    updated = _post(
+        f"{base}/api/proposals/prop_20260524_abcd1234/status",
+        {"status": "rejected", "decision_note": "False positive after manual triage."},
+    )
+    assert updated["proposal"]["status"] == "rejected"
+    assert "## Decision" in updated["proposal"]["body_markdown"]
+
+    listed_open = _get(f"{base}/api/proposals?status=open")
+    assert listed_open["proposals"] == []
+
+    listed_all = _get(f"{base}/api/proposals?status=all")
+    assert len(listed_all["proposals"]) == 1
+    assert listed_all["proposals"][0]["status"] == "rejected"
+
+
+def test_web_proposal_accept_requires_gate_confirmations(tmp_path: Path) -> None:
+    proposals = tmp_path / "proposals"
+    proposals.mkdir()
+    body = """---
+id: prop_20260524_accept123
+status: open
+kind: replay_divergence
+cluster_signature: "replay:decision_mismatch"
+occurrences: 2
+generated_at: 2026-05-24T00:00:00+00:00
+related_files:
+  - src/harnesslab/replay/diff.py
+---
+
+## Suggested actions
+
+1. tighten volatile compare set
+"""
+    (proposals / "prop_20260524_accept123.md").write_text(body, encoding="utf-8")
+
+    port = _free_port()
+    runtime = _web_runtime(tmp_path)
+    _start_server(runtime, port)
+    base = f"http://127.0.0.1:{port}"
+
+    code, _ = _post_error(
+        f"{base}/api/proposals/prop_20260524_accept123/status",
+        {"status": "accepted"},
+    )
+    assert code == 400
+
+    accepted = _post(
+        f"{base}/api/proposals/prop_20260524_accept123/status",
+        {
+            "status": "accepted",
+            "confirm_reviewed": True,
+            "confirm_pytest_green": True,
+            "confirm_eval_no_regression": True,
+        },
+    )
+    assert accepted["proposal"]["status"] == "accepted"
+    assert "## Acceptance Checklist" in accepted["proposal"]["body_markdown"]
+
+
+def test_web_proposal_gate_run_endpoint(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    def _fake_gate(workspace_root: Path, *, gate: str) -> dict:
+        assert workspace_root == tmp_path
+        return {
+            "gate": gate,
+            "ok": True,
+            "exit_code": 0,
+            "elapsed_ms": 123,
+            "command": ["uv", "run", gate],
+            "stdout": "ok",
+            "stderr": "",
+            "stdout_truncated": False,
+            "stderr_truncated": False,
+        }
+
+    monkeypatch.setattr(web_server, "_run_gate_command", _fake_gate)
+    port = _free_port()
+    runtime = _web_runtime(tmp_path)
+    _start_server(runtime, port)
+    base = f"http://127.0.0.1:{port}"
+
+    result = _post(f"{base}/api/proposals/gates/run", {"gate": "pytest"})
+    assert result["result"]["gate"] == "pytest"
+    assert result["result"]["ok"] is True
+
 def test_web_static_index_served(tmp_path: Path) -> None:
     port = _free_port()
     runtime = _web_runtime(tmp_path)
@@ -283,11 +414,17 @@ def test_web_can_switch_to_ts_static_bundle(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     ts_static = tmp_path / "ts_static"
-    ts_static.mkdir()
+    assets = ts_static / "assets"
+    assets.mkdir(parents=True)
     (ts_static / "index.html").write_text(
-        "<!doctype html><html><body>TS UI</body></html>",
+        (
+            "<!doctype html><html><body>"
+            '<script type="module" src="/assets/index.js"></script>'
+            "</body></html>"
+        ),
         encoding="utf-8",
     )
+    (assets / "index.js").write_text("console.log('ts ui')", encoding="utf-8")
     monkeypatch.setattr(web_server, "_TS_STATIC_DIR", ts_static)
     monkeypatch.setenv("HARNESSLAB_WEB_UI_VERSION", "ts")
 
@@ -297,4 +434,7 @@ def test_web_can_switch_to_ts_static_bundle(
     base = f"http://127.0.0.1:{port}"
     with urllib.request.urlopen(f"{base}/", timeout=5) as resp:  # noqa: S310
         body = resp.read().decode("utf-8")
-    assert "TS UI" in body
+    assert "/assets/index.js" in body
+    with urllib.request.urlopen(f"{base}/assets/index.js", timeout=5) as resp:  # noqa: S310
+        asset = resp.read().decode("utf-8")
+    assert "ts ui" in asset
