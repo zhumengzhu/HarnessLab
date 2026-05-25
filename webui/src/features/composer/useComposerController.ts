@@ -3,6 +3,7 @@ import { useState } from "react";
 import type { QueryClient } from "@tanstack/react-query";
 import { postSse } from "../../lib/sse-client";
 import type {
+  ContextSnapshot,
   MessageItem,
   ToolCard,
   TurnPayload,
@@ -17,6 +18,7 @@ type UseComposerControllerArgs = {
   onAppendTraceEvent: (evt: TraceEventItem) => void;
   onSetStreamMessages: (messages: MessageItem[] | null) => void;
   onSetStreamToolCards: (cards: ToolCard[]) => void;
+  onContextSnapshot?: (ctx: ContextSnapshot | null) => void;
 };
 
 type UseComposerControllerResult = {
@@ -43,6 +45,7 @@ export function useComposerController(
     onAppendTraceEvent,
     onSetStreamMessages,
     onSetStreamToolCards,
+    onContextSnapshot,
   } = args;
 
   const [composer, setComposerState] = useState("");
@@ -104,6 +107,9 @@ export function useComposerController(
         onSelectSession(finalPayload.session.id);
         onSetStreamMessages(finalPayload.messages);
         onSetStreamToolCards(finalPayload.tool_cards || []);
+        if (onContextSnapshot && finalPayload.context_snapshot !== undefined) {
+          onContextSnapshot(finalPayload.context_snapshot ?? null);
+        }
         await Promise.all([
           queryClient.invalidateQueries({ queryKey: ["sessions"] }),
           queryClient.invalidateQueries({ queryKey: ["session", finalPayload.session.id] }),

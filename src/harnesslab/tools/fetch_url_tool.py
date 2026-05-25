@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ipaddress
+import socket
 from collections.abc import Iterable
 from typing import Any, Literal
 from urllib.parse import urlparse
@@ -15,16 +17,38 @@ from harnesslab.tools.research_tools import (
     robots_advisory_for_url,
 )
 
-# Hosts permitted for ``fetch_url``. Expand deliberately — not a general
-# web browser. ``wttr.in`` covers ASCII weather without API keys.
+# Hosts permitted for ``fetch_url`` in *strict* mode only. In ``open`` mode
+# (now the default) the allowlist is ignored and every public HTTPS host is
+# reachable, subject to SSRF protection below. ``wttr.in`` is the historical
+# example used by the deterministic eval suite.
 DEFAULT_FETCH_HOST_ALLOWLIST: frozenset[str] = frozenset(
     {
         "wttr.in",
     }
 )
 
+# Hosts that are *always* denied regardless of mode — cloud-metadata
+# endpoints, the IPv4 link-local block reachable through DNS, and obvious
+# loopback aliases. Operators can extend this via ``fetch_url.deny_hosts``.
+DEFAULT_FETCH_DENY_HOSTS: frozenset[str] = frozenset(
+    {
+        "metadata.google.internal",
+        "metadata",
+        "169.254.169.254",
+        "localhost",
+        "localhost.localdomain",
+        "ip6-localhost",
+        "ip6-loopback",
+    }
+)
+
 DEFAULT_FETCH_TIMEOUT_SECONDS = 10.0
-DEFAULT_FETCH_MODE: Literal["strict", "open"] = "strict"
+# Open by default — MVP harness is operator-controlled and a strict
+# allowlist proved too restrictive for everyday research tasks (see
+# product feedback comparing to OpenClaw-style agents). Operators can
+# pin ``fetch_url.mode = "strict"`` in the config to restore an
+# allowlist-only posture.
+DEFAULT_FETCH_MODE: Literal["strict", "open"] = "open"
 
 
 def parse_csv_hosts(value: str | Iterable[str] | None) -> frozenset[str]:
@@ -40,6 +64,43 @@ def parse_csv_hosts(value: str | Iterable[str] | None) -> frozenset[str]:
         if host:
             out.add(host)
     return frozenset(out)
+
+
+def _is_private_or_local_address(host: str) -> bool:
+    """Return True when ``host`` resolves to a private/loopback/link-local IP."""
+
+    candidates: list[str] = []
+    # Treat literal IP hostnames directly without DNS lookups.
+    try:
+        ipaddress.ip_address(host)
+        candidates.append(host)
+    except ValueError:
+        try:
+            infos = socket.getaddrinfo(host, None)
+        except OSError:
+            # If DNS fails we err on the side of allowing the call and
+            # letting httpx surface the real failure to the caller —
+            # otherwise a transient DNS hiccup would look like a policy
+            # block, which is much harder to debug.
+            return False
+        for info in infos:
+            addr = info[4][0]
+            candidates.append(addr.split("%", 1)[0])
+    for raw in candidates:
+        try:
+            ip = ipaddress.ip_address(raw)
+        except ValueError:
+            continue
+        if (
+            ip.is_private
+            or ip.is_loopback
+            or ip.is_link_local
+            or ip.is_multicast
+            or ip.is_reserved
+            or ip.is_unspecified
+        ):
+            return True
+    return False
 
 
 def validate_fetch_url(
@@ -62,34 +123,45 @@ def validate_fetch_url(
     host = (parsed.hostname or "").lower()
     if not host:
         return False, "missing url host"
-    denied = deny_hosts if deny_hosts is not None else frozenset()
-    if host in denied:
+    explicit_deny = deny_hosts if deny_hosts is not None else frozenset()
+    combined_deny = explicit_deny | DEFAULT_FETCH_DENY_HOSTS
+    if host in combined_deny:
         return False, f"host '{host}' is on fetch denylist"
     if mode == "strict":
         allowed = allowlist if allowlist is not None else DEFAULT_FETCH_HOST_ALLOWLIST
         if host not in allowed:
             return False, f"host '{host}' not on fetch allowlist ({', '.join(sorted(allowed))})"
+    if mode == "open" and _is_private_or_local_address(host):
+        return False, (
+            f"host '{host}' resolves to a private/loopback/link-local "
+            "address; refusing to fetch (SSRF protection)"
+        )
     if parsed.username or parsed.password:
         return False, "embedded credentials in url are not allowed"
     return True, "ok"
 
 
 class FetchUrlTool:
-    """GET a allowlisted URL and return the response body as text."""
+    """GET an HTTPS URL and return the response body as text."""
 
     name = "fetch_url"
     description = (
-        "Fetch read-only text from an allowlisted HTTPS/HTTP URL. "
-        "Use for live external facts such as weather via "
-        "https://wttr.in/City?format=3 . Only hosts on the policy "
-        "allowlist are permitted."
+        "Fetch read-only text from an HTTPS URL on the public internet. "
+        "Use for live external facts (docs, blogs, weather via "
+        "https://wttr.in/City?format=3 , GitHub raw content, etc.). "
+        "Private/loopback/link-local addresses and cloud-metadata hosts "
+        "are blocked. Operators may pin a stricter allowlist; in that "
+        "mode only hosts on the operator allowlist are reachable."
     )
     args_schema: dict[str, Any] = {
         "type": "object",
         "properties": {
             "url": {
                 "type": "string",
-                "description": "Full URL (host must be allowlisted, e.g. wttr.in).",
+                "description": (
+                    "Full HTTPS URL on the public internet (HTTP also "
+                    "allowed in strict mode only)."
+                ),
             },
         },
         "required": ["url"],

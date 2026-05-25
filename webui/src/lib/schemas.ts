@@ -1,6 +1,8 @@
 export type HealthResponse = {
   ok: boolean;
   model: string;
+  model_id?: string | null;
+  model_label?: string | null;
   workspace: string;
 };
 
@@ -54,11 +56,50 @@ export type ToolCard = {
   duration_ms?: number | null;
 };
 
+export type ContextSnapshot = {
+  conversation_tokens?: number;
+  message_count?: number;
+  limit_tokens?: number;
+  compaction_threshold_tokens?: number;
+  usage_ratio?: number;
+  prompt_tokens_estimate?: number;
+  static_block_tokens?: number;
+  dynamic_block_tokens?: number;
+  prompt_block_names?: string[];
+  context_breakdown_tokens?: Record<string, number>;
+};
+
 export type TurnPayload = {
   session: SessionSummary & { memory_notes?: string };
   reply: string;
   messages: MessageItem[];
   tool_cards: ToolCard[];
+  context_snapshot?: ContextSnapshot | null;
+};
+
+export type ModelInfo = {
+  id: string;
+  provider: string;
+  backend: string;
+  label: string;
+  context_window: number;
+  reasoning_support: "native" | "proxy" | "none";
+  thinking_schema: "none" | "budget" | "level";
+  thinking_default: string;
+  effort_levels: string[];
+  configured: boolean;
+  current: boolean;
+  current_effort: string | null;
+};
+
+export type ModelsResponse = {
+  models: ModelInfo[];
+};
+
+export type ModelSwitchRequest = {
+  backend?: string;
+  model_id?: string;
+  effort?: string;
 };
 
 export type ForkResponse = {

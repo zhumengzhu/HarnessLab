@@ -47,8 +47,50 @@ TOOL_PANEL_EVENT_TYPES = frozenset(
         "hook_invoked",
         "hook_blocked",
         "hook_failed",
+        "model_call",
     }
 )
+
+
+_ENV_KEYS: dict[str, str] = {
+    "deepseek": "DEEPSEEK_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "openai": "OPENAI_API_KEY",
+    "gemini": "GOOGLE_API_KEY",
+    "google": "GOOGLE_API_KEY",
+    "simple": "",
+}
+
+# Friendly display names for catalog model_ids. Anything not on this map
+# falls back to the bare model_id.
+_MODEL_LABELS: dict[str, str] = {
+    "deepseek-v4-flash": "DeepSeek V4 Flash",
+    "deepseek-v4-pro": "DeepSeek V4 Pro",
+    "claude-sonnet-4-6": "Sonnet 4.6",
+    "gpt-5-mini": "GPT-5 Mini",
+    "gemini-2.5-flash": "Gemini 2.5 Flash",
+    "gemini-3-flash-preview": "Gemini 3 Flash (Preview)",
+    "simple": "Simple (local)",
+}
+
+_PROVIDER_TO_BACKEND: dict[str, str] = {
+    "deepseek": "deepseek",
+    "anthropic": "anthropic",
+    "openai": "openai",
+    "google": "gemini",
+    "gemini": "gemini",
+}
+
+_EFFORT_LEVELS_BY_SCHEMA: dict[str, list[str]] = {
+    # Anthropic uses level enums.
+    "level": ["low", "medium", "high"],
+    # Gemini uses int budget; UI shows preset buckets.
+    "budget": ["low", "medium", "high"],
+    "none": [],
+}
+
+# OpenAI Responses API uses a fixed enum even though catalog says ``none``.
+_OPENAI_EFFORTS = ["minimal", "low", "medium", "high"]
 
 
 @dataclass
@@ -60,14 +102,186 @@ class WebRuntime:
     trace_hub: TraceHub | None = None
     trace_path: Path | None = None
     settings: dict[str, Any] = field(default_factory=dict)
+    operator_config: Any | None = None  # OperatorConfig, typed as Any to avoid import cycle
     _locks: dict[str, threading.Lock] = field(default_factory=dict)
     _global: threading.Lock = field(default_factory=threading.Lock)
+    _model_lock: threading.Lock = field(default_factory=threading.Lock)
 
     def lock_for(self, session_id: str) -> threading.Lock:
         with self._global:
             if session_id not in self._locks:
                 self._locks[session_id] = threading.Lock()
             return self._locks[session_id]
+
+    def available_models(self) -> list[dict[str, Any]]:
+        import os
+
+        from harnesslab.providers.catalog import ModelCatalog  # noqa: PLC0415
+        from harnesslab.providers.model_resolve import (  # noqa: PLC0415
+            resolve_anthropic_model_name,
+            resolve_deepseek_model_name,
+            resolve_gemini_model_name,
+            resolve_openai_model_name,
+        )
+
+        catalog = ModelCatalog()
+        cfg = self.operator_config
+        current_by_backend = {
+            "deepseek": resolve_deepseek_model_name(config=cfg),
+            "anthropic": resolve_anthropic_model_name(config=cfg),
+            "openai": resolve_openai_model_name(config=cfg),
+            "gemini": resolve_gemini_model_name(config=cfg),
+        }
+        out: list[dict[str, Any]] = []
+        for model_id in catalog.list_model_ids():
+            entry = catalog.get(model_id)
+            backend = _PROVIDER_TO_BACKEND.get(entry.provider, entry.provider)
+            env_key = _ENV_KEYS.get(backend, "")
+            configured = bool(env_key) and bool(os.environ.get(env_key, "").strip())
+            is_current = (
+                backend == self.model_backend
+                and current_by_backend.get(backend) == model_id
+            )
+            effort_levels = self._effort_levels_for(backend, entry.thinking_schema)
+            out.append(
+                {
+                    "id": model_id,
+                    "provider": entry.provider,
+                    "backend": backend,
+                    "label": _MODEL_LABELS.get(model_id, model_id),
+                    "context_window": entry.context_window,
+                    "reasoning_support": entry.reasoning_support,
+                    "thinking_schema": entry.thinking_schema,
+                    "thinking_default": entry.thinking_default,
+                    "effort_levels": effort_levels,
+                    "configured": configured,
+                    "current": is_current,
+                    "current_effort": self._current_effort(backend) if is_current else None,
+                }
+            )
+        # Append the deterministic local fallback so users can always pick it.
+        out.append(
+            {
+                "id": "simple",
+                "provider": "local",
+                "backend": "simple",
+                "label": _MODEL_LABELS["simple"],
+                "context_window": 0,
+                "reasoning_support": "none",
+                "thinking_schema": "none",
+                "thinking_default": "disabled",
+                "effort_levels": [],
+                "configured": True,
+                "current": self.model_backend == "simple",
+                "current_effort": None,
+            }
+        )
+        return out
+
+    @staticmethod
+    def _effort_levels_for(backend: str, thinking_schema: str) -> list[str]:
+        if backend == "openai":
+            return list(_OPENAI_EFFORTS)
+        if backend == "anthropic":
+            return list(_EFFORT_LEVELS_BY_SCHEMA["level"])
+        if backend == "gemini":
+            return list(_EFFORT_LEVELS_BY_SCHEMA["budget"])
+        return list(_EFFORT_LEVELS_BY_SCHEMA.get(thinking_schema, []))
+
+    def _current_effort(self, backend: str) -> str | None:
+        cfg = self.operator_config
+        if cfg is None:
+            return None
+        if backend == "openai":
+            return getattr(cfg, "openai_reasoning_effort", None) or None
+        if backend == "anthropic":
+            return getattr(cfg, "anthropic_thinking_effort", None) or None
+        if backend == "gemini":
+            return getattr(cfg, "gemini_thinking_level", None) or None
+        if backend == "deepseek":
+            return getattr(cfg, "deepseek_thinking", None) or None
+        return None
+
+    def switch_model(
+        self,
+        *,
+        backend: str | None = None,
+        model_id: str | None = None,
+        effort: str | None = None,
+    ) -> None:
+        """Hot-swap the model in the running loop (thread-safe).
+
+        - ``backend`` (optional): provider backend id (deepseek / openai / ...)
+        - ``model_id`` (optional): concrete catalog entry to pin
+        - ``effort`` (optional): reasoning effort / thinking level for the
+          backend; semantics depend on provider.
+        """
+
+        from dataclasses import replace  # noqa: PLC0415
+
+        from harnesslab.cli import _make_dynamic_blocks_provider  # noqa: PLC0415
+        from harnesslab.providers.deepseek import tool_specs_from_registry  # noqa: PLC0415
+        from harnesslab.providers.registry import create_model, normalize_backend  # noqa: PLC0415
+
+        # Resolve target backend either explicitly or via model_id → provider.
+        if backend:
+            norm = normalize_backend(backend)
+        elif model_id:
+            try:
+                from harnesslab.providers.catalog import ModelCatalog  # noqa: PLC0415
+
+                entry = ModelCatalog().get(model_id)
+                norm = _PROVIDER_TO_BACKEND.get(entry.provider, entry.provider)
+            except KeyError:
+                raise ValueError(f"unknown model: {model_id}") from None
+        else:
+            raise ValueError("either 'backend' or 'model_id' must be provided")
+
+        with self._model_lock:
+            # Apply config tweaks before constructing the new model.
+            if self.operator_config is not None:
+                cfg = self.operator_config
+                changes: dict[str, Any] = {}
+                if norm == "deepseek":
+                    if model_id:
+                        changes["deepseek_model_name"] = model_id
+                    if effort:
+                        changes["deepseek_thinking"] = effort
+                elif norm == "anthropic":
+                    if model_id:
+                        changes["anthropic_model_name"] = model_id
+                    if effort:
+                        changes["anthropic_thinking_effort"] = effort
+                        changes["anthropic_thinking"] = "enabled"
+                elif norm == "openai":
+                    if model_id:
+                        changes["openai_model_name"] = model_id
+                    if effort:
+                        changes["openai_reasoning_effort"] = effort
+                elif norm == "gemini":
+                    if model_id:
+                        changes["gemini_model_name"] = model_id
+                    if effort:
+                        changes["gemini_thinking_level"] = effort
+                if changes:
+                    self.operator_config = replace(cfg, **changes)
+
+            model = create_model(
+                norm,
+                config=self.operator_config,
+                tool_specs_provider=lambda: tool_specs_from_registry(
+                    self.loop._tools.list()  # noqa: SLF001
+                ),
+                dynamic_blocks_provider=_make_dynamic_blocks_provider(
+                    self.workspace_root,
+                    self.loop._tools,  # noqa: SLF001
+                    skill_selection_mode="heuristic",
+                    planning_mode="off",
+                ),
+            )
+            self.loop._model = model  # noqa: SLF001
+            self.model_backend = norm
+            self.settings["model_backend"] = norm
 
 
 def _session_json(session: Session, *, memory_notes: str | None = None) -> dict[str, Any]:
@@ -281,13 +495,44 @@ class _Handler(BaseHTTPRequestHandler):
             return self._json_ok({"proposal": proposal})
 
         if path == "/api/health":
+            from harnesslab.providers.model_resolve import (  # noqa: PLC0415
+                resolve_anthropic_model_name,
+                resolve_deepseek_model_name,
+                resolve_gemini_model_name,
+                resolve_openai_model_name,
+            )
+
+            backend = self.runtime.model_backend
+            cfg = self.runtime.operator_config
+            model_id: str | None = None
+            if backend == "deepseek":
+                model_id = resolve_deepseek_model_name(config=cfg)
+            elif backend == "anthropic":
+                model_id = resolve_anthropic_model_name(config=cfg)
+            elif backend == "openai":
+                model_id = resolve_openai_model_name(config=cfg)
+            elif backend == "gemini":
+                model_id = resolve_gemini_model_name(config=cfg)
             return self._json_ok(
                 {
                     "ok": True,
-                    "model": self.runtime.model_backend,
+                    "model": backend,
+                    "model_id": model_id,
+                    "model_label": _MODEL_LABELS.get(model_id or "", model_id or backend),
                     "workspace": str(self.runtime.workspace_root),
                 }
             )
+
+        if path == "/api/models":
+            return self._json_ok({"models": self.runtime.available_models()})
+
+        if path.startswith("/api/sessions/") and path.endswith("/context"):
+            remainder = path[len("/api/sessions/") :]
+            session_id = remainder[: -len("/context")].strip("/")
+            if not session_id:
+                raise ValueError("session id required")
+            snapshot = _last_context_snapshot(self.runtime, session_id)
+            return self._json_ok({"context": snapshot})
 
         if path == "/api/sessions":
             qs = parse_qs(parsed.query)
@@ -413,6 +658,20 @@ class _Handler(BaseHTTPRequestHandler):
                     )
                 return self._json_ok({"session": _session_json(forked)})
 
+        if path == "/api/model":
+            backend = str(body.get("backend", "")).strip() or None
+            model_id = str(body.get("model_id", "")).strip() or None
+            effort = str(body.get("effort", "")).strip() or None
+            if not backend and not model_id:
+                raise ValueError("either 'backend' or 'model_id' is required")
+            try:
+                self.runtime.switch_model(
+                    backend=backend, model_id=model_id, effort=effort
+                )
+            except Exception as exc:  # noqa: BLE001
+                raise ValueError(str(exc)) from exc
+            return self._json_ok({"model": self.runtime.model_backend})
+
         self._json_error(HTTPStatus.NOT_FOUND, "not found")
 
     def _turn_payload(self, session: Session, reply: str) -> dict[str, Any]:
@@ -420,11 +679,13 @@ class _Handler(BaseHTTPRequestHandler):
         finished_turn = max(session.turn_count - 1, 0)
         trace_events = _session_trace_events(self.runtime, session.id)
         tool_cards = _tool_cards_for_turn(trace_events, finished_turn)
+        context_snapshot = _last_context_snapshot(self.runtime, session.id)
         return {
             "session": _session_json(session, memory_notes=notes),
             "reply": reply,
             "messages": [_message_json(m) for m in session.messages],
             "tool_cards": tool_cards,
+            "context_snapshot": context_snapshot,
         }
 
     def _run_turn_sse(
@@ -500,6 +761,14 @@ class _Handler(BaseHTTPRequestHandler):
         self.send_response(HTTPStatus.OK)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(content)))
+        # ``index.html`` references hash-suffixed assets in ``/assets/`` so the
+        # assets themselves can stay immutable, but the HTML must not be
+        # cached or browsers will keep pointing at the previous build's
+        # filenames after the operator restarts ``harnesslab serve``.
+        if file_path.suffix.lower() == ".html":
+            self.send_header("Cache-Control", "no-store, max-age=0")
+        elif "/assets/" in str(file_path).replace("\\", "/"):
+            self.send_header("Cache-Control", "public, max-age=31536000, immutable")
         self.end_headers()
         self.wfile.write(content)
 
@@ -552,6 +821,19 @@ def _select_static_dir() -> Path:
     if _TS_STATIC_DIR.is_dir():
         return _TS_STATIC_DIR
     return _LEGACY_STATIC_DIR
+
+
+def _last_context_snapshot(
+    runtime: "WebRuntime", session_id: str
+) -> dict[str, Any] | None:
+    """Return the context payload from the most recent model_call trace event."""
+    events = _session_trace_events(runtime, session_id)
+    for event in reversed(events):
+        if event.event_type == "model_call":
+            ctx = event.payload.get("context")
+            if isinstance(ctx, dict):
+                return ctx
+    return None
 
 
 def _load_proposals(workspace_root: Path, *, status: str = "open") -> list[dict[str, Any]]:

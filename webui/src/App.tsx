@@ -6,10 +6,15 @@ import { useComposerController } from "./features/composer/useComposerController
 import { ProposalPanel } from "./features/proposals/ProposalPanel";
 import { SessionWorkspace } from "./features/sessions/SessionWorkspace";
 import { SettingsPanel } from "./features/settings/SettingsPanel";
+import type { AgentMode } from "./features/chat/AgentModeSelector";
 import type {
+  ContextSnapshot,
   ForkResponse,
   HealthResponse,
   MessageItem,
+  ModelInfo,
+  ModelSwitchRequest,
+  ModelsResponse,
   SessionDetailResponse,
   SessionsResponse,
   SettingsResponse,
@@ -25,6 +30,12 @@ export function App() {
   const [streamTrace, setStreamTrace] = useState<TraceResponse["events"]>([]);
   const [streamToolCards, setStreamToolCards] = useState<ToolCard[]>([]);
   const [streamMessages, setStreamMessages] = useState<MessageItem[] | null>(null);
+  const [contextSnapshot, setContextSnapshot] = useState<ContextSnapshot | null>(null);
+
+  // Agent toolbar state
+  const [agentMode, setAgentMode] = useState<AgentMode>("agent");
+  const [modelSwitching, setModelSwitching] = useState(false);
+  const [modelSwitchError, setModelSwitchError] = useState<string | null>(null);
 
   function selectSession(id: string | null) {
     setSelectedSessionId(id);
@@ -57,9 +68,19 @@ export function App() {
       setStreamTrace([]);
     },
     onSelectSession: (id) => selectSession(id),
-    onAppendTraceEvent: (evt) => setStreamTrace((prev) => [...prev, evt]),
+    onAppendTraceEvent: (evt) => {
+      setStreamTrace((prev) => [...prev, evt]);
+      // Pick up live context from model_call events
+      if (evt.event_type === "model_call") {
+        const ctx = (evt.payload as Record<string, unknown>)["context"];
+        if (ctx && typeof ctx === "object") {
+          setContextSnapshot(ctx as ContextSnapshot);
+        }
+      }
+    },
     onSetStreamMessages: setStreamMessages,
     onSetStreamToolCards: setStreamToolCards,
+    onContextSnapshot: (ctx) => setContextSnapshot(ctx),
   });
 
   const health = useQuery({
@@ -73,6 +94,10 @@ export function App() {
   const sessions = useQuery({
     queryKey: ["sessions"],
     queryFn: () => apiGet<SessionsResponse>("/api/sessions?limit=50"),
+  });
+  const modelsQuery = useQuery({
+    queryKey: ["models"],
+    queryFn: () => apiGet<ModelsResponse>("/api/models"),
   });
   const sessionDetail = useQuery({
     queryKey: ["session", selectedSessionId],
@@ -108,11 +133,29 @@ export function App() {
     );
   }, [traceRows]);
 
+  const currentModelId = health.data?.model_id ?? null;
+  const currentLabel = health.data?.model_label ?? health.data?.model ?? "–";
+  const models: ModelInfo[] = modelsQuery.data?.models ?? [];
+
+  async function handleModelSwitch(req: ModelSwitchRequest) {
+    setModelSwitching(true);
+    setModelSwitchError(null);
+    try {
+      await apiPost("/api/model", req as unknown as Record<string, unknown>);
+      await queryClient.invalidateQueries({ queryKey: ["health"] });
+      await queryClient.invalidateQueries({ queryKey: ["models"] });
+    } catch (err) {
+      setModelSwitchError((err as Error).message);
+    } finally {
+      setModelSwitching(false);
+    }
+  }
+
   return (
     <main className="page">
       <header className="header">
         <div>
-          <h1>HarnessLab TS UI (Phase D start)</h1>
+          <h1>HarnessLab</h1>
           <p>
             {uiMode === "simple"
               ? "Simple Chat Mode: 聚焦会话与聊天。"
@@ -136,8 +179,7 @@ export function App() {
               Advanced
             </button>
           </div>
-          <span>{health.data?.ok ? "health: ok" : "health: -"}</span>
-          <span>model: {health.data?.model || "-"}</span>
+          <span>{health.data?.ok ? "health: ok" : "health: –"}</span>
         </div>
       </header>
 
@@ -174,6 +216,16 @@ export function App() {
         rememberMode={composerCtrl.rememberMode}
         skillMode={composerCtrl.skillMode}
         selectedSessionId={selectedSessionId}
+        agentMode={agentMode}
+        onAgentModeChange={setAgentMode}
+        currentModelId={currentModelId}
+        currentLabel={currentLabel}
+        models={models}
+        modelSwitching={modelSwitching}
+        modelSwitchError={modelSwitchError}
+        contextSnapshot={contextSnapshot}
+        onModelSwitch={handleModelSwitch}
+        onDismissModelError={() => setModelSwitchError(null)}
         onSubmit={composerCtrl.onSubmit}
         onComposerChange={composerCtrl.setComposer}
         onToggleRememberMode={composerCtrl.toggleRememberMode}

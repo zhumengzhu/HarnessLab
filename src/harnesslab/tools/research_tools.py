@@ -314,22 +314,60 @@ class _MarkdownishParser(HTMLParser):
         return text.strip()
 
 
+_DDG_USER_AGENT = (
+    "Mozilla/5.0 (X11; Linux x86_64; rv:131.0) "
+    "Gecko/20100101 Firefox/131.0"
+)
+_DDG_HEADERS = {
+    "User-Agent": _DDG_USER_AGENT,
+    "Accept": (
+        "text/html,application/xhtml+xml,application/xml;q=0.9,"
+        "image/avif,image/webp,*/*;q=0.8"
+    ),
+    "Accept-Language": "en-US,en;q=0.5",
+    "Origin": "https://duckduckgo.com",
+    "Referer": "https://duckduckgo.com/",
+}
+
+
 def _search_duckduckgo(client: httpx.Client, *, query: str, max_results: int) -> list[SearchHit]:
-    url = "https://duckduckgo.com/html/"
-    response = client.get(url, params={"q": query})
+    # ``html.duckduckgo.com`` returns scrapeable result rows when called
+    # via POST with a real browser User-Agent; bare GET on
+    # ``duckduckgo.com/html`` is anti-bot blocked (status 202 + JS-only
+    # home page). The home-page warm-up establishes the session cookies
+    # that DDG sometimes requires before serving results.
+    base = "https://html.duckduckgo.com/html/"
+    try:
+        client.get(
+            "https://duckduckgo.com/",
+            headers=_DDG_HEADERS,
+        )
+    except httpx.HTTPError:
+        pass
+    response = client.post(
+        base,
+        data={"q": query, "kl": "wt-wt", "b": ""},
+        headers=_DDG_HEADERS,
+    )
     response.raise_for_status()
     html = response.text
     pattern = re.compile(
         r'<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
         re.IGNORECASE | re.DOTALL,
     )
+    snippet_pattern = re.compile(
+        r'<a[^>]*class="[^"]*result__snippet[^"]*"[^>]*>(.*?)</a>',
+        re.IGNORECASE | re.DOTALL,
+    )
+    snippets = [_strip_html(s) for s in snippet_pattern.findall(html)]
     hits: list[SearchHit] = []
-    for href, title_html in pattern.findall(html):
+    for idx, (href, title_html) in enumerate(pattern.findall(html)):
         clean_title = _strip_html(title_html)
         resolved_url = _decode_duckduckgo_redirect(href)
         if not clean_title or not resolved_url:
             continue
-        hits.append(SearchHit(title=clean_title, url=resolved_url))
+        snippet = snippets[idx] if idx < len(snippets) else None
+        hits.append(SearchHit(title=clean_title, url=resolved_url, snippet=snippet))
         if len(hits) >= max_results:
             break
     return hits

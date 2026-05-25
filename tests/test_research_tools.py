@@ -19,11 +19,20 @@ def test_web_search_duckduckgo_parses_results() -> None:
     html = """
     <html><body>
       <a class="result__a" href="https://example.com/a">Example A</a>
+      <a class="result__snippet" href="https://example.com/a">First snippet</a>
       <a class="result__a" href="https://example.com/b">Example B</a>
+      <a class="result__snippet" href="https://example.com/b">Second snippet</a>
     </body></html>
     """
 
-    def handler(_request: httpx.Request) -> httpx.Response:
+    captured_requests: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured_requests.append(request)
+        # Home-page warm-up returns a small body; the real search call
+        # returns the results HTML.
+        if request.url.host == "duckduckgo.com" and request.url.path == "/":
+            return httpx.Response(200, text="<html></html>")
         return httpx.Response(200, text=html)
 
     tool = WebSearchTool(backend="duckduckgo", transport=httpx.MockTransport(handler))
@@ -33,7 +42,15 @@ def test_web_search_duckduckgo_parses_results() -> None:
         tool.close()
     assert result.ok, result.error
     assert "Example A" in result.output
+    assert "First snippet" in result.output
     assert "https://example.com/a" in result.output
+
+    # The real DDG endpoint requires POST with a real-browser User-Agent.
+    search_requests = [r for r in captured_requests if r.url.path == "/html/"]
+    assert search_requests, "expected at least one POST to /html/"
+    assert search_requests[0].method == "POST"
+    ua = search_requests[0].headers.get("User-Agent", "")
+    assert "Mozilla/5.0" in ua, "DuckDuckGo blocks default httpx UA"
 
 
 def test_web_search_tavily_requires_key() -> None:

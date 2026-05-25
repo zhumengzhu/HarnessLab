@@ -1,4 +1,7 @@
 import type { FormEvent, KeyboardEvent } from "react";
+import type { ContextSnapshot, ModelInfo, ModelSwitchRequest } from "../../lib/schemas";
+import { ChatToolbar } from "../chat/ChatToolbar";
+import type { AgentMode } from "../chat/AgentModeSelector";
 
 type ComposerPanelProps = {
   composer: string;
@@ -7,6 +10,18 @@ type ComposerPanelProps = {
   rememberMode: boolean;
   skillMode: boolean;
   selectedSessionId: string | null;
+  // toolbar props
+  agentMode: AgentMode;
+  onAgentModeChange: (m: AgentMode) => void;
+  currentModelId: string | null;
+  currentLabel: string;
+  models: ModelInfo[];
+  modelSwitching: boolean;
+  modelSwitchError: string | null;
+  contextSnapshot: ContextSnapshot | null | undefined;
+  onModelSwitch: (req: ModelSwitchRequest) => void;
+  onDismissModelError: () => void;
+  // handlers
   onSubmit: (e: FormEvent<HTMLFormElement>) => void;
   onComposerChange: (value: string) => void;
   onToggleRememberMode: () => void;
@@ -22,15 +37,25 @@ export function ComposerPanel(props: ComposerPanelProps) {
     rememberMode,
     skillMode,
     selectedSessionId,
+    agentMode,
+    onAgentModeChange,
+    currentModelId,
+    currentLabel,
+    models,
+    modelSwitching,
+    modelSwitchError,
+    contextSnapshot,
+    onModelSwitch,
+    onDismissModelError,
     onSubmit,
     onComposerChange,
     onToggleRememberMode,
     onToggleSkillMode,
     onComposerKeyDown,
   } = props;
+
   return (
-    <section className="panel">
-      <h2>Composer</h2>
+    <section className="panel composer-panel">
       <div className="composer-quick-actions">
         <button
           type="button"
@@ -49,6 +74,7 @@ export function ComposerPanel(props: ComposerPanelProps) {
           技能{skillMode ? " ✓" : ""}
         </button>
       </div>
+
       <form onSubmit={onSubmit} className="composer-form">
         <textarea
           value={composer}
@@ -58,6 +84,20 @@ export function ComposerPanel(props: ComposerPanelProps) {
           placeholder="输入消息（Enter 发送，Shift+Enter 换行）"
           disabled={sending}
         />
+
+        <ChatToolbar
+          agentMode={agentMode}
+          onAgentModeChange={onAgentModeChange}
+          currentModelId={currentModelId}
+          currentLabel={currentLabel}
+          models={models}
+          modelSwitching={modelSwitching}
+          modelSwitchError={modelSwitchError}
+          onModelSwitch={onModelSwitch}
+          onDismissModelError={onDismissModelError}
+          contextSnapshot={contextSnapshot}
+        />
+
         <div className="composer-actions">
           <button type="submit" disabled={sending || !composer.trim()}>
             {sending ? "运行中..." : selectedSessionId ? "发送到当前会话" : "新建会话并发送"}

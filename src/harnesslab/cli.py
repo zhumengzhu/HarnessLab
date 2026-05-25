@@ -340,11 +340,14 @@ def build_runtime(
         or (operator_config.shell_profile if operator_config is not None else None)
         or "dev"
     )
-    fetch_mode = "strict"
+    # ``open`` is the new default; SSRF protection lives inside
+    # ``validate_fetch_url`` so the loosened policy stays safe. Operators
+    # can pin ``fetch_url.mode = "strict"`` to reintroduce the allowlist.
+    fetch_mode = "open"
     if operator_config is not None and operator_config.fetch_url_mode != "auto":
         fetch_mode = operator_config.fetch_url_mode
-    elif effective_shell_profile in {"dev", "read_only"}:
-        fetch_mode = "open"
+    elif effective_shell_profile == "strict":
+        fetch_mode = "strict"
     web_search_backend = (
         os.environ.get("WEB_SEARCH_BACKEND")
         or (operator_config.web_search_backend if operator_config is not None else None)
@@ -1139,6 +1142,7 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         default_max_steps=max_steps,
         trace_hub=trace_hub,
         trace_path=trace_path,
+        operator_config=config,
         settings=config_settings_snapshot(
             config,
             workspace_root=workspace_root,
