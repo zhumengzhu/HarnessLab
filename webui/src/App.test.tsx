@@ -22,6 +22,9 @@ function createFetchMock() {
     if (url.includes("/api/sessions?")) {
       return jsonResponse({ sessions: [] });
     }
+    if (url.includes("/api/models")) {
+      return jsonResponse({ models: [] });
+    }
     if (url.includes("/api/proposals")) {
       return jsonResponse({ proposals: [] });
     }
@@ -53,25 +56,41 @@ describe("App ui mode", () => {
   it("defaults to simple mode and hides advanced panels", async () => {
     renderApp();
 
-    expect(await screen.findByText("Simple Chat Mode: 聚焦会话与聊天。")).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Chat" })).toBeTruthy();
+    expect(await screen.findByText("Simple Chat — 聚焦对话。")).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "Proposals" })).toBeNull();
-    expect(screen.queryByRole("heading", { name: "Settings Snapshot" })).toBeNull();
+    expect(screen.queryByRole("heading", { name: "Settings" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "Trace" })).toBeNull();
+    expect(screen.getByTitle("新对话")).toBeTruthy();
+    expect(screen.getByTitle("历史会话")).toBeTruthy();
   });
 
-  it("shows advanced panels after switching mode", async () => {
+  it("shows advanced nav and separate views after switching mode", async () => {
     renderApp();
-    await screen.findByText("Simple Chat Mode: 聚焦会话与聊天。");
+    await screen.findByText("Simple Chat — 聚焦对话。");
 
     fireEvent.click(screen.getByRole("button", { name: "Advanced" }));
 
     await waitFor(() => {
-      expect(screen.getByText("Advanced Mode: 会话诊断、proposal 审阅与设置快照。")).toBeTruthy();
+      expect(screen.getByText("Advanced — 诊断、Proposals 与 Settings 独立页面。")).toBeTruthy();
     });
-    expect(screen.getByRole("heading", { name: "Session Detail" })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Proposals" })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Settings Snapshot" })).toBeTruthy();
-    expect(screen.getByRole("heading", { name: "Trace" })).toBeTruthy();
+
+    expect(screen.getByRole("navigation", { name: "Main" })).toBeTruthy();
+    expect(screen.queryByRole("heading", { name: "Proposals" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Proposals" }));
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Proposals" })).toBeTruthy();
+    });
+    expect(screen.queryByRole("heading", { name: "Trace" })).toBeNull();
+
+    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Settings" })).toBeTruthy();
+    });
+
+    fireEvent.click(screen.getByRole("button", { name: "Chat" }));
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: "Trace" })).toBeTruthy();
+    });
   });
 });

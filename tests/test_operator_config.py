@@ -32,6 +32,40 @@ def test_load_operator_config_parses_example(tmp_path: Path) -> None:
     assert config.limits.compaction_threshold_tokens == 12000
 
 
+def test_save_operator_config_persists_model_defaults(tmp_path: Path) -> None:
+    from harnesslab.core.operator_config import save_operator_config
+    from harnesslab.providers.deepseek_config import apply_deepseek_ui_effort
+
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "model": {"default_backend": "simple"},
+                "policy": {"shell_profile": "dev"},
+            }
+        ),
+        encoding="utf-8",
+    )
+    thinking, reasoning = apply_deepseek_ui_effort("max")
+    config = OperatorConfig(
+        model_backend="deepseek",
+        deepseek_model_name="deepseek-v4-pro",
+        deepseek_thinking=thinking,
+        deepseek_reasoning_effort=reasoning,
+    )
+    save_operator_config(config, path=path)
+
+    reloaded = load_operator_config(path)
+    assert reloaded.model_backend == "deepseek"
+    assert reloaded.deepseek_model_name == "deepseek-v4-pro"
+    assert reloaded.deepseek_thinking == "enabled"
+    assert reloaded.deepseek_reasoning_effort == "max"
+
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    assert raw["policy"]["shell_profile"] == "dev"
+
+
 def test_cli_flag_wins_over_config() -> None:
     config = OperatorConfig(model_backend="deepseek", shell_profile="strict")
     assert resolve_model_backend("simple", config=config) == "simple"
@@ -42,6 +76,29 @@ def test_config_wins_over_builtin_default() -> None:
     config = OperatorConfig(model_backend="deepseek", shell_profile="read_only")
     assert resolve_model_backend(None, config=config, fallback="simple") == "deepseek"
     assert resolve_shell_profile(None, config=config) == "read_only"
+
+
+def test_load_operator_config_parses_deepseek_reasoning_effort(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "model": {
+                    "default_backend": "deepseek",
+                    "deepseek": {
+                        "model_name": "deepseek-v4-pro",
+                        "thinking": "max",
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = load_operator_config(path)
+    assert config.deepseek_model_name == "deepseek-v4-pro"
+    assert config.deepseek_thinking == "enabled"
+    assert config.deepseek_reasoning_effort == "max"
 
 
 def test_load_operator_config_parses_failover_and_gemini(tmp_path: Path) -> None:
@@ -156,6 +213,31 @@ def test_load_operator_config_parses_tools_block(tmp_path: Path) -> None:
     assert config.pre_tool_hooks[0]["type"] == "prompt"
     assert len(config.post_tool_hooks) == 1
     assert config.post_tool_hooks[0]["type"] == "http"
+
+
+def test_load_operator_config_parses_json5_comments(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(
+        """{
+  // pick the local deterministic backend for eval
+  "version": 1,
+  "model": {
+    "default_backend": "simple",
+  },
+}""",
+        encoding="utf-8",
+    )
+    config = load_operator_config(path)
+    assert config.model_backend == "simple"
+
+
+def test_read_config_source_text_returns_file_body(tmp_path: Path) -> None:
+    from harnesslab.core.operator_config import read_config_source_text
+
+    path = tmp_path / "config.json"
+    text = '{ "version": 1, "model": { "default_backend": "simple" } }'
+    path.write_text(text, encoding="utf-8")
+    assert read_config_source_text(path) == text
 
 
 def test_invalid_config_version_raises(tmp_path: Path) -> None:

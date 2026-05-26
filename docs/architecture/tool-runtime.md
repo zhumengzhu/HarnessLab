@@ -271,7 +271,7 @@ correlated in analysis. `model_call` includes:
 The Phase 2.1 inner loop also wraps every step in
 `step_started` / `step_completed` events and ends each session
 with `session_finished`. Compactions are recorded as
-`compaction_started` (with `trigger: threshold | overflow`) and
+`compaction_started` (with `trigger: threshold | overflow | manual`) and
 `compaction_completed`. See `docs/architecture/data-model.md`
 for the payload shapes.
 

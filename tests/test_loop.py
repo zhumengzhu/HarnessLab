@@ -56,6 +56,48 @@ def test_skill_command_lists_and_selects_session_skills(tmp_path: Path) -> None:
     assert "Selected skills: research" in listed_again
 
 
+def test_direct_skill_slash_pins_skill(tmp_path: Path) -> None:
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    (skills / "research.md").write_text("search deeply", encoding="utf-8")
+
+    loop = build_runtime(tmp_path)
+    session = loop.start(goal="slash skill")
+    reply = loop.run_turn(session.id, "/research")
+    assert "Selected skill 'research'" in reply
+
+
+def test_compact_command_runs_manual_compaction(tmp_path: Path) -> None:
+    from harnesslab.core.config import RuntimeLimits
+    from harnesslab.core.replay import ReplayTraceRecorder
+
+    recorder = ReplayTraceRecorder()
+    loop = build_runtime(
+        tmp_path,
+        limits=RuntimeLimits(compaction_keep_last_messages=2),
+        trace=recorder,
+    )
+    session = loop.start(goal="long chat")
+    for i in range(6):
+        session.messages.append(
+            loop._make_message(  # noqa: SLF001
+                role="user" if i % 2 == 0 else "assistant",
+                content=f"msg-{i}-{'x' * 80}",
+                session=session,
+            )
+        )
+    loop._sessions.save(session)  # noqa: SLF001
+
+    reply = loop.run_turn(session.id, "/compact")
+    assert "Compacted session context" in reply
+
+    refreshed = loop._sessions.get(session.id)  # noqa: SLF001
+    assert any(m.role == "system" and "Compacted" in m.content for m in refreshed.messages)
+    starts = [e for e in recorder.events if e.event_type == "compaction_started"]
+    assert starts
+    assert starts[-1].payload["trigger"] == "manual"
+
+
 def test_skill_command_clear_removes_selected_skills(tmp_path: Path) -> None:
     skills = tmp_path / "skills"
     skills.mkdir()

@@ -3,6 +3,8 @@ import ReactDOM from "react-dom/client";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { App } from "./App";
 import "./styles.css";
+import "./styles/live-turn.css";
+import "highlight.js/styles/github-dark.min.css";
 
 const queryClient = new QueryClient();
 

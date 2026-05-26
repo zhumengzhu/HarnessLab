@@ -1,7 +1,8 @@
 import type { ContextSnapshot, ModelInfo, ModelSwitchRequest } from "../../lib/schemas";
+import { ComposerActionButton } from "../composer/ComposerActionButton";
 import { AgentModeSelector, type AgentMode } from "./AgentModeSelector";
-import { ModelSelector } from "./ModelSelector";
 import { ContextRing } from "./ContextRing";
+import { ModelSelector } from "./ModelSelector";
 
 type ChatToolbarProps = {
   agentMode: AgentMode;
@@ -11,9 +12,13 @@ type ChatToolbarProps = {
   models: ModelInfo[];
   modelSwitching: boolean;
   modelSwitchError: string | null;
+  contextSnapshot: ContextSnapshot | null | undefined;
+  sending: boolean;
+  canSend: boolean;
   onModelSwitch: (req: ModelSwitchRequest) => void;
   onDismissModelError: () => void;
-  contextSnapshot: ContextSnapshot | null | undefined;
+  onSend: () => void;
+  onStop: () => void;
 };
 
 export function ChatToolbar(props: ChatToolbarProps) {
@@ -25,15 +30,19 @@ export function ChatToolbar(props: ChatToolbarProps) {
     models,
     modelSwitching,
     modelSwitchError,
+    contextSnapshot,
+    sending,
+    canSend,
     onModelSwitch,
     onDismissModelError,
-    contextSnapshot,
+    onSend,
+    onStop,
   } = props;
 
   return (
     <div className="chat-toolbar">
-      <AgentModeSelector mode={agentMode} onChange={onAgentModeChange} />
-      <div className="chat-toolbar-right">
+      <div className="chat-toolbar-left">
+        <AgentModeSelector mode={agentMode} onChange={onAgentModeChange} />
         <ModelSelector
           currentModelId={currentModelId}
           currentLabel={currentLabel}
@@ -43,7 +52,15 @@ export function ChatToolbar(props: ChatToolbarProps) {
           onSwitch={onModelSwitch}
           onDismissError={onDismissModelError}
         />
+      </div>
+      <div className="chat-toolbar-right">
         <ContextRing snapshot={contextSnapshot} />
+        <ComposerActionButton
+          sending={sending}
+          canSend={canSend}
+          onSend={onSend}
+          onStop={onStop}
+        />
       </div>
     </div>
   );

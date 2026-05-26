@@ -202,6 +202,88 @@ def test_request_body_replays_reasoning_in_open_tool_loop() -> None:
     assert assistant_msgs[-1]["reasoning_content"] == "plan: grep foo"
 
 
+def test_request_body_replays_reasoning_after_new_user_turn() -> None:
+    """Turn 2 must still include turn-1 tool-loop reasoning on the wire."""
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content.decode("utf-8")))
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "turn two reply"}}]},
+        )
+
+    session = Session(
+        id="ses_multi",
+        goal="demo",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        messages=[
+            Message(
+                id="msg_u1",
+                role="user",
+                content="run grep",
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
+                session_id="ses_multi",
+            ),
+            Message(
+                id="msg_a1",
+                role="assistant",
+                content="",
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
+                session_id="ses_multi",
+                tool_calls=[
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "grep",
+                            "arguments": json.dumps({"pattern": "foo"}),
+                        },
+                    }
+                ],
+                reasoning_text="plan: grep foo",
+            ),
+            Message(
+                id="msg_t1",
+                role="tool",
+                content="[tool:grep] matches",
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
+                session_id="ses_multi",
+                tool_call_id="call_1",
+            ),
+            Message(
+                id="msg_a2",
+                role="assistant",
+                content="found matches",
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
+                session_id="ses_multi",
+            ),
+            Message(
+                id="msg_u2",
+                role="user",
+                content="thanks, summarize",
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
+                session_id="ses_multi",
+            ),
+        ],
+    )
+
+    model = DeepSeekModel(
+        tool_specs_provider=lambda: [],
+        api_key="x",
+        transport=httpx.MockTransport(handler),
+    )
+    model.decide(session, "thanks, summarize")
+
+    tool_assistants = [
+        m
+        for m in captured["messages"]
+        if m.get("role") == "assistant" and m.get("tool_calls")
+    ]
+    assert tool_assistants
+    assert tool_assistants[0]["reasoning_content"] == "plan: grep foo"
+
+
 def test_invalid_tool_call_json_falls_back_to_final() -> None:
     payload = {
         "choices": [
@@ -290,8 +372,46 @@ def test_request_body_includes_tools_spec() -> None:
     assert decision.kind == "final"
     assert captured["model"] == "deepseek-v4-flash"
     assert captured["thinking"] == {"type": "disabled"}
+    assert "reasoning_effort" not in captured
     assert captured["tool_choice"] == "auto"
     assert captured["tools"][0]["function"]["name"] == "read_file"
+
+
+def test_request_body_includes_reasoning_effort_when_thinking_enabled() -> None:
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content.decode("utf-8")))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    model = DeepSeekModel(
+        tool_specs_provider=lambda: [],
+        api_key="x",
+        thinking_mode="enabled",
+        reasoning_effort="high",
+        transport=httpx.MockTransport(handler),
+    )
+    model.decide(_session(), "hello")
+    assert captured["thinking"] == {"type": "enabled"}
+    assert captured["reasoning_effort"] == "high"
+
+
+def test_request_body_reasoning_effort_max() -> None:
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content.decode("utf-8")))
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    model = DeepSeekModel(
+        tool_specs_provider=lambda: [],
+        api_key="x",
+        thinking_mode="enabled",
+        reasoning_effort="max",
+        transport=httpx.MockTransport(handler),
+    )
+    model.decide(_session(), "hello")
+    assert captured["reasoning_effort"] == "max"
 
 
 # ----- prompt composer wiring (Phase 2.2 commit 2) -----

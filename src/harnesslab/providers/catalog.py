@@ -12,7 +12,7 @@ ReasoningSupport = Literal["native", "proxy", "none"]
 _CATALOG_DIR = Path(__file__).resolve().parent / "catalog"
 
 
-ThinkingSchema = Literal["none", "budget", "level"]
+ThinkingSchema = Literal["none", "budget", "level", "toggle"]
 
 
 @dataclass(frozen=True)
@@ -48,7 +48,7 @@ def _entry_from_dict(raw: dict[str, object]) -> CatalogEntry:
         raise ValueError(
             f"catalog entry {model_id!r} has invalid reasoning_support: {reasoning_support!r}"
         )
-    if thinking_schema not in {"none", "budget", "level"}:
+    if thinking_schema not in {"none", "budget", "level", "toggle"}:
         raise ValueError(
             f"catalog entry {model_id!r} has invalid thinking_schema: {thinking_schema!r}"
         )

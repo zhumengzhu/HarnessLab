@@ -19,6 +19,16 @@ from urllib.parse import parse_qs, urlparse
 from harnesslab.core.loop import DEFAULT_MAX_STEPS, HarnessLoop
 from harnesslab.core.memory_policy import session_memory_key
 from harnesslab.core.models import Session, TraceEvent
+from harnesslab.providers.context_limits import (
+    align_runtime_limits_with_model,
+    format_context_window,
+    model_id_for_backend,
+)
+from harnesslab.providers.deepseek_config import (
+    DEEPSEEK_UI_EFFORTS,
+    apply_deepseek_ui_effort,
+    deepseek_ui_effort,
+)
 from harnesslab.replay.trace_reader import read_trace
 from harnesslab.telemetry.log import get_logger
 from harnesslab.web.trace_hub import TraceHub
@@ -31,8 +41,10 @@ _GATE_OUTPUT_LIMIT = 12000
 
 TOOL_PANEL_EVENT_TYPES = frozenset(
     {
+        "user_input_received",
         "step_started",
         "step_completed",
+        "model_call_started",
         "decision_made",
         "tool_executed",
         "tool_denied",
@@ -63,6 +75,7 @@ _ENV_KEYS: dict[str, str] = {
 
 # Friendly display names for catalog model_ids. Anything not on this map
 # falls back to the bare model_id.
+
 _MODEL_LABELS: dict[str, str] = {
     "deepseek-v4-flash": "DeepSeek V4 Flash",
     "deepseek-v4-pro": "DeepSeek V4 Pro",
@@ -143,6 +156,7 @@ class WebRuntime:
                 and current_by_backend.get(backend) == model_id
             )
             effort_levels = self._effort_levels_for(backend, entry.thinking_schema)
+            runtime_ctx = self.loop._limits.context_window_tokens  # noqa: SLF001
             out.append(
                 {
                     "id": model_id,
@@ -150,6 +164,11 @@ class WebRuntime:
                     "backend": backend,
                     "label": _MODEL_LABELS.get(model_id, model_id),
                     "context_window": entry.context_window,
+                    "context_label": format_context_window(entry.context_window),
+                    "context_editable": False,
+                    "runtime_context_tokens": (
+                        runtime_ctx if is_current else entry.context_window
+                    ),
                     "reasoning_support": entry.reasoning_support,
                     "thinking_schema": entry.thinking_schema,
                     "thinking_default": entry.thinking_default,
@@ -167,6 +186,9 @@ class WebRuntime:
                 "backend": "simple",
                 "label": _MODEL_LABELS["simple"],
                 "context_window": 0,
+                "context_label": "–",
+                "context_editable": False,
+                "runtime_context_tokens": self.loop._limits.context_window_tokens,  # noqa: SLF001
                 "reasoning_support": "none",
                 "thinking_schema": "none",
                 "thinking_default": "disabled",
@@ -180,6 +202,8 @@ class WebRuntime:
 
     @staticmethod
     def _effort_levels_for(backend: str, thinking_schema: str) -> list[str]:
+        if backend == "deepseek":
+            return list(DEEPSEEK_UI_EFFORTS)
         if backend == "openai":
             return list(_OPENAI_EFFORTS)
         if backend == "anthropic":
@@ -199,7 +223,12 @@ class WebRuntime:
         if backend == "gemini":
             return getattr(cfg, "gemini_thinking_level", None) or None
         if backend == "deepseek":
-            return getattr(cfg, "deepseek_thinking", None) or None
+            if cfg is None:
+                return None
+            return deepseek_ui_effort(
+                thinking_mode=getattr(cfg, "deepseek_thinking", "disabled") or "disabled",
+                reasoning_effort=getattr(cfg, "deepseek_reasoning_effort", None),
+            )
         return None
 
     def switch_model(
@@ -220,6 +249,7 @@ class WebRuntime:
         from dataclasses import replace  # noqa: PLC0415
 
         from harnesslab.cli import _make_dynamic_blocks_provider  # noqa: PLC0415
+        from harnesslab.core.operator_config import save_operator_config  # noqa: PLC0415
         from harnesslab.providers.deepseek import tool_specs_from_registry  # noqa: PLC0415
         from harnesslab.providers.registry import create_model, normalize_backend  # noqa: PLC0415
 
@@ -241,12 +271,14 @@ class WebRuntime:
             # Apply config tweaks before constructing the new model.
             if self.operator_config is not None:
                 cfg = self.operator_config
-                changes: dict[str, Any] = {}
+                changes: dict[str, Any] = {"model_backend": norm}
                 if norm == "deepseek":
                     if model_id:
                         changes["deepseek_model_name"] = model_id
                     if effort:
-                        changes["deepseek_thinking"] = effort
+                        thinking, reasoning = apply_deepseek_ui_effort(effort)
+                        changes["deepseek_thinking"] = thinking
+                        changes["deepseek_reasoning_effort"] = reasoning
                 elif norm == "anthropic":
                     if model_id:
                         changes["anthropic_model_name"] = model_id
@@ -265,6 +297,7 @@ class WebRuntime:
                         changes["gemini_thinking_level"] = effort
                 if changes:
                     self.operator_config = replace(cfg, **changes)
+                    save_operator_config(self.operator_config)
 
             model = create_model(
                 norm,
@@ -282,6 +315,15 @@ class WebRuntime:
             self.loop._model = model  # noqa: SLF001
             self.model_backend = norm
             self.settings["model_backend"] = norm
+            resolved_model_id = model_id or model_id_for_backend(
+                norm, config=self.operator_config
+            )
+            self.loop._limits = align_runtime_limits_with_model(  # noqa: SLF001
+                self.loop._limits,
+                backend=norm,
+                config=self.operator_config,
+                model_id=resolved_model_id,
+            )
 
 
 def _session_json(session: Session, *, memory_notes: str | None = None) -> dict[str, Any]:
@@ -304,12 +346,15 @@ def _session_json(session: Session, *, memory_notes: str | None = None) -> dict[
 
 
 def _message_json(msg) -> dict[str, Any]:  # type: ignore[no-untyped-def]
-    return {
+    payload: dict[str, Any] = {
         "id": msg.id,
         "role": msg.role,
         "content": msg.content,
         "created_at": msg.created_at.isoformat(),
     }
+    if getattr(msg, "reasoning_text", None):
+        payload["reasoning_text"] = msg.reasoning_text
+    return payload
 
 
 def _trace_event_json(event: TraceEvent) -> dict[str, Any]:
@@ -477,7 +522,14 @@ class _Handler(BaseHTTPRequestHandler):
             return self._serve_static(rel)
 
         if path == "/api/settings":
-            return self._json_ok({"settings": self.runtime.settings})
+            from harnesslab.core.operator_config import read_config_source_text  # noqa: PLC0415
+
+            return self._json_ok(
+                {
+                    "settings": self.runtime.settings,
+                    "config_source": read_config_source_text(),
+                }
+            )
 
         if path == "/api/proposals":
             qs = parse_qs(parsed.query)
@@ -520,11 +572,19 @@ class _Handler(BaseHTTPRequestHandler):
                     "model_id": model_id,
                     "model_label": _MODEL_LABELS.get(model_id or "", model_id or backend),
                     "workspace": str(self.runtime.workspace_root),
+                    "runtime_context_tokens": self.runtime.loop._limits.context_window_tokens,  # noqa: SLF001
                 }
             )
 
         if path == "/api/models":
             return self._json_ok({"models": self.runtime.available_models()})
+
+        if path == "/api/composer/commands":
+            from harnesslab.core.composer_commands import composer_commands_payload  # noqa: PLC0415
+
+            return self._json_ok(
+                composer_commands_payload(self.runtime.workspace_root)
+            )
 
         if path.startswith("/api/sessions/") and path.endswith("/context"):
             remainder = path[len("/api/sessions/") :]
@@ -716,18 +776,25 @@ class _Handler(BaseHTTPRequestHandler):
         if hub is not None:
             hub.subscribe(on_event)
         lock = self.runtime.lock_for(session_id)
+
+        def on_stream_delta(kind: str, text: str, step_index: int) -> None:
+            event = "reasoning_delta" if kind == "reasoning" else "assistant_delta"
+            write(event, {"text": text, "step_index": step_index})
+
+        loop = self.runtime.loop
+        prev_sink = loop._stream_sink  # noqa: SLF001
+        loop._stream_sink = on_stream_delta  # noqa: SLF001
         try:
             with lock:
                 if not is_new:
-                    self.runtime.loop._sessions.get(session_id)  # noqa: SLF001
-                reply = self.runtime.loop.run_session(
-                    session_id, message, max_steps=max_steps
-                )
-                session = self.runtime.loop._sessions.get(session_id)  # noqa: SLF001
+                    loop._sessions.get(session_id)  # noqa: SLF001
+                reply = loop.run_session(session_id, message, max_steps=max_steps)
+                session = loop._sessions.get(session_id)  # noqa: SLF001
             write("done", self._turn_payload(session, reply))
         except Exception as exc:  # noqa: BLE001 — surface to browser
             write("error", {"message": str(exc)})
         finally:
+            loop._stream_sink = prev_sink  # noqa: SLF001
             if hub is not None:
                 hub.unsubscribe(on_event)
 
@@ -827,13 +894,25 @@ def _last_context_snapshot(
     runtime: "WebRuntime", session_id: str
 ) -> dict[str, Any] | None:
     """Return the context payload from the most recent model_call trace event."""
+
+    from harnesslab.core.context import make_conversation_snapshot  # noqa: PLC0415
+
     events = _session_trace_events(runtime, session_id)
     for event in reversed(events):
         if event.event_type == "model_call":
             ctx = event.payload.get("context")
             if isinstance(ctx, dict):
                 return ctx
-    return None
+    # No model_call in trace (older sessions or pre-restart turns): estimate
+    # from the session's current messages so the UI ring is not blank.
+    try:
+        session = runtime.loop._sessions.get(session_id)  # noqa: SLF001
+    except KeyError:
+        return None
+    if not session.messages:
+        return None
+    snapshot = make_conversation_snapshot(session.messages, runtime.loop._limits)  # noqa: SLF001
+    return snapshot.model_dump(exclude_none=True)
 
 
 def _load_proposals(workspace_root: Path, *, status: str = "open") -> list[dict[str, Any]]:

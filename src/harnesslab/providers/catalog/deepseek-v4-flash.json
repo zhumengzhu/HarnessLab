@@ -2,7 +2,9 @@
   "model_id": "deepseek-v4-flash",
   "provider": "deepseek",
   "api_family": "openai_chat",
-  "context_window": 128000,
+  "context_window": 1048576,
+  "max_output_tokens": 384000,
   "thinking_default": "disabled",
-  "reasoning_support": "native"
+  "reasoning_support": "native",
+  "thinking_schema": "toggle"
 }

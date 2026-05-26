@@ -12,7 +12,8 @@ This document answers two questions:
    versus deliberately deferred?**
 
 It is meant to inform — but not preempt — Phase 5/6 planning in
-[`docs/roadmap.md`](../roadmap.md).
+[`docs/roadmap.md`](../roadmap.md). For HarnessLab's learning-first scope, see
+[`docs/why-harnesslab.md`](../why-harnesslab.md).
 
 ---
 

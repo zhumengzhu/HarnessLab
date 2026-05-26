@@ -37,6 +37,8 @@ from harnesslab.core.models import Message, Session
 
 Summarizer = Callable[[list[Message]], str]
 
+COMPACT_COMMAND = "/compact"
+
 
 class ModelOverflowError(Exception):
     """Raised by a model adapter when the API rejected the request
@@ -63,6 +65,27 @@ def estimate_tokens(text: str) -> int:
     if not text:
         return 1
     return max(1, len(text) // 4)
+
+
+def parse_compact_command(user_input: str) -> bool:
+    """Return True when ``user_input`` is an explicit ``/compact`` request."""
+
+    return user_input.strip() == COMPACT_COMMAND
+
+
+def format_message_for_summary(m: Message) -> str:
+    """One transcript line for LLM or operator-facing compaction summaries."""
+
+    parts: list[str] = [f"[{m.role}]"]
+    if m.role == "assistant" and m.reasoning_text and m.reasoning_text.strip():
+        thinking = " ".join(m.reasoning_text.split())
+        if len(thinking) > 320:
+            thinking = thinking[:317].rstrip() + "…"
+        parts.append(f"(thinking: {thinking})")
+    body = m.content.strip()
+    if body:
+        parts.append(body)
+    return " ".join(parts)
 
 
 def estimate_messages_tokens(messages: Iterable[Message]) -> int:
@@ -154,8 +177,11 @@ def _fallback_summarizer(older: list[Message]) -> str:
     """
 
     role_counts: dict[str, int] = {}
+    reasoning_assistant = 0
     for m in older:
         role_counts[m.role] = role_counts.get(m.role, 0) + 1
+        if m.role == "assistant" and m.reasoning_text and m.reasoning_text.strip():
+            reasoning_assistant += 1
     roles_summary = ", ".join(
         f"{count} {role}" for role, count in sorted(role_counts.items())
     )
@@ -176,6 +202,11 @@ def _fallback_summarizer(older: list[Message]) -> str:
         "<system-reminder>",
         f"[Compacted earlier conversation: {len(older)} messages ({roles_summary})]",
     ]
+    if reasoning_assistant:
+        lines.append(
+            f"Dropped raw thinking from {reasoning_assistant} compacted assistant "
+            "message(s). Use /remember for notes that must survive compaction."
+        )
     if opening_line:
         lines.append(f"First exchange opened with: {opening_line!r}")
     lines.append("</system-reminder>")
@@ -216,7 +247,9 @@ class LiveSummarizer:
 
     def __call__(self, older: list[Message]) -> str:
         transcript = "\n".join(
-            f"[{m.role}] {m.content}" for m in older if m.content
+            format_message_for_summary(m)
+            for m in older
+            if m.content or m.reasoning_text
         )
         # Build an ephemeral session whose only message is the
         # summarization prompt + transcript. The model never sees the

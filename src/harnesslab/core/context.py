@@ -24,6 +24,8 @@ separately so the two can be cross-checked.
 
 from __future__ import annotations
 
+import json
+from collections.abc import Sequence
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -31,6 +33,24 @@ from pydantic import BaseModel, Field
 from harnesslab.core.compaction import estimate_messages_tokens, estimate_tokens
 from harnesslab.core.config import RuntimeLimits
 from harnesslab.core.models import Message
+from harnesslab.core.prompt.block import PromptBlock
+
+# Semantic keys surfaced in ContextSnapshot.context_breakdown_tokens (Web UI).
+CONTEXT_CATEGORY_ORDER: tuple[str, ...] = (
+    "system_prompt",
+    "tool_definitions",
+    "rules",
+    "skills",
+    "subagent_definitions",
+    "summarized_conversation",
+    "conversation",
+)
+
+_SYSTEM_PROMPT_BLOCKS = frozenset({"identity", "harness", "style", "planning", "env"})
+_RULES_BLOCKS = frozenset({"safety", "engineering", "agents_md"})
+_TOOL_BLOCKS = frozenset({"tool_guide"})
+_SKILLS_BLOCKS = frozenset({"skills"})
+_SUBAGENT_BLOCKS = frozenset({"subagents", "subagent_definitions"})
 
 
 class ContextSnapshot(BaseModel):
@@ -147,3 +167,72 @@ def _is_compaction_summary(content: str) -> bool:
         and "</system-reminder>" in text
         and "Compacted earlier conversation" in text
     )
+
+
+def category_for_prompt_block(name: str, role: str) -> str | None:
+    """Map a composed prompt block to a UI-facing context category.
+
+    Aligns with Cursor-style breakdown: core persona blocks →
+    ``system_prompt``; policy / AGENTS.md → ``rules``; tool guide +
+    wire JSON tool specs → ``tool_definitions``.
+    """
+
+    if name == "conversation":
+        return None
+    if name in _TOOL_BLOCKS:
+        return "tool_definitions"
+    if name in _SKILLS_BLOCKS:
+        return "skills"
+    if name in _SUBAGENT_BLOCKS:
+        return "subagent_definitions"
+    if name in _RULES_BLOCKS:
+        return "rules"
+    if name in _SYSTEM_PROMPT_BLOCKS:
+        return "system_prompt"
+    if role == "system":
+        return "system_prompt"
+    return None
+
+
+def build_prompt_block_meta(
+    blocks: Sequence[PromptBlock],
+    *,
+    extra_tool_definition_tokens: int = 0,
+    wire_tool_specs: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    """Summarize composed prompt blocks for ``last_call_meta`` / trace context."""
+
+    static_tokens = 0
+    dynamic_tokens = 0
+    prompt_total = 0
+    names: list[str] = []
+    breakdown: dict[str, int] = {}
+    for block in blocks:
+        block_tokens = estimate_tokens(block.content)
+        prompt_total += block_tokens
+        names.append(block.name)
+        if block.origin.startswith("static:"):
+            static_tokens += block_tokens
+        elif block.origin.startswith("dynamic:"):
+            dynamic_tokens += block_tokens
+        category = category_for_prompt_block(block.name, block.role)
+        if category is not None:
+            breakdown[category] = breakdown.get(category, 0) + block_tokens
+
+    wire_tokens = 0
+    if wire_tool_specs:
+        wire_tokens = estimate_tokens(json.dumps(wire_tool_specs, ensure_ascii=False))
+    elif extra_tool_definition_tokens > 0:
+        wire_tokens = extra_tool_definition_tokens
+
+    if wire_tokens > 0:
+        breakdown["tool_definitions"] = breakdown.get("tool_definitions", 0) + wire_tokens
+        prompt_total += wire_tokens
+
+    return {
+        "prompt_tokens_estimate": prompt_total,
+        "static_block_tokens": static_tokens,
+        "dynamic_block_tokens": dynamic_tokens,
+        "prompt_block_names": names,
+        "prompt_block_breakdown": breakdown,
+    }

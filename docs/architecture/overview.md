@@ -3,7 +3,9 @@
 ## Purpose
 
 HarnessLab is a learning-focused agent harness that emphasizes clear boundaries,
-safe tool execution, and reproducible behavior.
+safe tool execution, and reproducible behavior. For why the repo exists, what
+it is not, and a suggested reading order, see
+[`../why-harnesslab.md`](../why-harnesslab.md).
 
 The project starts with a local single-process runtime and evolves toward
 stronger observability and automated improvement workflows.
@@ -442,8 +444,11 @@ also exposes prompt-side token estimates through
 
 ## Compaction (Phase 2.4)
 
+Full reference: [`compaction.md`](compaction.md). Summary:
+
 `core/compaction.py` is the loop's defence against context-window
-pressure. Two trigger paths feed into the same code path:
+pressure. Two automatic trigger paths plus manual ``/compact`` feed into
+the same code path:
 
 - **Threshold trigger.** Before each model call, the loop runs
   `should_compact(messages, threshold_tokens)`. When
@@ -459,6 +464,9 @@ pressure. Two trigger paths feed into the same code path:
   trigger=`overflow`), retries the model call once, and falls back
   to a terminal `final` decision with an explanatory message if
   the second attempt also overflows.
+- **Manual trigger.** The slash command ``/compact`` (Web UI palette
+  or CLI) compacts immediately with the configured ``keep_last``,
+  emitting ``compaction_started(trigger=manual)``. See ``skills/compact.md``.
 
 Summarization is pluggable. The default `_fallback_summarizer` is
 deterministic and LLM-free (good for tests, eval, and offline
@@ -466,6 +474,10 @@ workflows). `LiveSummarizer(model)` sends a summarization prompt
 to a `ModelPort` and returns its assistant text fenced in
 `<system-reminder>` tags; on empty model output it falls back to
 the deterministic summary so compaction always succeeds.
+
+**Thinking / reasoning after compaction:** see [`compaction.md`](compaction.md)
+and [`provider-expansion.md`](provider-expansion.md) § replay policy.
+Durable facts should use ``/remember`` or ``/remember-global``.
 
 ## Context Observability (Phase 2.6)
 
@@ -491,8 +503,15 @@ adding `ContextSnapshot` did not break eval/replay round-trips.
 
 ## Web Chat UI (Phase 3.2)
 
+Design principles, turn layout, Thinking/Thought UX, and SSE semantics are
+documented in [`webui-design.md`](webui-design.md). **Trace is the engine;
+Chat is the product** — Simple mode delivers full conversation UX without
+the Advanced trace panel.
+
 `harnesslab serve` binds a **localhost-only** HTTP server that
 reuses the production runtime — no duplicate loop logic.
+
+**HTTP contract:** [`web-api.md`](web-api.md) (endpoints, SSE, slash commands).
 
 ```mermaid
 flowchart LR
@@ -504,36 +523,31 @@ flowchart LR
     Panel --> API
 ```
 
-Endpoints:
+See [`web-api.md`](web-api.md) for the full endpoint list. Highlights:
 
-- `GET /` — static chat page (`web/static/`)
-- `GET /api/settings` — read-only operator config snapshot (no secrets)
-- `GET /api/sessions` — list sessions (newest first)
-- `GET /api/sessions/{id}` — session metadata, messages, `memory_notes`
-- `GET /api/sessions/{id}/trace` — tool/step events for inspector panel
-- `GET /api/proposals?status=open|all` — list proposal headers from `proposals/`
-- `GET /api/proposals/{id}` — read one proposal markdown + metadata
-- `POST /api/proposals/{id}/status` — guarded status transition (`open|accepted|rejected|superseded`) with AGENTS.md-aligned validation
-- `POST /api/proposals/gates/run` — run `pytest`/`eval` locally and return bounded output for proposal gate UX
-- `POST /api/sessions` — `start` + first `run_session`
-- `POST /api/sessions/{id}/messages` — continue conversation (JSON or SSE)
-- `POST /api/sessions/{id}/fork` — fork session branch
+- JSON CRUD for sessions, proposals, settings, model switch
+- `POST .../messages` with optional SSE (`stream: true`)
+- `GET /api/composer/commands` for the `/` slash palette
+- Token deltas: `reasoning_delta` / `assistant_delta` (DeepSeek first)
 
 The default browser client uses **SSE** (`Accept: text/event-stream`)
-so tool/step trace events stream live into the right-hand inspector
-panel during each turn. The message list shows **user** and non-empty
-**assistant** replies only; internal `tool` / `system` rows remain in
-SQLite for the model loop. The latest turn may also include structured
-**tool cards** in the JSON/SSE `done` payload (derived from
-`tool_executed` trace events, not raw `[tool:…]` message text). The
-sidebar **settings** panel shows model label, workspace path, and
-config path from `/api/settings`. Composer buttons expose **Fork** and
-**`/remember`** (session-scoped memory writes).
+so tool/step trace events stream live during each turn. When the active
+model supports it (DeepSeek first), ``reasoning_delta`` / ``assistant_delta``
+events stream token text into the LiveTurn panel. ``GET /api/composer/commands``
+feeds the ``/`` slash palette (built-ins + workspace skills). Simple mode
+translates trace into **LiveTurn** activity in the chat panel (Thinking…,
+Tool rows, final answer) without requiring the trace inspector. Advanced
+mode adds a right-hand trace panel with **Prompt inspector** on each
+`model_call` (`prompt_blocks` + `api_messages` full text). The message
+list shows **user** and non-empty **assistant** replies; optional
+`reasoning_text` renders as collapsible **Thought** blocks. Internal
+`tool` / `system` rows remain in SQLite for the model loop.
 
-By default `serve` hosts legacy static assets under `web/static/`.
-When `HARNESSLAB_WEB_UI_VERSION=ts` and a built TS bundle exists under
-`web/static_ts/`, the server switches to that bundle; otherwise it
-falls back to legacy automatically.
+By default `serve` prefers the **TypeScript** bundle under
+`web/static_ts/` when it exists (`HARNESSLAB_WEB_UI_VERSION` defaults to
+`ts`). Set `HARNESSLAB_WEB_UI_VERSION=legacy` to force the static assets
+under `web/static/`. If the TS bundle is missing, the server falls back to
+legacy automatically.
 
 ## Session auto-titles (Phase 3.2)
 
@@ -575,6 +589,7 @@ Optional cross-session notes keyed by workspace root hash
 | --- | --- | --- |
 | ``/remember <text>`` | Current session only | `memory_written` / `memory_read` |
 | ``/remember-global <text>`` | All sessions in workspace | `workspace_memory_written` / `workspace_memory_read` |
+| ``/compact`` | Force compaction now (``trigger=manual``); no model call | `compaction_started` / `compaction_completed` |
 
 Writes are explicit user commands only (no LLM extraction). The loop
 requires ``workspace_root`` on ``HarnessLoop`` for inject/write.
@@ -584,7 +599,7 @@ requires ``workspace_root`` on ``HarnessLoop`` for inject/write.
 Workspace skills live under ``skills/*.md``. The prompt composer now
 selects a **bounded subset** per turn instead of injecting every skill:
 
-- **Pinned first**: session-selected skills from ``/skill`` commands.
+- **Pinned first**: session-selected skills from ``/skill`` commands or ``/skillname`` direct invoke.
 - **Then relevance**: lightweight lexical overlap against the latest
   user message.
 - **Cap**: up to 3 skills per turn.
@@ -600,6 +615,7 @@ The selection is controlled with explicit slash commands:
 
 | Command | Effect |
 | --- | --- |
+| ``/skillname`` | Pin workspace skill ``skills/skillname.md`` (Cursor-style invoke) |
 | ``/skill`` or ``/skill list`` | Show available + selected skills |
 | ``/skill add <name>`` (or ``/skill <name>``) | Pin a skill for current session |
 | ``/skill remove <name>`` | Unpin a previously selected skill |

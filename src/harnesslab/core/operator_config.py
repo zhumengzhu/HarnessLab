@@ -1,5 +1,8 @@
 """Load operator defaults from ``~/.config/harnesslab/config.json``.
 
+The file may be strict JSON or **JSON5** (``//`` / ``/* */`` comments,
+trailing commas, unquoted keys). Parsing uses the ``json5`` package.
+
 Precedence for each knob (highest wins):
 
 1. CLI flag
@@ -17,6 +20,8 @@ import os
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Literal
+
+import json5
 
 from harnesslab.core.config import RuntimeLimits
 from harnesslab.policy.shell_profiles import DEFAULT_SHELL_PROFILE
@@ -41,6 +46,7 @@ class OperatorConfig:
     deepseek_base_url: str | None = None
     deepseek_model_name: str | None = None
     deepseek_thinking: str = "disabled"
+    deepseek_reasoning_effort: str | None = None
     deepseek_api_key_env: str = "DEEPSEEK_API_KEY"
     anthropic_model_name: str | None = None
     anthropic_thinking: str = "disabled"
@@ -98,17 +104,118 @@ def config_path_from_env() -> Path:
     return Path(raw) if raw else DEFAULT_CONFIG_PATH
 
 
+def read_config_source_text(path: Path | None = None) -> str | None:
+    """Return raw on-disk config text for Web UI display (may include JSON5 comments)."""
+
+    path = path or config_path_from_env()
+    if not path.is_file():
+        return None
+    return path.read_text(encoding="utf-8")
+
+
 def load_operator_config(path: Path | None = None) -> OperatorConfig:
     path = path or config_path_from_env()
     if not path.is_file():
         return OperatorConfig()
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
-        raise ValueError(f"invalid config JSON at {path}: {exc.msg}") from exc
+        data = json5.loads(path.read_text(encoding="utf-8"))
+    except ValueError as exc:
+        raise ValueError(f"invalid config JSON5 at {path}: {exc}") from exc
     if not isinstance(data, dict):
         raise ValueError(f"config root must be an object: {path}")
     return _parse_config(data)
+
+
+def save_operator_config(config: OperatorConfig, path: Path | None = None) -> Path:
+    """Persist operator model defaults to ``config.json`` (merge into existing file)."""
+
+    path = path or config_path_from_env()
+    if path.is_file():
+        raw = path.read_text(encoding="utf-8")
+        data = json5.loads(raw)
+        if not isinstance(data, dict):
+            data = {"version": CONFIG_VERSION}
+    else:
+        data = {"version": CONFIG_VERSION}
+
+    _patch_model_section(data, config)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(
+        json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    tmp.replace(path)
+    return path
+
+
+def _patch_model_section(data: dict[str, Any], config: OperatorConfig) -> None:
+    from harnesslab.providers.deepseek_config import deepseek_ui_effort
+
+    data["version"] = CONFIG_VERSION
+    model_raw = data.get("model")
+    model: dict[str, Any] = model_raw if isinstance(model_raw, dict) else {}
+    data["model"] = model
+
+    model["default_backend"] = config.model_backend
+
+    deepseek = model.get("deepseek")
+    ds: dict[str, Any] = deepseek if isinstance(deepseek, dict) else {}
+    model["deepseek"] = ds
+    if config.deepseek_model_name:
+        ds["model_name"] = config.deepseek_model_name
+    if config.deepseek_base_url:
+        ds["base_url"] = config.deepseek_base_url
+    ds["api_key_env"] = config.deepseek_api_key_env
+    ui_effort = deepseek_ui_effort(
+        thinking_mode=config.deepseek_thinking,
+        reasoning_effort=config.deepseek_reasoning_effort,
+    )
+    ds["thinking"] = ui_effort
+    if ui_effort == "high":
+        ds["reasoning_effort"] = "high"
+    else:
+        ds.pop("reasoning_effort", None)
+
+    anthropic = model.get("anthropic")
+    ant: dict[str, Any] = anthropic if isinstance(anthropic, dict) else {}
+    model["anthropic"] = ant
+    if config.anthropic_model_name:
+        ant["model_name"] = config.anthropic_model_name
+    ant["api_key_env"] = config.anthropic_api_key_env
+    if config.anthropic_thinking == "enabled" and config.anthropic_thinking_effort:
+        ant["thinking"] = {
+            "mode": "adaptive",
+            "effort": config.anthropic_thinking_effort,
+        }
+    elif config.anthropic_thinking not in {"", "disabled"}:
+        ant["thinking"] = config.anthropic_thinking
+    else:
+        ant["thinking"] = "disabled"
+
+    openai = model.get("openai")
+    oai: dict[str, Any] = openai if isinstance(openai, dict) else {}
+    model["openai"] = oai
+    if config.openai_model_name:
+        oai["model_name"] = config.openai_model_name
+    if config.openai_base_url:
+        oai["base_url"] = config.openai_base_url
+    oai["api_key_env"] = config.openai_api_key_env
+    oai["reasoning_effort"] = config.openai_reasoning_effort
+
+    gemini = model.get("gemini")
+    gem: dict[str, Any] = gemini if isinstance(gemini, dict) else {}
+    model["gemini"] = gem
+    if config.gemini_model_name:
+        gem["model_name"] = config.gemini_model_name
+    gem["api_key_env"] = config.gemini_api_key_env
+    if config.gemini_thinking_budget is not None:
+        gem["thinking_budget"] = config.gemini_thinking_budget
+    if config.gemini_thinking_level:
+        gem["thinking_level"] = config.gemini_thinking_level
+    elif "thinking_level" in gem and config.gemini_thinking_level is None:
+        gem.pop("thinking_level", None)
 
 
 def apply_provider_env(config: OperatorConfig) -> None:
@@ -182,6 +289,7 @@ def config_settings_snapshot(
         "model_label": model_label(model_backend, config=config),
         "deepseek_model": resolve_deepseek_model_name(config=config),
         "deepseek_thinking": config.deepseek_thinking,
+        "deepseek_reasoning_effort": config.deepseek_reasoning_effort,
         "anthropic_model": resolve_anthropic_model_name(config=config),
         "anthropic_thinking": config.anthropic_thinking,
         "anthropic_thinking_effort": config.anthropic_thinking_effort,
@@ -297,11 +405,19 @@ def _parse_config(data: dict[str, Any]) -> OperatorConfig:
         **{k: v for k, v in limits_raw.items() if k in RuntimeLimits.__dataclass_fields__}
     )
 
+    from harnesslab.providers.deepseek_config import parse_deepseek_thinking_fields
+
+    ds_thinking, ds_effort = parse_deepseek_thinking_fields(
+        thinking_raw=deepseek.get("thinking", "disabled"),
+        reasoning_effort_raw=deepseek.get("reasoning_effort"),
+    )
+
     return OperatorConfig(
         model_backend=str(model.get("default_backend", "simple")),
         deepseek_base_url=_optional_str(deepseek.get("base_url")),
         deepseek_model_name=_optional_str(deepseek.get("model_name")),
-        deepseek_thinking=str(deepseek.get("thinking", "disabled")),
+        deepseek_thinking=ds_thinking,
+        deepseek_reasoning_effort=ds_effort,
         deepseek_api_key_env=str(deepseek.get("api_key_env", "DEEPSEEK_API_KEY")),
         anthropic_model_name=_optional_str(anthropic.get("model_name")),
         anthropic_thinking=_anthropic_thinking_mode(anthropic),

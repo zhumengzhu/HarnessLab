@@ -1,346 +1,274 @@
 # HarnessLab
 
-HarnessLab is a learning-first agent harness: a single-process runtime with
-a multi-step agent loop, policy-gated tools, composed prompts, persistent
-sessions, and JSONL traces for eval and replay.
+**A learning-first agent harness** — a small, runnable codebase for
+understanding and implementing your own agent **runtime** (loop, tools,
+policy, sessions, compaction, traces, eval), not just calling an LLM API.
 
-## Goals
+HarnessLab is an **experience / lab project**: read the code, run the CLI or
+local Web UI, break things safely with `eval` and `replay`, then extend the
+harness yourself. It is **not** a drop-in replacement for Cursor or Claude Code.
 
-- Build a clear, autonomous agentic loop (model decides when to stop).
-- Support sandboxed tool use with policy checks.
-- Keep session boundaries explicit; treat sessions as first-class entities.
-- Make behavior observable and testable from day one.
+For motivation, reading order, and “what this is not”, see
+[`docs/why-harnesslab.md`](docs/why-harnesslab.md). For how HarnessLab compares
+to other agents in 2026, see
+[`docs/research/harness-landscape.md`](docs/research/harness-landscape.md).
 
-## Tech Stack
+## What you get
 
-- Python 3.11+
-- `uv` for dependency and environment management
-- `pytest` for tests
+- **Single-process runtime** — `HarnessLoop.run_session` drives a multi-step
+  inner loop until `final`, `ask_user`, or `max_steps`.
+- **Policy-gated tools** — file, shell, web research, patch, sandbox, MCP, …
+  ([`docs/architecture/tool-runtime.md`](docs/architecture/tool-runtime.md)).
+- **Sessions as first-class** — persist, list, resume, fork (SQLite).
+- **Observable by design** — JSONL traces, context snapshots, eval + replay.
+- **Local Web chat** — `harnesslab serve` / `./hl-serve` (TS UI by default when
+  built).
+- **Multiple model backends** — DeepSeek, Anthropic, OpenAI, Gemini, or offline
+  `simple`.
 
-## Quick Start
+## Prerequisites
+
+- **Python 3.11+**
+- **[uv](https://docs.astral.sh/uv/)** (dependency and env management)
+- **Optional:** [Bun](https://bun.sh/) to build the TS Web UI (`webui/`)
+- **Optional:** provider API keys (see [Configuration](#configuration))
+
+## Quick start
 
 ```bash
+git clone https://github.com/zhumengzhu/HarnessLab.git   # adjust remote if forked
+cd HarnessLab
 uv sync
-uv run pre-commit install   # one-time: enables local quality-gate hook
-uv run harnesslab run "list files in this workspace"
+uv run pre-commit install   # one-time: local quality-gate hook
+
+# Offline smoke test (no network):
+uv run harnesslab run "hello" --model simple
+
+# With DeepSeek (network):
+export DEEPSEEK_API_KEY="***"
+uv run harnesslab run "list files in this workspace" --model deepseek --storage sqlite
+
 uv run pytest
 ```
 
-The CLI exposes eight subcommands:
+## Two ways to use it daily
 
-- `harnesslab run <input>` — start a session and run the agent loop
-  (multi-step by default; see `--max-steps`).
-- `harnesslab eval` — run the YAML eval suite.
-- `harnesslab replay <trace.jsonl>` — re-drive a recorded trace and
-  report any divergence.
-- `harnesslab metrics <trace.jsonl>` — aggregate counts, latency, and
-  context usage from a recorded trace.
-- `harnesslab propose` — turn recurring failure clusters in traces
-  and eval runs into advisory improvement proposals.
-- `harnesslab session` — list, inspect, resume, or fork persisted
-  sessions (SQLite).
-- `harnesslab context <trace.jsonl>` — inspect per-call context
-  snapshots from `model_call` events.
-- `harnesslab serve` — local Web chat UI (localhost only).
+| Path | Best for | Command |
+| --- | --- | --- |
+| **CLI** | Scripts, eval, learning the loop | `harnesslab run`, `session`, `eval` |
+| **Web UI** | Interactive chat, trace inspector | `./hl-serve start` → http://127.0.0.1:8787/ |
 
-Run `harnesslab --help` for the full surface.
+**Storage note:** `harnesslab run` defaults to **in-memory** stores (state lost
+on exit). `harnesslab serve` and `harnesslab session` use **SQLite** under
+`<workspace>/.harnesslab/state.sqlite` so Web and CLI sessions can share history.
 
-### Agent loop (`run`)
-
-Each `harnesslab run` invocation starts a new session and drives
-`run_session`: the model may call tools repeatedly until it returns a
-terminal decision (`final` — done, or `ask_user` — pause for input) or
-hits the step budget.
+### Web chat (`serve`)
 
 ```bash
-# Default: up to 20 inner steps per user message.
-uv run harnesslab run "find all Python files and summarize structure"
-
-# Cap the inner loop for testing or cost control.
-uv run harnesslab run "hello" --max-steps 3
-```
-
-Built-in tools: `read_file`, `write_file`, `edit_file`, `apply_patch`, `grep`, `glob`,
-`fetch_url`, `web_search`, `html_to_markdown`, `read_pdf`, `run_shell_safe`.
-See `docs/architecture/tool-runtime.md` for policy details. ``fetch_url`` currently
-allowlists ``wttr.in`` for read-only HTTP (e.g. weather).
-
-### Web chat UI (`serve`)
-
-```bash
-export DEEPSEEK_API_KEY="***"   # required for default --model deepseek
-uv run harnesslab serve --workspace-root .
+export DEEPSEEK_API_KEY="***"   # or another provider key; see Configuration
+./hl-serve start
 # open http://127.0.0.1:8787/
 ```
 
-**Quick lifecycle helper** (repo root):
+Lifecycle helper (repo root):
 
 ```bash
-./hl-serve start      # or: stop | restart | status
-./hl-serve            # print full help
+./hl-serve start      # stop | restart | status
+./hl-serve            # full help
 
-# Optional secrets file (see scripts/hl-serve.example.env):
-#   ~/.config/harnesslab/env
+# Optional secrets: ~/.config/harnesslab/env
+# See scripts/hl-serve.example.env
 ```
 
-`./hl-serve` wraps `uv run harnesslab serve` with pid/log under
-`.harnesslab/` and reads `HL_SERVE_*` env vars (port, model, workspace, …).
+**Web UI (TypeScript):** after `cd webui && bun install && bun run build`, `serve`
+uses the TS bundle by default (`HARNESSLAB_WEB_UI_VERSION=ts`). If the bundle is
+missing, it falls back to the legacy static UI.
 
-The browser UI shares the SQLite session store with the CLI — sessions
-created in the web UI appear in `harnesslab session ls`, and vice versa.
-When using DeepSeek, session titles in the sidebar are auto-generated
-after the first message (short LLM call, low token; falls back silently).
-The UI streams turn progress over SSE, shows tool/step events in a
-side panel, supports session fork, and exposes `/remember` for
-session-scoped memory notes. The main chat shows user and assistant
-text only; raw `tool` messages stay in the session store for the model
-and appear in the trace inspector panel.
+- **Simple** mode — chat, thinking/tool activity, model picker, slash commands.
+- **Advanced** — trace panel, proposals, session metadata, budget events.
+- **Slash commands** — `/remember`, `/remember-global`, `/compact`, `/skill list`,
+  and workspace skills as `/skillname` (see `skills/*.md`).
+- **Composer** — type `/` for the command palette; SSE streaming for tool steps
+  and (with thinking models) token-level reasoning/answer deltas.
 
-Use `--model simple` for offline smoke tests without network access.
-Only `127.0.0.1` is allowed; the server refuses public bind addresses.
+Use `--model simple` for offline smoke tests. Bind address must stay on
+`127.0.0.1` (localhost only).
 
-TS frontend foundation (optional, Phase A):
+Rebuild the frontend:
 
 ```bash
-cd webui
-bun install
-bun run check
-bun run test
-bun run build
-HARNESSLAB_WEB_UI_VERSION=ts uv run harnesslab serve --workspace-root .
+cd webui && bun install && bun run check && bun test && bun run build
 ```
 
-`webui` is bun-first (`bun.lock`); use bun for install/check/test/build.
+Details: [`webui/README.md`](webui/README.md), [`docs/architecture/webui-design.md`](docs/architecture/webui-design.md).
 
-If the TS bundle is missing, `serve` falls back to the legacy static UI.
+## Configuration
 
-**Simple chat (TS UI):** after `bun run build`, open the TS UI and use
-**新对话** → type in **Composer** → Enter. Header **Simple** mode hides
-trace/proposals; switch **Advanced** when debugging.
+Non-secret defaults live in **`~/.config/harnesslab/config.json`**
+([`scripts/harnesslab.config.example.json`](scripts/harnesslab.config.example.json)):
+model backend, shell profile, compaction limits, serve port, etc.
 
-There is no global JSON config file yet — model provider settings use
-environment variables plus CLI / `HL_SERVE_*` flags, or optional
-`~/.config/harnesslab/config.json` for non-secret defaults (see
-[Phase 3.5 in the roadmap](docs/roadmap.md#phase-35--operator-configuration--done)
-and [`scripts/harnesslab.config.example.json`](scripts/harnesslab.config.example.json)).
-Secrets: [`scripts/hl-serve.example.env`](scripts/hl-serve.example.env).
+Secrets stay in the **environment** (or `~/.config/harnesslab/env` for
+`./hl-serve`):
 
-### Model backends (`run`)
+| Backend | Typical env var |
+| --- | --- |
+| DeepSeek | `DEEPSEEK_API_KEY` (optional: `DEEPSEEK_BASE_URL`, `DEEPSEEK_MODEL`) |
+| Anthropic | `ANTHROPIC_API_KEY` |
+| OpenAI | `OPENAI_API_KEY` |
+| Gemini | `GEMINI_API_KEY` or `GOOGLE_API_KEY` |
 
-`harnesslab run` supports two model backends:
+Web UI model changes can persist back to `config.json` via the model picker.
 
-- `--model simple` (default): deterministic local parser model (no network).
-- `--model deepseek`: calls DeepSeek Chat Completions (networked).
+## CLI overview
 
-DeepSeek requires `DEEPSEEK_API_KEY` in the environment.
+Run `harnesslab --help` for the full list. Core commands:
+
+| Command | Purpose |
+| --- | --- |
+| `run` | New session + agent loop |
+| `session` | `ls`, `show`, `resume`, `fork`, `checkpoints`, `rewind` |
+| `serve` | Local Web UI |
+| `eval` | YAML regression suite |
+| `replay` | Re-drive traces, detect divergence |
+| `metrics` | Aggregate trace stats |
+| `context` | Inspect context snapshots from traces |
+| `propose` | Advisory improvement proposals from failure clusters |
+| `artifact` | List/show stored artifacts |
+| `tui` | Textual terminal UI (experimental) |
+
+Global flags such as `--workspace-root` and `--sqlite-path` go **before** the
+subcommand: `harnesslab session --workspace-root . ls`.
+
+### Agent loop (`run`)
+
+Each `run` starts a new session and calls `run_session`: the model may invoke
+tools until it returns `final`, `ask_user`, or hits `--max-steps` (default 20).
 
 ```bash
-export DEEPSEEK_API_KEY="***"
-uv run harnesslab run "summarize current workspace safety posture" --model deepseek
+uv run harnesslab run "find Python files and summarize" --model deepseek --storage sqlite
+uv run harnesslab run "hello" --max-steps 3 --model simple
 ```
 
-Optional env overrides:
+Tool surface and policy: [`docs/architecture/tool-runtime.md`](docs/architecture/tool-runtime.md).
 
-- `DEEPSEEK_BASE_URL` (default: `https://api.deepseek.com/v1`)
-- `DEEPSEEK_MODEL` (default: `deepseek-v4-flash`; also `deepseek-v4-pro`)
+### Model backends
 
-### Storage backends
+| `--model` | Network | Notes |
+| --- | --- | --- |
+| `simple` | No | Deterministic teaching parser (`/tool`, `/final`, …) |
+| `deepseek` | Yes | Default for `serve` when configured |
+| `anthropic` | Yes | Messages API + thinking |
+| `openai` | Yes | Responses API |
+| `gemini` | Yes | generateContent |
 
-By default `harnesslab run` uses in-memory session and memory stores
-(state is lost when the process exits). To persist state across runs
-use the SQLite backend:
+Provider details: [`docs/architecture/provider-expansion.md`](docs/architecture/provider-expansion.md).
 
-```bash
-uv run harnesslab run "hello" --storage sqlite
-# default DB path: <workspace-root>/.harnesslab/state.sqlite
-
-uv run harnesslab run "again" --storage sqlite \
-    --sqlite-path ./my-runs/state.sqlite
-```
-
-The same Port contract suite (`tests/test_port_contracts.py`) runs
-against both backends, so they are behaviorally interchangeable.
-
-### Session management
-
-When using SQLite storage, sessions persist across process restarts.
-Use the `session` subcommand to inspect and continue work:
+### Session management (SQLite)
 
 ```bash
-# List recent sessions (newest first).
 uv run harnesslab session --workspace-root . ls
-
-# Show metadata and conversation for one session.
 uv run harnesslab session --workspace-root . show ses_abc123
-
-# Continue a session with another user message.
-uv run harnesslab session --workspace-root . resume ses_abc123 "keep going"
-
-# Fork: copy messages into a new session with parent_session_id set.
+uv run harnesslab session --workspace-root . resume ses_abc123 "keep going" --model deepseek
 uv run harnesslab session --workspace-root . fork ses_abc123 --goal "try alt approach"
 ```
 
-Global flags (`--workspace-root`, `--sqlite-path`) must appear **before**
-the subcommand: `harnesslab session --workspace-root . ls`.
-
 ### Eval suite
 
-`harnesslab eval` drives a small, versioned set of YAML tasks
-(`eval/tasks/*.yaml`) against the live loop, then compares results to
-`eval/baseline.json` and writes a JSON report to
-`eval/reports/latest.json`.
+`harnesslab eval` runs versioned YAML tasks (`eval/tasks/*.yaml`, **15**
+shipped), compares to `eval/baseline.json`, writes `eval/reports/latest.json`.
 
 ```bash
-# Run every task, compare against baseline, write the latest report.
 uv run harnesslab eval
-
-# Run a single task by filename stem.
 uv run harnesslab eval --task 02_write_then_read
-
-# Refresh the baseline after an intentional, reviewed behavior change.
-uv run harnesslab eval --update-baseline
+uv run harnesslab eval --update-baseline   # after reviewed behavior change
 ```
 
-Exit codes:
-
-| Code | Meaning |
+| Exit | Meaning |
 | --- | --- |
-| 0 | All tasks passed, no baseline regression. |
-| 2 | At least one task failed (no baseline to compare against, or new failure not in baseline). |
-| 3 | Baseline regression detected (was passing, now failing — or `tool_failures` / `invalid_args` increased). |
-| 64 | Usage error (missing subcommand or unknown task). |
+| 0 | All passed, no baseline regression |
+| 2 | Task failure |
+| 3 | Baseline regression |
+| 64 | Usage error |
 
-Each task declares its expected trace shape (ordered event subset,
-forbidden event types, and `final_reply` substring), so the eval suite
-doubles as living documentation of the loop's invariants. See
-[`eval/README.md`](eval/README.md) for the propose→eval workflow and
-task authoring guide (eleven shipped tasks as of Phase 3.4).
+See [`eval/README.md`](eval/README.md).
 
-### Replay, Metrics & Context
+### Replay, metrics & context
 
-Every `harnesslab run` invocation appends to
-`<workspace>/.harnesslab/trace.jsonl`. Read-only tools turn that file
-into evidence:
+Traces append to `<workspace>/.harnesslab/trace.jsonl`.
 
 ```bash
-# Re-drive the recorded loop and report any divergence per session.
 uv run harnesslab replay .harnesslab/trace.jsonl
-
-# When a session depends on files written by an earlier session, replay
-# in the same workspace so the round-trip can succeed.
 uv run harnesslab replay .harnesslab/trace.jsonl --workspace .
-
-# Compare byte-for-byte (only useful for traces produced by the
-# FrozenClock + SeqIdProvider runtime, e.g. eval task traces).
-uv run harnesslab replay eval-trace.jsonl --strict
-
-# Restrict to one session id.
-uv run harnesslab replay .harnesslab/trace.jsonl --session-id ses_abc123
-
-# Telemetry aggregation (human-readable or JSON).
 uv run harnesslab metrics .harnesslab/trace.jsonl
-uv run harnesslab metrics .harnesslab/trace.jsonl --json
-
-# Context window observability: peak usage and per-call snapshots.
 uv run harnesslab context .harnesslab/trace.jsonl show
-uv run harnesslab context .harnesslab/trace.jsonl series --limit 10
-uv run harnesslab context .harnesslab/trace.jsonl show --json
 ```
 
-`replay` exit codes:
-
-| Code | Meaning |
+| `replay` exit | Meaning |
 | --- | --- |
-| 0 | Every session replayed and matched the original. |
-| 2 | Trace is unreplayable (missing required events, malformed payload, or unknown `--session-id`). |
-| 4 | At least one session diverged; details are printed per session. |
+| 0 | All sessions matched |
+| 2 | Unreplayable trace |
+| 4 | Divergence detected |
 
-`metrics` always exits 0; it is an observation tool, not a gate.
+Semantic replay ignores timestamps, volatile tool output previews, model token
+counts, and `context` snapshots; event order, tool args, and policy outcomes
+must match.
 
-Semantic divergence ignores: timestamps (`created_at`, `started_at`,
-`ended_at`, `duration_ms`, `latency_ms`), id renaming (`ses_*`, `msg_*`, `tool_*`,
-`run_*` are normalized to `<prefix>_NNN` in first-appearance order),
-tool output text (`output_preview`, `output_size`,
-`output_truncated`), model telemetry (`model_name`, `provider`,
-`request_tokens`, `response_tokens`, `total_tokens`), and the Phase 2.6
-`context` snapshot on `model_call` events — those reflect
-provider/runtime variability rather than loop behavior.
-Everything else — the sequence of event types, the tool name and args,
-the policy decision, the `ok` / `error` outcome — must match.
+### Improvement proposals
 
-### Improvement Proposals
-
-When recurring failures show up in real traces or eval runs,
-`harnesslab propose` turns them into advisory markdown proposals in
-`proposals/`. Proposals are **never applied automatically**; see
-`AGENTS.md` "Proposal Handling" for the binding contract.
+`harnesslab propose` mines traces/eval for recurring failures and writes
+**advisory** markdown under `proposals/`. Proposals are **never auto-applied**;
+see [`AGENTS.md`](AGENTS.md) (Proposal Handling).
 
 ```bash
-# Mine a production trace for failure clusters.
 uv run harnesslab propose --trace .harnesslab/trace.jsonl
-
-# Combine trace + eval failures, write into a custom dir.
-uv run harnesslab propose \
-    --trace .harnesslab/trace.jsonl \
-    --eval-report eval/reports/latest.json \
-    --out proposals/
-
-# Single events do not warrant a proposal. Default min-occurrences is 2.
-uv run harnesslab propose --trace .harnesslab/trace.jsonl --min-occurrences 3
-
-# Non-destructive preview (JSON to stdout, no files written).
-uv run harnesslab propose --trace .harnesslab/trace.jsonl --format json
+uv run harnesslab propose --trace .harnesslab/trace.jsonl --eval-report eval/reports/latest.json
 ```
 
-Each proposal file (`prop_<YYYYMMDDhhmm>_<sig8>.md`) has YAML
-front-matter (id, status, kind, cluster_signature, occurrences,
-generated_at, related_files) plus body sections including an
-**Acceptance checklist** that requires:
+## Contributing
 
-- Human review
-- `uv run pytest` green
-- `uv run harnesslab eval` showing no baseline regression
-- A new or updated test if code changed
+HarnessLab welcomes PRs that keep the harness **readable and testable**.
 
-The generator dedupes against any signature with an `open` proposal
-on disk, so re-running `propose` is safe and idempotent. To clear a
-proposal, edit its front-matter `status` to `accepted` / `rejected` /
-`superseded` in a reviewed commit.
+1. Read [`AGENTS.md`](AGENTS.md) — architecture rules, proposal policy, quality gate.
+2. Before commit: `uv run pytest` and `uv run ruff check` (also enforced by
+   pre-commit).
+3. Behavior or **Port** contract changes → update `docs/architecture/*` and
+   tests in the same PR.
+4. Intentional eval baseline changes → `uv run harnesslab eval --update-baseline`
+   with review.
 
-`harnesslab propose` always exits 0 — it is a discovery tool, not a
-gate. The gate is `harnesslab eval`, enforced by the checklist on
-every proposal.
+Learning-oriented design notes belong in [`docs/why-harnesslab.md`](docs/why-harnesslab.md);
+runtime contracts belong in [`docs/architecture/`](docs/architecture/).
 
-## Quality Gate
+## Project layout
 
-Before every commit, both `uv run pytest` and `uv run ruff check` must
-pass. This is enforced by the local pre-commit hook
-(`.pre-commit-config.yaml`) and documented in `.cursor/rules/quality-gate.mdc`
-for AI agents working on the repo.
+- `src/harnesslab/core` — loop, contracts, prompt, compaction, context
+- `src/harnesslab/tools` — tool registry and implementations
+- `src/harnesslab/policy` — authorization and safety
+- `src/harnesslab/session`, `memory` — persistence; `/remember` write path
+- `src/harnesslab/providers` — `ModelPort` adapters (multi-vendor)
+- `src/harnesslab/web`, `webui/` — HTTP server + TS chat UI
+- `src/harnesslab/eval`, `replay`, `improve` — eval, replay, proposals
+- `eval/` — tasks, baseline, reports
+- `skills/` — workspace skills (`/deep-research`, `/humanizer`, `compact`, …)
+- `docs/` — roadmap, architecture, research
 
-## Project Layout
+## Documentation map
 
-- `src/harnesslab/core`: contracts, domain models, agent loop; `prompt/`,
-  `compaction.py`, `context.py`
-- `src/harnesslab/tools`: tool registry and built-in tools
-- `src/harnesslab/policy`: safety policy checks
-- `src/harnesslab/session`: session store (in-memory + SQLite)
-- `src/harnesslab/memory`: memory store (persistence only; no loop
-  writeback yet)
-- `src/harnesslab/telemetry`: JSONL trace recorder and metrics aggregation
-- `src/harnesslab/providers`: `ModelPort` adapters (DeepSeek)
-- `src/harnesslab/eval`: YAML task suite and regression runner
-- `src/harnesslab/replay`: trace reader, replayer, divergence detector
-- `src/harnesslab/improve`: advisory proposal generator
-- `eval/`: shipped tasks, baseline, reports
-- `docs/`: roadmap and architecture documentation
+| Doc | Content |
+| --- | --- |
+| [`docs/README.md`](docs/README.md) | **Documentation index** + learning paths |
+| [`docs/why-harnesslab.md`](docs/why-harnesslab.md) | **Why this repo exists** (learning harness) |
+| [`docs/roadmap.md`](docs/roadmap.md) | Phased delivery + **What's next** backlog |
+| [`docs/architecture/overview.md`](docs/architecture/overview.md) | Runtime map and flows |
+| [`docs/architecture/tool-runtime.md`](docs/architecture/tool-runtime.md) | Tools and policy |
+| [`docs/architecture/data-model.md`](docs/architecture/data-model.md) | Messages, traces, sessions |
+| [`docs/architecture/compaction.md`](docs/architecture/compaction.md) | Auto/manual compaction |
+| [`docs/architecture/web-api.md`](docs/architecture/web-api.md) | HTTP + SSE API |
+| [`docs/architecture/webui-design.md`](docs/architecture/webui-design.md) | Chat UX principles |
+| [`docs/research/harness-landscape.md`](docs/research/harness-landscape.md) | Industry comparison |
+| [`AGENTS.md`](AGENTS.md) | Contributor + AI agent guidelines |
 
-## Documentation
+## License
 
-- `AGENTS.md`: binding guidelines for AI agents and contributors
-- `docs/roadmap.md`: MVP steps and Post-MVP phases (Phase 2 complete)
-- `docs/architecture/overview.md`: architecture boundaries and runtime flow
-- `docs/architecture/tool-runtime.md`: tool runtime and safety model
-- `docs/architecture/data-model.md`: core runtime data contracts
-- `docs/architecture/diagram-conventions.md`: Mermaid naming and style rules
-
+MIT — see [`LICENSE`](LICENSE).

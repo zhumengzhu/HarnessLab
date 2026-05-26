@@ -2,7 +2,8 @@
 
 ## Scope
 
-HarnessLab is a local, single-process harness built for learning:
+HarnessLab is a local, single-process harness built for learning (see
+[`why-harnesslab.md`](why-harnesslab.md)):
 
 - Minimal agent loop
 - Sandboxed tool execution (policy enforced)
@@ -62,26 +63,33 @@ flowchart TD
     S6 --> P11 --> P21 --> P22 --> P23 --> P24 --> P25 --> P26
 ```
 
-## Current State (Post-MVP Phase 3–4 — complete)
+## Current State (2026-05 — Phase 5 substantially complete)
 
-HarnessLab is a daily-usable local agent harness. The shipped runtime includes
-everything from Phase 2 **plus**:
+HarnessLab is a **daily-usable local agent harness** and a **learning
+codebase** for building your own agent runtime. Shipped capabilities include
+everything through Phase 4 **plus** most of Phase 5:
 
-- **Web chat UI** (`harnesslab serve`, `./hl-serve`) with SSE trace panel,
-  settings snapshot, tool cards, fork, `/remember`, auto session titles (DeepSeek)
-- **Session- and workspace-scoped memory** (`/remember`, `/remember-global`)
-- **Eight built-in tools** including `apply_patch` and allowlisted `fetch_url`
-- **Fourteen eval tasks** + GitHub Actions offline gate (`--skip-tags network`)
-- **Operator config** (`config.json`) + **provider registry** (DeepSeek v4)
-- **Provider message round-trip** — assistant `tool_calls` + tool results
-  persisted for DeepSeek/OpenAI-compatible replay
+- **Multi-provider** `ModelPort` adapters (DeepSeek, Anthropic, OpenAI, Gemini, `simple`)
+- **Research tools** — `web_search`, tiered `fetch_url`, `html_to_markdown`, `read_pdf`
+- **Artifact store**, **MCP adapter**, **Python sandbox**, **tool hooks**
+- **Plan mode** (`Decision.kind == plan`), **checkpoints + CLI rewind**
+- **Cost/token budgets** (soft/hard enforcement; USD cost mapping partial)
+- **OTel** trace fan-out + metrics histograms
+- **Proposal review Web UI** with local pytest/eval gates
+- **TS Web UI default** when built — SSE step + token streaming, slash palette,
+  `/compact`, `/skillname`, session restore, model persist
+- **Multi-agent PoC** — `spawn_sub_agent` + `start_child` (opt-in via config);
+  **production sub-agent** planned (Phase 6)
+- **Workspace skills** — `skills/*.md`, `/skillname`, composer palette;
+  **skill search/install** planned (Phase 7)
+- **Fifteen eval tasks** + GitHub Actions offline gate (`--skip-tags network`)
 
-Historical Phase 2 snapshot (for context):
+**Authoritative future work:** see [What's next](#whats-next-prioritized) below.
 
-- **Multi-step agent loop** (`run_session`, `--max-steps`; terminal
-  decisions `final` / `ask_user`)
-- **Prompt composer**, **session first-class**, **auto compaction**
-- **Context observability**, **DeepSeek provider**, **eval / replay / propose**
+Historical snapshot (Phase 2–4 baseline):
+
+- Multi-step agent loop, prompt composer, session first-class, auto compaction
+- Web chat UI, session/workspace memory, operator config, eval/replay/propose
 
 ## MVP Deliverables (historical — Step 1 baseline)
 
@@ -724,14 +732,13 @@ Steps 1–6. Nothing starts until its Entry criteria are objectively true.
 
 ---
 
-## Post-MVP Phase 5 — Research-capable harness (next)
+## Post-MVP Phase 5 — Research-capable harness — **substantially complete**
 
-Phase 4 made the harness *trustworthy under daily use*. Phase 5 broadens the
-**tool reach** and the **task shape** the harness can credibly take on:
-from "local code helper" to "research-capable single agent". It deliberately
-stops short of multi-agent (see Phase 6) and stays inside AGENTS.md's
-"single-process runtime, no plugin marketplace, no auto-applied proposals"
-constraints.
+Phase 4 made the harness *trustworthy under daily use*. Phase 5 broadened
+tool reach and task shape (research, artifacts, plan mode, MCP, sandbox,
+budgets, proposal UX). Remaining Phase 5 polish is tracked in
+[What's next](#whats-next-prioritized) (primarily **5.10 cost budgets** and
+a few Web UI gaps).
 
 ```mermaid
 flowchart TD
@@ -753,7 +760,7 @@ flowchart TD
 
 Same **Entry / Deliverables / Exit** bar as previous phases.
 
-### Phase 5.1 — Web tool surface — Not started
+### Phase 5.1 — Web tool surface — DONE
 
 - **Entry**: `fetch_url` host allowlist is the only network surface; eval
   has a `network` tag.
@@ -767,13 +774,12 @@ Same **Entry / Deliverables / Exit** bar as previous phases.
       `robots.txt` advisory check, response size + content-type caps,
       and an env-deny list.
   - `html_to_markdown` and `read_pdf` (via `pypdfium2`) for ingest.
-  - One eval task `research_summary` (network-tagged) that searches +
-    fetches + summarizes a stable URL.
-- **Exit**: `harnesslab eval --skip-tags network` stays green; the new task
-  runs cleanly under `RUN_LIVE=1`; policy denials still produce normalized
-  `ToolResult(ok=False)`; docs in `tool-runtime.md` updated.
+  - Optional eval task `research_summary` (network-tagged) — **not yet
+    shipped**; see What's next.
+- **Exit**: `harnesslab eval --skip-tags network` stays green; policy denials
+  produce normalized `ToolResult(ok=False)`; docs in `tool-runtime.md` updated.
 
-### Phase 5.2 — Artifact store — Not started
+### Phase 5.2 — Artifact store — DONE
 
 - **Entry**: Phase 5.1's larger outputs make message-embedded content
   expensive.
@@ -793,7 +799,7 @@ Same **Entry / Deliverables / Exit** bar as previous phases.
   `replay` still works (refs treated as volatile); contract tests for
   put/get/list; data-model.md updated.
 
-### Phase 5.3 — Plan-then-execute loop mode — In progress
+### Phase 5.3 — Plan-then-execute loop mode — DONE
 
 - **Entry**: Phase 5.1 + 5.2 shipped (research-class tasks already feasible).
 - **Deliverables**:
@@ -812,7 +818,7 @@ Same **Entry / Deliverables / Exit** bar as previous phases.
   new task green; AGENTS.md Phase 2 Loop Contract gains `plan` as
   non-terminal kind (alongside `assistant`).
 
-### Phase 5.4 — MCP (Model Context Protocol) adapter — Not started
+### Phase 5.4 — MCP (Model Context Protocol) adapter — DONE
 
 - **Entry**: Phase 5.1 web tools exist as native baseline (so MCP is
   additive, not the only path).
@@ -833,7 +839,7 @@ Same **Entry / Deliverables / Exit** bar as previous phases.
   (e.g. `@modelcontextprotocol/server-filesystem`) round-trips a tool
   call end-to-end; eval/replay unaffected.
 
-### Phase 5.5 — Python sandbox tool — Not started
+### Phase 5.5 — Python sandbox tool — DONE
 
 - **Entry**: Phase 5.3 plan mode exists (gives the model a structured way
   to use a sandbox in research tasks).
@@ -853,7 +859,7 @@ Same **Entry / Deliverables / Exit** bar as previous phases.
   asymmetry (macOS vs Linux); default profile keeps the tool off;
   `harnesslab run --model simple` still passes existing eval.
 
-### Phase 5.6 — OTel metrics histograms — Not started
+### Phase 5.6 — OTel metrics histograms — DONE
 
 - **Entry**: Phase 5.x telemetry on `model_call` / `tool_executed`
   unchanged; P7 OTel spans already shipped.
@@ -872,7 +878,7 @@ Same **Entry / Deliverables / Exit** bar as previous phases.
 - **Exit**: enabling OTel metrics changes neither JSONL trace nor eval
   baseline; metrics appear in a local OTel collector smoke test.
 
-### Phase 5.7 — Proposal review surface (Web UI) — In progress
+### Phase 5.7 — Proposal review surface (Web UI) — DONE
 
 - **Entry**: `harnesslab propose` is shipped (Step 6); proposals on disk
   follow the AGENTS.md lifecycle.
@@ -904,7 +910,7 @@ Same **Entry / Deliverables / Exit** bar as previous phases.
   the gate result but never bypasses it; integration test asserts
   guarded transition behavior.
 
-### Phase 5.8 — Tool lifecycle hooks (pre/post) — In progress
+### Phase 5.8 — Tool lifecycle hooks (pre/post) — DONE
 
 - **Entry**: Phase 5.4 MCP adapter shipped (so native + MCP tools share
   one interception surface).
@@ -930,25 +936,15 @@ Same **Entry / Deliverables / Exit** bar as previous phases.
   and produce a normalized denial reason; docs in `tool-runtime.md`
   explain ordering and failure policy.
 
-### Phase 5.9 — Checkpoint & rewind (session-safe undo) — Not started
+### Phase 5.9 — Checkpoint & rewind (session-safe undo) — **partial**
 
-- **Entry**: Phase 5.2 artifact store shipped (checkpoint metadata can
-  reuse artifact refs).
-- **Deliverables**:
-  - Checkpoint snapshot before mutating tools:
-    `write_file`, `edit_file`, `apply_patch`, and approved
-    `run_shell_safe` file mutations.
-  - New CLI:
-    - `harnesslab session checkpoints <session-id>`
-    - `harnesslab session rewind <session-id> <checkpoint-id>`
-  - Web UI "rewind" action on session timeline (readable diff before
-    restore; explicit confirm required).
-  - Trace events: `checkpoint_created`, `checkpoint_restored`.
-- **Exit**: deterministic test verifies `rewind` restores file content
-  and session continues from the restored state; replay semantic compare
-  treats checkpoint ids as volatile.
+- **Shipped:** checkpoint snapshots before mutating tools; CLI
+  `harnesslab session checkpoints|rewind`; trace events
+  `checkpoint_created` / `checkpoint_restored`; deterministic rewind tests.
+- **Remaining:** Web UI rewind on session timeline with diff preview +
+  explicit confirm (see What's next).
 
-### Phase 5.10 — Session token/cost budgets — In progress
+### Phase 5.10 — Session token/cost budgets — **In progress**
 
 - **Entry**: `ContextSnapshot` and provider token metadata are already
   available from Phase 2.6 + provider expansion.
@@ -974,39 +970,112 @@ Same **Entry / Deliverables / Exit** bar as previous phases.
 
 **Phase 5 explicitly does NOT include**
 
-- Multi-agent orchestration (Phase 6 below)
-- Vector / semantic memory retrieval (deferred — see "Deferred")
-- Browser automation that ships its own driver (deferred — when needed,
-  reach for an MCP Playwright server instead, see Phase 5.4)
-- Plugin marketplace, distributed runtime, TS migration
+- Full multi-agent fleet orchestration (Phase 6 below — PoC only today)
+- Vector / semantic memory retrieval (deferred)
+- Browser automation with in-process driver (use MCP Playwright instead)
+- Plugin marketplace, distributed runtime
 
-**Recommended execution order for Phase 5**
-
-1. **5.1** — Web tools first; immediate value, lowest architectural risk.
-2. **5.2** — Artifact store before 5.3/5.4 so long outputs don't bloat
-   sessions on day one.
-3. **5.3** — Plan mode; foundation for both 5.5 and 5.7.
-4. **5.4** — MCP adapter; pure expansion, no behavior change for existing
-   tools.
-5. **5.5** — Python sandbox; higher-risk, do after 5.3 to give the model a
-   structured way to invoke it.
-6. **5.6** — Metrics histograms; small, isolated.
-7. **5.7** — Proposal Web UI; last because it must layer cleanly over a
-   stable Web UI and stable eval gate.
-8. **5.8** — Tool hooks; after MCP so hook coverage spans both native
-   and MCP tools from day one.
-9. **5.9** — Checkpoint/rewind; after artifact store + stable Web UI.
-10. **5.10** — Budgets; after metrics so accounting/alerts are grounded.
+Historical note: the original Phase 5 execution order (5.1→5.10) guided
+delivery; most items are now **DONE**. Use [What's next](#whats-next-prioritized)
+for remaining work.
 
 ---
 
-## Post-MVP Phase 6 — Multi-agent exploration (design only)
+## What's next (prioritized)
 
-> **Status: not approved for implementation.** AGENTS.md still forbids
-> multi-agent orchestration; entering Phase 6 requires (a) finishing
-> Phase 5, (b) accepting the recommendation written in
-> [`docs/architecture/multi-agent-exploration.md`](architecture/multi-agent-exploration.md),
-> and (c) updating AGENTS.md "Must NOT include yet" in the same commit.
+This section is the **living backlog** after Phase 5 substantial completion.
+Items are ordered by impact on daily use and learning clarity. Each should
+ship with tests + doc updates per `AGENTS.md`.
+
+### P0 — Correctness & provider parity
+
+| Item | Why | Entry signal |
+| --- | --- | --- |
+| **Multi-turn thinking replay (OpenAI-chat / DeepSeek)** | API 400 without historical `reasoning_content` on tool assistants | **DONE** — transform replays all tool-loop assistants |
+| **Anthropic / Gemini multi-turn tool+thinking replay audit** | Same class of bug on other `api_family` transforms | First live multi-turn tool session fails replay |
+| **Token streaming beyond DeepSeek** | Web UI already renders deltas; other backends still step-only | Operator expects live thinking on Claude/GPT/Gemini |
+
+### P1 — Close Phase 5
+
+| Item | Why | Notes |
+| --- | --- | --- |
+| **5.10 cost budgets** | Token/time limits exist; USD guardrails incomplete | Price table in catalog; `max_session_cost_usd_total`; CLI `session show` budget block |
+| **5.10 eval tasks** | Pin soft/hard budget crossings deterministically | YAML tasks with `ReplayModel` |
+| **5.9 Web UI rewind** | CLI rewind shipped; browser lacks confirm+diff UX | Reuse checkpoint API; Advanced mode |
+| **`research_summary` eval task** | Phase 5.1 optional deliverable never added | Network-tagged; `RUN_LIVE_EVAL=1` lane |
+
+### P2 — Web UI & operator UX
+
+| Item | Why |
+| --- | --- |
+| **TS migration Phase D/E completion** | Remove legacy static UI after stable release window |
+| **SSE stream integration tests** | Guard `trace`/`delta`/`done` ordering regressions |
+| **Optional Playwright smoke** | Non-blocking E2E for core chat workflow |
+| **MCP health in settings panel** | Phase 5.4 deliverable partially deferred |
+| **Provider failover UX** | P6 backend exists; Web UI surfacing TBD |
+| **Chat long-reply expand UX** | **DONE** — main replies always full (Cursor-like); Thinking/Tool stay collapsible |
+
+### P3 — Sub-agent (Phase 6 production)
+
+> **PoC shipped:** `spawn_sub_agent` tool + `start_child` + eval path
+> (`loop.multi_agent` config). **Goal:** first-class sub-agent support for
+> supervisor-style research and coding workflows — not a hidden one-off tool.
+
+| Item | Why | Notes |
+| --- | --- | --- |
+| **Supervisor loop hardening** | Safe, observable child runs | Trace fan-in; budget isolation; policy defaults per child |
+| **Web UI: child session panel** | See spawn → child activity → result in chat | Sidebar link or nested turn card |
+| **Streaming / LiveTurn for children** | Parent turn shows sub-agent progress | Optional nested Thinking/Tool rows |
+| **Eval tasks for spawn** | Deterministic regression | e.g. `supervisor_research_then_write` in multi-agent RFC |
+| **Depth & concurrency limits** | Prevent runaway spawn trees | `max_sub_agent_depth`, per-session caps |
+| **Operator enable path** | Discoverable toggle | Config + Web settings; document in README |
+| **Product shape decision** | Lock supervisor vs pipeline | [`multi-agent-exploration.md`](architecture/multi-agent-exploration.md) |
+| **AGENTS.md gate** | Promote from "Must NOT" when accepted | Distributed fleet orchestration still out of scope |
+
+### P4 — Skills discovery & install (Phase 7)
+
+> **Today:** skills are **workspace-local** only (`<workspace>/skills/*.md`);
+> discovery is `list_skills()` + composer `GET /api/composer/commands`.
+> No remote search or install.
+
+| Item | Why | Notes |
+| --- | --- | --- |
+| **Skill catalog / search** | Find skills without manual copy | Local cache + optional remote index URLs |
+| **`harnesslab skill search`** | CLI discovery | Query name, description, tags (YAML front-matter) |
+| **`harnesslab skill install`** | Install `.md` into workspace or user dir | Git URL, catalog id, or file path |
+| **Web UI skill browser** | Search, preview, install from settings/composer | After install, `/skillname` pin unchanged |
+| **Global vs workspace scope** | Share skills across projects | e.g. `~/.config/harnesslab/skills/` + workspace override |
+| **Trust model** | No autonomous installs | Operator explicit only — not a plugin marketplace |
+| **Eval / replay** | Skills remain static prompt files | No replay contract change |
+
+**Phase 7 explicitly excludes:** public marketplace, paid listings, model-initiated
+install without human confirmation.
+
+### P5 — Learning harness depth (optional)
+
+| Item | Why |
+| --- | --- |
+| **Vector / semantic memory** | Deferred until ≥3 real research sessions lack recall — see Deferred |
+| **Offline metrics HTML dashboard** | Nice-to-have; OTel + Grafana cover most needs |
+| **Constrained provider plugins** | §6.7 in provider-expansion — local entry_points only, no marketplace |
+| **TUI client (`harnesslab tui`)** | Experimental; Textual stack in `tui-stack-options.md` |
+
+### Explicit non-goals (unchanged)
+
+- Distributed runtime / worker pool
+- **Plugin marketplace** (Phase 7 skill install is operator-initiated only)
+- Auto-applied improvement proposals
+- Production SaaS / public bind / auth layer in core
+
+---
+
+## Post-MVP Phase 6 — Multi-agent exploration — **PoC shipped, orchestration incremental**
+
+> **Status:** `spawn_sub_agent` + `start_child` PoC is live (opt-in via
+> `loop.multi_agent`). Full fleet orchestration is **not approved** until
+> the product shape in
+> [`multi-agent-exploration.md`](architecture/multi-agent-exploration.md)
+> is accepted and AGENTS.md is updated in the same change.
 
 Goals of the exploration:
 
@@ -1027,9 +1096,69 @@ Goals of the exploration:
   committing to a long-lived architecture.
 - Identify which AGENTS.md rules must change and which must hold.
 
-Phase 6 ships **a design document and a 1-task PoC**, not a feature.
-See the full RFC for the candidate product shapes, decision criteria,
-and recommended PoC.
+Phase 6 **started** with the design RFC and a deterministic eval PoC.
+Next steps are in [What's next — Sub-agent (Phase 6)](#p3--sub-agent-phase-6-production).
+See the full RFC for candidate product shapes, decision criteria, and the
+recommended supervisor PoC path.
+
+### Phase 6.1 — Sub-agent production (planned)
+
+- **Entry:** PoC tool + `parent_session_id` + opt-in config shipped; supervisor
+  shape accepted in [`multi-agent-exploration.md`](architecture/multi-agent-exploration.md).
+- **Deliverables:**
+  - Documented operator enable (`loop.multi_agent` + Web settings).
+  - Child session visibility: `harnesslab session show --include-children`;
+    Web UI child panel / nested activity.
+  - Spawn limits enforced and traced (`max_sub_agent_depth`,
+    `max_sub_agents_per_session`).
+  - Deterministic eval task covering parent → child → parent result round-trip.
+  - Optional: LiveTurn rows when parent invokes `spawn_sub_agent`.
+- **Exit:** daily-use supervisor workflow on one research task; child traces
+  replay independently; AGENTS.md updated to list sub-agent under "Must include"
+  (fleet orchestration still forbidden).
+
+### Phase 6 explicitly does NOT include
+
+- Distributed worker pool / cross-machine scheduling
+- Sub-agents spawning unbounded child trees without depth caps
+- Background agent fleet without operator visibility in trace
+
+---
+
+## Post-MVP Phase 7 — Skills discovery & install (planned)
+
+Phase 5.2 shipped **workspace skills** as markdown files the composer can pin
+and inject. Phase 7 adds **discovery and installation** so operators can find
+and add skills without hand-copying repos.
+
+```mermaid
+flowchart LR
+    Catalog[Skill catalog / index] --> Search[harnesslab skill search]
+    Search --> Install[harnesslab skill install]
+    Install --> Local[(workspace or user skills/*.md)]
+    Local --> Composer[PromptComposer + /skillname]
+    Composer --> Loop[HarnessLoop]
+```
+
+- **Entry:** Phase 5 skills stable (`/skill`, `/skillname`, bounded injection);
+  composer commands API shipped.
+- **Deliverables:**
+  - Skill metadata schema (YAML front-matter: `name`, `description`, `tags`,
+    optional `source` URL) on each `*.md`.
+  - Configurable **catalog sources** in `config.json` (local paths + HTTPS
+    index URLs); offline-first with cached index.
+  - CLI: `harnesslab skill list|search|install|remove`.
+  - Web UI: skill browser (search, markdown preview, install button).
+  - Install targets: `<workspace>/skills/` and optional
+    `~/.config/harnesslab/skills/` (workspace wins on name conflict).
+  - Trust: installs require explicit operator action; trace event
+    `skill_installed` (optional) for audit.
+- **Exit:** install from a documented sample catalog; installed skill appears
+  in `/` palette; eval/replay unchanged; architecture doc for skill runtime.
+
+**Phase 7 explicitly does NOT include:** Curated public marketplace UI,
+auto-install from model tool calls, or skills that execute code outside the
+existing tool/policy boundary (skills remain **prompt documents** only).
 
 ---
 
@@ -1073,7 +1202,9 @@ and recommended PoC.
   now bun-first (`bun.lock` + bun command docs). TS bundle output
   (`static_ts/`) is build-time only (gitignored). Default **Simple Chat**
   mode in TS UI hides operator panels until Advanced is selected.
-  Default serve UX remains legacy.
+  Default serve UX is **TS when built** (`HARNESSLAB_WEB_UI_VERSION=ts`);
+  legacy fallback when `static_ts/` is missing. Token SSE, slash palette,
+  `/compact`, and `/skillname` invoke shipped in Phase C.
 - **TUI client surface.** Backend remains Python. Stack options captured in
   `docs/architecture/tui-stack-options.md` (Textual-first recommendation).
 - **Distributed runtime / plugin marketplace.** No path to a "must

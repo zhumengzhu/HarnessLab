@@ -10,6 +10,8 @@ from harnesslab.core.compaction import (
     compact_messages,
     estimate_messages_tokens,
     estimate_tokens,
+    format_message_for_summary,
+    parse_compact_command,
     should_compact,
 )
 from harnesslab.core.config import RuntimeLimits
@@ -53,6 +55,28 @@ def test_estimate_messages_tokens_sums_message_content() -> None:
 
 
 # ---------- should_compact ----------
+
+
+def test_parse_compact_command() -> None:
+    assert parse_compact_command("/compact") is True
+    assert parse_compact_command("  /compact  ") is True
+    assert parse_compact_command("/compact now") is False
+    assert parse_compact_command("/remember x") is False
+
+
+def test_format_message_for_summary_includes_thinking() -> None:
+    line = format_message_for_summary(
+        Message(
+            id="m1",
+            role="assistant",
+            content="answer",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="s",
+            reasoning_text="plan first",
+        )
+    )
+    assert "(thinking: plan first)" in line
+    assert "answer" in line
 
 
 def test_should_compact_false_when_empty() -> None:

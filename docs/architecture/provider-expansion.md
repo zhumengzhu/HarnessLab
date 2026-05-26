@@ -6,6 +6,7 @@ without leaking SDK shapes into `core`, while handling **thinking / reasoning**
 correctly per vendor.
 
 Related: [overview.md](./overview.md) (Provider Integration), [data-model.md](./data-model.md),
+[model-parameters.md](./model-parameters.md) (per-model official parameters),
 [AGENTS.md](../../AGENTS.md) (ModelPort stability, eval determinism).
 
 ### Pinned upstream references
@@ -314,13 +315,38 @@ Secrets: unchanged — env var names in config only.
 2. Keep `httpx` implementation until parity tests pass, then delete duplicate.
 3. No change to `ModelPort` or loop.
 
-### 6.6 Streaming (defer but design for)
+### 6.6 Streaming
 
-Neither OpenCode nor HarnessLab Web UI strictly requires streaming for Post-MVP phase 1, but transports should expose `stream_decide()` when added:
+Web UI SSE streams **trace events** (step-level) and, for thinking models,
+**token deltas** (`reasoning_delta`, `assistant_delta`) via `stream_context`.
+DeepSeek OpenAI-chat transport implements token streaming first; Anthropic /
+OpenAI Responses / Gemini streaming remains incremental work.
 
-- Web UI SSE already streams **trace events**, not tokens.
-- Future: optional token/thinking stream on same SSE channel.
-- Design `TransportAdapter` with sync `complete()` first, async/stream later.
+Design rule: streaming callbacks stay adapter-internal until the loop grows
+an async API; trace JSONL remains the source of truth for replay.
+
+### 6.6.1 Thinking replay policy (OpenAI-chat / DeepSeek)
+
+DeepSeek returns HTTP 400 when an assistant message with `tool_calls` is
+resent without matching `reasoning_content`. HarnessLab persists thinking
+as `Message.reasoning_text` and the `openai_chat` transform replays it on
+**every** historical assistant+tool_calls row in the wire transcript — not
+only when the last message is `tool`.
+
+| Scenario | Required wire behavior |
+| --- | --- |
+| Open tool loop (last message `tool`) | Inject `reasoning_content` on matching assistant |
+| New user turn after prior tool loop | Same — historical tool assistants still need reasoning |
+| Compacted-away turns | Raw reasoning dropped; tail messages retain `reasoning_text` |
+| `reasoning_support: none` | No injection |
+
+Golden tests: `tests/test_openai_chat_transform.py`,
+`tests/test_deepseek_provider.py`. When vendor semantics change, update
+transform + tests before catalog entries.
+
+Other API families (Anthropic thinking blocks, Gemini thought signatures)
+use family-specific `replay_policy` hooks — audit each when adding multi-turn
+tool+thinking sessions.
 
 ### 6.7 Extension hooks & plugins (future capability)
 
@@ -354,8 +380,8 @@ not targets for parity. HarnessLab remains a single-process learning harness.
 | Registry | `simple`, `deepseek`, `anthropic`, `openai`, `gemini` | Catalog-driven `provider/model` refs (partial — catalog + backend switch shipped) |
 | Message model | `reasoning_text` + `provider_extra` on `Message` | Extend when new replay families need persisted blobs |
 | Composer | `as_openai_messages()` + per-family transforms | Optional `as_wire_messages(api_family)` if transforms outgrow OpenAI pivot |
-| DeepSeek thinking | Tool-loop `reasoning_content` replay via transform | Maintain golden tests when vendor semantics change |
-| Trace | JSONL + optional OTel fan-out (`OtelTraceRecorder`) | Metrics histograms deferred; span mapping documented in data-model |
+| DeepSeek thinking | Multi-turn + tool-loop `reasoning_content` replay via transform | Extend replay tests when adding new thinking models |
+| Trace | JSONL + optional OTel fan-out + metrics histograms (Phase 5.6) | Grafana dashboard JSON optional |
 | Tests | Mocked SDK/transport per provider family | Optional `RUN_*_LIVE=1` live lanes; eval stays on `simple` / replay |
 
 ---
@@ -396,7 +422,8 @@ When adding a model:
 1. Add catalog entry with `api_family`, thinking schema, context limits.
 2. Implement or reuse transform + transport; add mocked contract tests.
 3. Document env vars in `scripts/hl-serve.example.env` and config example JSON.
-4. If thinking + tools: add **tool-loop replay test** (mock 400 on missing reasoning).
+4. If thinking + tools: add **tool-loop replay test** (mock 400 on missing reasoning)
+   and **multi-turn replay test** (new user message after prior tool loop).
 5. Update this doc’s matrix (§2.1) if vendor changes semantics.
 6. Run `uv run pytest`, `uv run harnesslab eval --skip-tags network`.
 7. Optional live smoke:

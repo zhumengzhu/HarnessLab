@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiGet } from "../../lib/api-client";
+import { MarkdownView } from "../../lib/MarkdownView";
 import type {
   ProposalDetailResponse,
   ProposalGateRunResult,
@@ -202,23 +203,6 @@ export function ProposalPanel() {
         </div>
       </section>
     </section>
-  );
-}
-
-function MarkdownView({ markdown }: { markdown: string }) {
-  const lines = markdown.split("\n");
-  return (
-    <div className="markdown-view">
-      {lines.map((line, idx) => {
-        if (line.startsWith("### ")) return <h4 key={idx}>{line.slice(4)}</h4>;
-        if (line.startsWith("## ")) return <h3 key={idx}>{line.slice(3)}</h3>;
-        if (line.startsWith("# ")) return <h2 key={idx}>{line.slice(2)}</h2>;
-        if (line.startsWith("- ")) return <li key={idx}>{line.slice(2)}</li>;
-        if (/^\d+\.\s+/.test(line)) return <li key={idx}>{line.replace(/^\d+\.\s+/, "")}</li>;
-        if (!line.trim()) return <br key={idx} />;
-        return <p key={idx}>{line}</p>;
-      })}
-    </div>
   );
 }
 

@@ -193,8 +193,10 @@ shapes are what `harnesslab metrics` aggregates.
 | `session_started` | `goal: str` |
 | `user_input_received` | `turn_index: int`, `user_input: str` |
 | `step_started` | `step_index: int`, `reason: "initial" \| "after_<prev_outcome>"` |
-| `model_call` | `decision_kind`, `latency_ms`, `context: ContextSnapshot`, optional: `model_name`, `provider`, `request_tokens`, `response_tokens`, `total_tokens` |
-| `decision_made` | `kind: "assistant" \| "plan" \| "tool" \| "final" \| "ask_user"`, `tool_name: str \| null`, `tool_args: dict`, `assistant_message: str \| null` |
+| `user_input_received` | `turn_index`, `user_input` |
+| `model_call_started` | `step_index`, optional `thinking_likely: bool` |
+| `model_call` | `decision_kind`, `latency_ms`, `context: ContextSnapshot`, optional: `model_name`, `provider`, `request_tokens`, `response_tokens`, `total_tokens`, `reasoning_text`, `prompt_blocks[]`, `api_messages[]` |
+| `decision_made` | `kind: "assistant" \| "plan" \| "tool" \| "final" \| "ask_user"`, `tool_name: str \| null`, `tool_args: dict`, `assistant_message: str \| null`, optional `reasoning_text` |
 | `plan_emitted` | `plan: str` |
 | `tool_invalid_args` | `tool_call_id`, `tool`, `args`, `error` |
 | `tool_denied` | `tool_call_id`, `tool`, `args`, `policy_decision`, `reason` |
@@ -203,13 +205,13 @@ shapes are what `harnesslab metrics` aggregates.
 | `hook_blocked` | `phase: "pre_tool"`, `name`, `type`, `tool_name`, `reason` |
 | `hook_failed` | `phase: "pre_tool" \| "post_tool"`, `name`, `type`, `tool_name`, `error` |
 | `step_completed` | `step_index: int`, `outcome: "final" \| "ask_user" \| "assistant" \| "plan" \| "tool_ok" \| "tool_error" \| "tool_denied" \| "tool_invalid_args"` |
-| `compaction_started` | `trigger: "threshold" \| "overflow"`, `before_messages: int`, `before_tokens: int`, `keep_last: int` |
+| `compaction_started` | `trigger: "threshold" \| "overflow" \| "manual"`, `message_count`, `estimated_tokens`, `threshold_tokens`, `keep_last` |
 | `compaction_completed` | `after_messages: int`, `after_tokens: int` |
 | `budget_soft_threshold` | `dimension`, `current`, `limit`, `ratio`, `scope`, `severity="soft"` |
 | `budget_hard_exceeded` | `dimension`, `current`, `limit`, `ratio`, `scope`, `severity="hard"` |
 | `budget_enforcement_action` | `action: "ask_user" \| "final" \| "error"` |
 | `plan_recheck_requested` | `steps_used`, `replan_after_steps` |
-| `session_finished` | `reason: "final" \| "ask_user" \| "max_steps" \| "overflow" \| "remember" \| "remember_global"`, `steps: int` |
+| `session_finished` | `reason: "final" \| "ask_user" \| "max_steps" \| "overflow" \| "remember" \| "remember_global" \| "compact"`, `steps: int` |
 | `session_titled` | `title: str`, `previous_title: str \| null`, `source: "llm"` |
 | `memory_read` | `key: str`, `line_count: int` |
 | `memory_written` | `key: str`, `line: str`, `line_count: int`, `source: "remember"` |
@@ -224,6 +226,13 @@ shapes are what `harnesslab metrics` aggregates.
 `docs/architecture/overview.md`, Replay & Divergence Model).
 `context` is volatile because token estimates depend on tool
 outputs that embed workspace paths.
+
+### Web SSE events (not persisted)
+
+The Web UI may receive **non-trace** SSE events during a turn:
+``reasoning_delta`` and ``assistant_delta`` (token streaming). These are
+ephemeral UI payloads — not appended to ``trace.jsonl`` — and are excluded
+from replay. See ``docs/architecture/webui-design.md`` § SSE.
 
 ### ContextSnapshot payload shape (Phase 2.6)
 

@@ -124,6 +124,62 @@ def test_serialize_injects_reasoning_content_in_open_tool_loop() -> None:
     assert assistant_msgs[-1]["reasoning_content"] == "think step"
 
 
+def test_serialize_replays_reasoning_on_new_user_turn_after_tool_history() -> None:
+    """DeepSeek rejects requests when historical tool-loop assistants omit reasoning."""
+    session = _session(
+        Message(
+            id="msg_u1",
+            role="user",
+            content="run tool",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+        ),
+        Message(
+            id="msg_a1",
+            role="assistant",
+            content="",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+            tool_calls=[
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": "{}"},
+                }
+            ],
+            reasoning_text="turn one thought",
+        ),
+        Message(
+            id="msg_t1",
+            role="tool",
+            content="file contents",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+            tool_call_id="call_1",
+        ),
+        Message(
+            id="msg_a2",
+            role="assistant",
+            content="done after tool",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+        ),
+        Message(
+            id="msg_u2",
+            role="user",
+            content="continue",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+        ),
+    )
+    composed = PromptComposer().build(session)
+    wire = serialize_messages(composed, session, _entry())
+    tool_assistants = [m for m in wire if m.get("role") == "assistant" and m.get("tool_calls")]
+    assert len(tool_assistants) == 1
+    assert tool_assistants[0]["reasoning_content"] == "turn one thought"
+    assert replay_policy(session, _entry()).include_reasoning_in_tool_loop is True
+
+
 def test_parse_response_final_with_reasoning() -> None:
     turn = parse_response(
         {
@@ -141,6 +197,23 @@ def test_parse_response_final_with_reasoning() -> None:
     assert turn.decision.kind == "final"
     assert turn.decision.assistant_message == "done"
     assert turn.reasoning_text == "hidden"
+
+
+def test_parse_response_reads_reasoning_alias_field() -> None:
+    turn = parse_response(
+        {
+            "choices": [
+                {
+                    "message": {
+                        "content": "done",
+                        "reasoning": "alias path",
+                    }
+                }
+            ]
+        },
+        _entry(),
+    )
+    assert turn.reasoning_text == "alias path"
 
 
 def test_parse_response_tool_with_reasoning() -> None:

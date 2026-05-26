@@ -18,6 +18,7 @@ from harnesslab.core.compaction import (
     Summarizer,
     compact_messages,
     estimate_messages_tokens,
+    parse_compact_command,
     should_compact,
 )
 from harnesslab.core.config import RuntimeLimits
@@ -61,8 +62,14 @@ from harnesslab.core.skill_policy import (
     SkillCommand,
     format_skill_state_message,
     list_skills,
+    parse_direct_skill_command,
     parse_skill_command,
     selected_skills_from_messages,
+)
+from harnesslab.core.stream_context import (
+    bind_stream_sink,
+    reset_stream_sink,
+    set_stream_step_index,
 )
 from harnesslab.core.title import TitleNamer, derive_title_from_text
 from harnesslab.core.tool_hooks import ToolHookRunner
@@ -110,6 +117,7 @@ class HarnessLoop:
         replan_after_steps: int | None = None,
         budget_limits: BudgetLimits | None = None,
         hook_runner: ToolHookRunner | None = None,
+        stream_sink: Any | None = None,
     ) -> None:
         self._model = model
         self._policy = policy
@@ -133,6 +141,7 @@ class HarnessLoop:
         )
         self._budget_limits = budget_limits or BudgetLimits(enabled=False)
         self._hook_runner = hook_runner
+        self._stream_sink = stream_sink
 
     def start(self, goal: str) -> Session:
         session = Session(
@@ -267,7 +276,14 @@ class HarnessLoop:
         if global_body is not None:
             return self._run_remember_global_turn(session, global_body)
 
+        if parse_compact_command(user_input):
+            return self._run_compact_turn(session)
+
         skill_command = parse_skill_command(user_input)
+        if skill_command is None:
+            skill_command = parse_direct_skill_command(
+                user_input, list_skills(self._workspace_root)
+            )
         if skill_command is not None:
             return self._run_skill_turn(session, skill_command)
 
@@ -318,8 +334,16 @@ class HarnessLoop:
                 break
 
             step_input = user_input if step_index == 0 else ""
+            self._record(
+                session=session,
+                event_type="model_call_started",
+                payload={
+                    "step_index": step_index,
+                    "thinking_likely": self._model_thinking_likely(),
+                },
+            )
             decision, decision_started, decision_ended = self._call_model_with_overflow(
-                session, step_input
+                session, step_input, step_index=step_index
             )
             turn_usage.llm_calls += 1
             session.budget_usage.llm_calls_total += 1
@@ -345,6 +369,7 @@ class HarnessLoop:
                     "tool_name": decision.tool_name,
                     "tool_args": decision.tool_args,
                     "assistant_message": decision.assistant_message,
+                    "reasoning_text": self._model_reasoning_text(),
                 },
             )
 
@@ -504,6 +529,49 @@ class HarnessLoop:
             session=session,
             event_type="session_finished",
             payload={"reason": "remember_global", "steps": 0},
+        )
+        session.turn_count += 1
+        session.status = "running"
+        self._maybe_auto_title(session)
+        self._sessions.save(session)
+        return reply
+
+    def _run_compact_turn(self, session: Session) -> str:
+        """Handle ``/compact`` — operator-initiated context compaction."""
+
+        if session.messages and session.messages[-1].role == "user":
+            if parse_compact_command(session.messages[-1].content):
+                session.messages.pop()
+
+        keep_last = self._limits.compaction_keep_last_messages
+        before_count = len(session.messages)
+        before_tokens = estimate_messages_tokens(session.messages)
+
+        if before_count <= keep_last:
+            reply = (
+                f"No compaction needed ({before_count} messages; "
+                f"keep_last={keep_last}, ~{before_tokens} est. tokens)."
+            )
+        else:
+            self._do_compact(session, trigger="manual", keep_last=keep_last)
+            after_count = len(session.messages)
+            after_tokens = estimate_messages_tokens(session.messages)
+            reply = (
+                "Compacted session context.\n"
+                f"- Before: {before_count} messages (~{before_tokens} est. tokens)\n"
+                f"- After: {after_count} messages (~{after_tokens} est. tokens)\n"
+                f"- Kept last {keep_last} message(s); older turns replaced by summary.\n"
+                "Note: raw thinking on compacted-away assistant turns is not sent to "
+                "the model again; use /remember for durable facts."
+            )
+
+        session.messages.append(
+            self._make_message(role="assistant", content=reply, session=session)
+        )
+        self._record(
+            session=session,
+            event_type="session_finished",
+            payload={"reason": "compact", "steps": 0},
         )
         session.turn_count += 1
         session.status = "running"
@@ -759,6 +827,8 @@ class HarnessLoop:
         self,
         session: Session,
         step_input: str,
+        *,
+        step_index: int = 0,
     ) -> tuple[Decision, datetime, datetime]:
         """Call the model; on overflow, force-compact and retry once.
 
@@ -772,7 +842,7 @@ class HarnessLoop:
         """
 
         try:
-            return self._call_model(session, step_input)
+            return self._call_model(session, step_input, step_index=step_index)
         except ModelOverflowError as overflow:
             emergency_keep_last = max(
                 1, self._limits.compaction_keep_last_messages // 2
@@ -784,7 +854,7 @@ class HarnessLoop:
                 estimated_tokens_override=overflow.estimated_tokens,
             )
             try:
-                return self._call_model(session, step_input)
+                return self._call_model(session, step_input, step_index=step_index)
             except ModelOverflowError as second:
                 started = self._clock.now()
                 ended = self._clock.now()
@@ -807,9 +877,16 @@ class HarnessLoop:
         self,
         session: Session,
         user_input: str,
+        *,
+        step_index: int = 0,
     ) -> tuple[Decision, datetime, datetime]:
         started = self._clock.now()
-        decision = self._model.decide(session, user_input)
+        token = bind_stream_sink(self._stream_sink, step_index=step_index)
+        try:
+            set_stream_step_index(step_index)
+            decision = self._model.decide(session, user_input)
+        finally:
+            reset_stream_sink(token)
         ended = self._clock.now()
         return decision, started, ended
 
@@ -827,6 +904,10 @@ class HarnessLoop:
             "latency_ms": (ended_at - started_at).total_seconds() * 1000.0,
         }
         payload.update(self._model_metadata(raw_meta))
+        reasoning = self._model_reasoning_text()
+        if reasoning:
+            payload["reasoning_text"] = reasoning
+        payload.update(self._model_prompt_payload())
 
         snapshot = make_conversation_snapshot(session.messages, self._limits)
         snapshot = merge_adapter_breakdown(snapshot, raw_meta)
@@ -859,8 +940,50 @@ class HarnessLoop:
             "response_tokens",
             "total_tokens",
             "provider",
+            "reasoning_text",
         }
         return {k: raw[k] for k in allowed if k in raw}
+
+    def _model_prompt_payload(self) -> dict:
+        """Serialize the composed prompt from the last model call for trace/UI."""
+
+        getter = getattr(self._model, "last_prompt", None)
+        if not callable(getter):
+            return {}
+        composed = getter()
+        if composed is None:
+            return {}
+        blocks = [
+            {
+                "name": block.name,
+                "role": block.role,
+                "origin": block.origin,
+                "content": block.content,
+                "char_count": len(block.content),
+            }
+            for block in composed.blocks
+        ]
+        return {
+            "prompt_blocks": blocks,
+            "api_messages": composed.as_openai_messages(),
+        }
+
+    def _model_thinking_likely(self) -> bool:
+        """Best-effort hint for UI before the model returns."""
+
+        mode = getattr(self._model, "_thinking_mode", None)
+        if isinstance(mode, str) and mode not in {"", "disabled", "none"}:
+            return True
+        effort = getattr(self._model, "_reasoning_effort", None)
+        if isinstance(effort, str) and effort not in {
+            "",
+            "disabled",
+            "none",
+            "minimal",
+            "off",
+        }:
+            return True
+        return False
 
     def _accumulate_model_cost(self, session: Session) -> None:
         raw = self._model_raw_meta()
@@ -917,21 +1040,39 @@ class HarnessLoop:
         if decision.kind == "final":
             reply = decision.assistant_message or ""
             session.messages.append(
-                self._make_message(role="assistant", content=reply, session=session)
+                self._make_message(
+                    role="assistant",
+                    content=reply,
+                    session=session,
+                    reasoning_text=self._model_reasoning_text(),
+                    provider_extra=self._model_provider_extra(),
+                )
             )
             return reply, "final"
 
         if decision.kind == "ask_user":
             reply = decision.assistant_message or ""
             session.messages.append(
-                self._make_message(role="assistant", content=reply, session=session)
+                self._make_message(
+                    role="assistant",
+                    content=reply,
+                    session=session,
+                    reasoning_text=self._model_reasoning_text(),
+                    provider_extra=self._model_provider_extra(),
+                )
             )
             return reply, "ask_user"
 
         if decision.kind == "assistant":
             reply = decision.assistant_message or ""
             session.messages.append(
-                self._make_message(role="assistant", content=reply, session=session)
+                self._make_message(
+                    role="assistant",
+                    content=reply,
+                    session=session,
+                    reasoning_text=self._model_reasoning_text(),
+                    provider_extra=self._model_provider_extra(),
+                )
             )
             return reply, "assistant"
 
@@ -944,6 +1085,7 @@ class HarnessLoop:
                     role="assistant",
                     content=reply,
                     session=session,
+                    reasoning_text=self._model_reasoning_text(),
                     provider_extra=extra,
                 )
             )

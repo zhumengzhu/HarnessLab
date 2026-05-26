@@ -1,5 +1,7 @@
 export type SseHandlers = {
   onTrace?: (payload: unknown) => void;
+  onReasoningDelta?: (payload: { text: string; step_index?: number }) => void;
+  onAssistantDelta?: (payload: { text: string; step_index?: number }) => void;
   onDone?: (payload: unknown) => void;
   onError?: (message: string) => void;
 };
@@ -7,7 +9,8 @@ export type SseHandlers = {
 export async function postSse(
   path: string,
   body: Record<string, unknown>,
-  handlers: SseHandlers
+  handlers: SseHandlers,
+  signal?: AbortSignal
 ): Promise<void> {
   const res = await fetch(path, {
     method: "POST",
@@ -16,6 +19,7 @@ export async function postSse(
       Accept: "text/event-stream",
     },
     body: JSON.stringify({ ...body, stream: true }),
+    signal,
   });
   if (!res.ok) {
     throw new Error(`HTTP ${res.status}`);
@@ -27,6 +31,10 @@ export async function postSse(
   const decoder = new TextDecoder();
   let buffer = "";
   while (true) {
+    if (signal?.aborted) {
+      await reader.cancel().catch(() => undefined);
+      throw new DOMException("Aborted", "AbortError");
+    }
     const { value, done } = await reader.read();
     if (done) break;
     buffer += decoder.decode(value, { stream: true });
@@ -43,6 +51,12 @@ export async function postSse(
       if (!dataLine) continue;
       const payload = JSON.parse(dataLine);
       if (eventType === "trace" && handlers.onTrace) handlers.onTrace(payload);
+      if (eventType === "reasoning_delta" && handlers.onReasoningDelta) {
+        handlers.onReasoningDelta(payload as { text: string; step_index?: number });
+      }
+      if (eventType === "assistant_delta" && handlers.onAssistantDelta) {
+        handlers.onAssistantDelta(payload as { text: string; step_index?: number });
+      }
       if (eventType === "done" && handlers.onDone) handlers.onDone(payload);
       if (eventType === "error" && handlers.onError) {
         handlers.onError(String(payload?.message || "stream error"));

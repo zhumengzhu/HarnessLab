@@ -60,6 +60,7 @@ from harnesslab.memory.in_memory import InMemoryMemoryStore
 from harnesslab.memory.semantic_sqlite import SqliteSemanticMemoryStore
 from harnesslab.memory.sqlite_store import SqliteMemoryStore
 from harnesslab.policy.default_policy import DefaultPolicy
+from harnesslab.providers.context_limits import align_runtime_limits_with_model
 from harnesslab.providers.deepseek import tool_specs_from_registry
 from harnesslab.providers.registry import create_model, normalize_backend
 from harnesslab.replay import (
@@ -332,6 +333,11 @@ def build_runtime(
     operator_config: OperatorConfig | None = None,
 ) -> HarnessLoop:
     limits = limits or RuntimeLimits()
+    limits = align_runtime_limits_with_model(
+        limits,
+        backend=model_backend,
+        config=operator_config,
+    )
     env_artifact_threshold = _env_int("HARNESSLAB_ARTIFACT_THRESHOLD_BYTES", None)
     if env_artifact_threshold is not None:
         limits = replace(limits, artifact_threshold_bytes=env_artifact_threshold)

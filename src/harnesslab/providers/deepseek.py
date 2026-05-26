@@ -10,9 +10,11 @@ import httpx
 from openai import APIConnectionError, APITimeoutError
 from openai import APIStatusError as OpenAIAPIStatusError
 
-from harnesslab.core.compaction import ModelOverflowError, estimate_tokens
+from harnesslab.core.compaction import ModelOverflowError
+from harnesslab.core.context import build_prompt_block_meta
 from harnesslab.core.models import Decision, Session
 from harnesslab.core.prompt import ComposedPrompt, PromptBlock, PromptComposer
+from harnesslab.core.stream_context import emit_stream_delta, stream_sink_active
 from harnesslab.providers.catalog import ModelCatalog
 from harnesslab.providers.model_resolve import (
     DEFAULT_DEEPSEEK_MODEL,
@@ -62,6 +64,7 @@ class DeepSeekModel:
         base_url: str | None = None,
         model_name: str | None = None,
         thinking_mode: str = "disabled",
+        reasoning_effort: str | None = None,
         timeout_seconds: float = DEFAULT_TIMEOUT_SECONDS,
         transport: httpx.BaseTransport | None = None,
         chat_transport: OpenAIChatTransport | None = None,
@@ -78,6 +81,11 @@ class DeepSeekModel:
         self._base_url = base_url or os.getenv("DEEPSEEK_BASE_URL") or DEFAULT_BASE_URL
         self._model_name = resolve_deepseek_model_name(model_name=model_name)
         self._thinking_mode = (thinking_mode or "disabled").strip().lower()
+        self._reasoning_effort = (
+            (reasoning_effort or "").strip().lower() or None
+            if self._thinking_mode == "enabled"
+            else None
+        )
         self._chat = chat_transport or OpenAIChatTransport(
             api_key=api_key,
             base_url=self._base_url,
@@ -95,14 +103,25 @@ class DeepSeekModel:
 
     def decide(self, session: Session, user_input: str) -> Decision:
         body = self._request_body(session)
-        prompt_meta = _prompt_meta(self._last_prompt)
+        prompt_meta = build_prompt_block_meta(
+            self._last_prompt.blocks if self._last_prompt else [],
+            wire_tool_specs=body.get("tools"),
+        )
         base_meta = {
             "provider": "deepseek",
             "model_name": self._model_name,
             **prompt_meta,
         }
         try:
-            payload = self._chat.create_chat_completion(body)
+            if stream_sink_active():
+                payload = self._chat.create_chat_completion_stream(
+                    body,
+                    on_delta=lambda kind, text: emit_stream_delta(
+                        "reasoning" if kind == "reasoning" else "assistant", text
+                    ),
+                )
+            else:
+                payload = self._chat.create_chat_completion(body)
         except ModelOverflowError:
             self._last_call_meta = dict(base_meta)
             _log.warning("context overflow model=%s session=%s", self._model_name, session.id)
@@ -180,10 +199,12 @@ class DeepSeekModel:
         body: dict[str, Any] = {
             "model": self._model_name,
             "messages": serialize_messages(composed, session, entry),
-            "temperature": 0,
         }
-        if self._thinking_mode in {"enabled", "disabled"}:
-            body["thinking"] = {"type": self._thinking_mode}
+        if self._thinking_mode == "disabled":
+            body["thinking"] = {"type": "disabled"}
+        else:
+            body["thinking"] = {"type": "enabled"}
+            body["reasoning_effort"] = self._reasoning_effort or "high"
         tools = self._tool_specs_provider()
         if tools:
             body["tools"] = tools
@@ -195,59 +216,6 @@ def _decision_from_payload(payload: dict[str, Any]) -> Decision:
     """Backward-compatible wrapper around :func:`parse_response`."""
 
     return parse_response(payload).decision
-
-
-def _prompt_meta(prompt: ComposedPrompt | None) -> dict[str, Any]:
-    """Summarize a composed prompt for the ``model_call.context`` snapshot.
-
-    Static blocks live above the conversation; dynamic blocks
-    (env / agents_md / tool_guide / etc.) are the runtime layer
-    contributed per-call; everything else (the rendered messages
-    themselves) is accounted for separately by the loop via
-    ``estimate_messages_tokens``.
-    """
-
-    if prompt is None:
-        return {}
-    static_tokens = 0
-    dynamic_tokens = 0
-    prompt_total = 0
-    names: list[str] = []
-    breakdown: dict[str, int] = {}
-    for block in prompt.blocks:
-        block_tokens = estimate_tokens(block.content)
-        prompt_total += block_tokens
-        names.append(block.name)
-        if block.origin.startswith("static:"):
-            static_tokens += block_tokens
-        elif block.origin.startswith("dynamic:"):
-            dynamic_tokens += block_tokens
-        category = _context_category_for_block(block.name, block.role)
-        if category is not None:
-            breakdown[category] = breakdown.get(category, 0) + block_tokens
-    return {
-        "prompt_tokens_estimate": prompt_total,
-        "static_block_tokens": static_tokens,
-        "dynamic_block_tokens": dynamic_tokens,
-        "prompt_block_names": names,
-        "prompt_block_breakdown": breakdown,
-    }
-
-
-def _context_category_for_block(name: str, role: str) -> str | None:
-    if name == "conversation":
-        return None
-    if name == "tool_guide":
-        return "tool_definitions"
-    if name == "skills":
-        return "skills"
-    if name in {"agents_md", "safety", "engineering"}:
-        return "rules"
-    if name in {"subagents", "subagent_definitions"}:
-        return "subagent_definitions"
-    if role == "system":
-        return "system_prompt"
-    return None
 
 
 def _usage_meta(raw_usage: Any) -> dict[str, int]:

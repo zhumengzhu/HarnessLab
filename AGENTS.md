@@ -39,10 +39,10 @@ Must include (current):
 - Modular prompt composition (`PromptComposer` + static/dynamic blocks)
 - Session as first-class citizen (persist, list, resume, fork)
 - Session- and workspace-scoped memory (`/remember`, `/remember-global`)
-- Automatic context compaction (threshold + overflow recovery)
+- Manual context compaction (`/compact`; auto threshold + overflow recovery)
 - Per-call context observability (`ContextSnapshot` on `model_call`)
-- Local Web chat UI (`harnesslab serve`, `./hl-serve`) with settings panel
-  and tool result cards
+- Local Web chat UI (`harnesslab serve`, `./hl-serve`) — TS default when built;
+  SSE step + token streaming, slash command palette, settings panel, tool cards
 - Optional LLM session auto-titles after first turn (DeepSeek only)
 - Operator config (`~/.config/harnesslab/config.json`) + provider registry
 - Trace recording, eval/replay/propose CLI, unit + contract tests
@@ -151,6 +151,8 @@ For architecture-affecting changes:
 
 Core docs:
 
+- `docs/README.md` — documentation index and learning paths
+- `docs/why-harnesslab.md` — learning-first scope and reading order
 - `docs/roadmap.md`
 - `docs/architecture/overview.md`
 - `docs/architecture/tool-runtime.md`

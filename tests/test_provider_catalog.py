@@ -22,7 +22,7 @@ def test_catalog_get_returns_entry_fields() -> None:
     entry = ModelCatalog().get("deepseek-v4-flash")
     assert entry.provider == "deepseek"
     assert entry.api_family == "openai_chat"
-    assert entry.context_window == 128_000
+    assert entry.context_window == 1_048_576
     assert entry.thinking_default == "disabled"
     assert entry.reasoning_support == "native"
 
@@ -30,6 +30,13 @@ def test_catalog_get_returns_entry_fields() -> None:
 def test_catalog_resolve_accepts_provider_ref() -> None:
     entry = ModelCatalog().resolve("deepseek/deepseek-v4-pro")
     assert entry.model_id == "deepseek-v4-pro"
+
+
+def test_deepseek_catalog_thinking_schema() -> None:
+    flash = ModelCatalog().get("deepseek-v4-flash")
+    pro = ModelCatalog().get("deepseek-v4-pro")
+    assert flash.thinking_schema == "toggle"
+    assert pro.thinking_schema == "toggle"
 
 
 def test_gemini_catalog_thinking_schema() -> None:

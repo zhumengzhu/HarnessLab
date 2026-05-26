@@ -1,13 +1,28 @@
+export type ComposerCommandItem = {
+  name: string;
+  usage: string;
+  description: string;
+  insert: string;
+  kind?: string;
+};
+
+export type ComposerCommandsResponse = {
+  commands: ComposerCommandItem[];
+  skills: ComposerCommandItem[];
+};
+
 export type HealthResponse = {
   ok: boolean;
   model: string;
   model_id?: string | null;
   model_label?: string | null;
   workspace: string;
+  runtime_context_tokens?: number;
 };
 
 export type SettingsResponse = {
   settings: Record<string, unknown>;
+  config_source?: string | null;
 };
 
 export type SessionSummary = {
@@ -40,6 +55,7 @@ export type MessageItem = {
   role: string;
   content: string;
   created_at: string;
+  reasoning_text?: string;
 };
 
 export type SessionDetailResponse = {
@@ -83,8 +99,11 @@ export type ModelInfo = {
   backend: string;
   label: string;
   context_window: number;
+  context_label?: string;
+  context_editable?: boolean;
+  runtime_context_tokens?: number;
   reasoning_support: "native" | "proxy" | "none";
-  thinking_schema: "none" | "budget" | "level";
+  thinking_schema: "none" | "budget" | "level" | "toggle";
   thinking_default: string;
   effort_levels: string[];
   configured: boolean;
@@ -94,6 +113,10 @@ export type ModelInfo = {
 
 export type ModelsResponse = {
   models: ModelInfo[];
+};
+
+export type ContextResponse = {
+  context: ContextSnapshot | null;
 };
 
 export type ModelSwitchRequest = {

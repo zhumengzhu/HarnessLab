@@ -1,6 +1,7 @@
 # Frontend TS Migration RFC (OpenClaw-style)
 
-Status: In progress (Phase A/B/C complete, Phase D started)
+Status: In progress (Phase A–C complete; Phase D started; **Phase E partial** —
+TS bundle is default when built)
 
 ## Why this exists
 
@@ -17,18 +18,24 @@ streaming UX) benefit from:
 This RFC defines a migration plan to a TypeScript-based frontend,
 while keeping the existing Python runtime and API contracts stable.
 
+Product UX principles, turn layout, and Thinking/Thought semantics are
+documented in [`webui-design.md`](webui-design.md).
+
 Current progress snapshot:
 
 - `webui/` scaffold exists (Vite + React + TS + typed API/SSE helper stubs).
 - Build target is `src/harnesslab/web/static_ts/`.
-- `harnesslab serve` supports runtime switch via `HARNESSLAB_WEB_UI_VERSION=ts`
-  with automatic fallback to legacy assets.
+- `harnesslab serve` prefers the TS bundle when `static_ts/` exists
+  (`HARNESSLAB_WEB_UI_VERSION` defaults to `ts`; legacy fallback otherwise).
 - Phase B read surfaces are live in TS UI (sessions/trace/proposals/settings).
 - Phase C interactive parity shipped:
   - composer send + SSE `trace/done/error`
-  - session fork action
-  - `/remember` and `/skill` affordance buttons/modes
-  - tool cards + stream error rendering
+  - token-level `reasoning_delta` / `assistant_delta` (DeepSeek first)
+  - `/` slash palette via `GET /api/composer/commands`
+  - Cursor-style `/skillname` direct invoke; `/compact`, `/remember`, `/remember-global`
+  - session fork; tool cards; stream error rendering
+  - IME-safe composer; localStorage session/mode restore; model picker → `config.json`
+  - final answer peek → expand → collapse
 - Phase D started: proposal status transitions (accept/reject/supersede)
   wired in TS UI against guarded backend API, with explicit gate
   acknowledgements before `accepted`.
@@ -163,12 +170,13 @@ Exit: core chat workflow parity complete.
 
 Exit: Phase 5 Web surfaces fully hosted in TS frontend.
 
-### Phase E: default switch
+### Phase E: default switch (partial)
 
-- Make TS build output default served assets.
-- Keep legacy static UI behind fallback switch for one release window.
+- TS build output is **default** when `static_ts/` exists (`HARNESSLAB_WEB_UI_VERSION=ts`).
+- Legacy static UI remains available via `HARNESSLAB_WEB_UI_VERSION=legacy` and
+  automatic fallback when the bundle is missing.
 
-Exit: legacy JS UI can be safely removed.
+Exit (remaining): remove legacy JS UI after one stable release window.
 
 ## Compatibility and rollout controls
 

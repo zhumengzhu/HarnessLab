@@ -10,6 +10,7 @@ from harnesslab.core.models import Message
 
 SKILL_PREFIX = "/skill"
 SKILL_STATE_PREFIX = "[skills:selected]"
+_RESERVED_SKILL_SLASH = frozenset({"remember", "remember-global", "skill", "compact", "help"})
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,27 @@ def parse_skill_command(user_input: str) -> SkillCommand | None:
         return SkillCommand(kind="clear")
     # Shortcut: /skill <name>
     return SkillCommand(kind="add", name=parts[0].strip())
+
+
+def parse_direct_skill_command(
+    user_input: str, available: list[str]
+) -> SkillCommand | None:
+    """``/research`` → pin workspace skill ``research`` (Cursor-style invoke)."""
+
+    text = user_input.strip()
+    if not text.startswith("/"):
+        return None
+    if text.startswith(SKILL_PREFIX) or text.startswith("/remember"):
+        return None
+    rest = text[1:].strip()
+    if not rest:
+        return None
+    name = rest.split()[0].strip()
+    if not name or name.lower() in _RESERVED_SKILL_SLASH:
+        return None
+    if name not in available:
+        return None
+    return SkillCommand(kind="add", name=name)
 
 
 def list_skills(workspace_root: Path | None) -> list[str]:

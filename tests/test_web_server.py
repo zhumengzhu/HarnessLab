@@ -14,7 +14,11 @@ import pytest
 
 import harnesslab.web.server as web_server
 from harnesslab.cli import build_runtime
-from harnesslab.core.operator_config import OperatorConfig, config_settings_snapshot
+from harnesslab.core.operator_config import (
+    OperatorConfig,
+    config_settings_snapshot,
+    load_operator_config,
+)
 from harnesslab.telemetry.jsonl_recorder import JsonlTraceRecorder
 from harnesslab.web.server import WebRuntime, serve
 from harnesslab.web.trace_hub import TraceHub
@@ -121,6 +125,24 @@ def _start_server(runtime: WebRuntime, port: int) -> None:
         daemon=True,
     )
     thread.start()
+
+
+def test_web_api_models_deepseek_catalog_fields(tmp_path: Path) -> None:
+    port = _free_port()
+    runtime = _web_runtime(tmp_path)
+    runtime.model_backend = "deepseek"
+    runtime.operator_config = OperatorConfig(
+        model_backend="deepseek",
+        deepseek_model_name="deepseek-v4-flash",
+    )
+    _start_server(runtime, port)
+    base = f"http://127.0.0.1:{port}"
+    models = _get(f"{base}/api/models")["models"]
+    ds = next(m for m in models if m["id"] == "deepseek-v4-flash")
+    assert ds["effort_levels"] == ["disabled", "high", "max"]
+    assert ds["context_window"] == 1_048_576
+    assert ds["context_label"] == "1M"
+    assert ds["context_editable"] is False
 
 
 def test_web_api_create_session_and_list(tmp_path: Path) -> None:
@@ -396,6 +418,57 @@ def test_web_proposal_gate_run_endpoint(tmp_path: Path, monkeypatch: pytest.Monk
     result = _post(f"{base}/api/proposals/gates/run", {"gate": "pytest"})
     assert result["result"]["gate"] == "pytest"
     assert result["result"]["ok"] is True
+
+def test_web_model_switch_persists_operator_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "model": {
+                    "default_backend": "simple",
+                    "deepseek": {"model_name": "deepseek-v4-flash", "thinking": "disabled"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HARNESSLAB_CONFIG", str(config_path))
+
+    port = _free_port()
+    runtime = _web_runtime(tmp_path)
+    runtime.operator_config = load_operator_config(config_path)
+    _start_server(runtime, port)
+    base = f"http://127.0.0.1:{port}"
+
+    _post(
+        f"{base}/api/model",
+        {"model_id": "deepseek-v4-pro", "backend": "deepseek", "effort": "max"},
+    )
+
+    reloaded = load_operator_config(config_path)
+    assert reloaded.model_backend == "deepseek"
+    assert reloaded.deepseek_model_name == "deepseek-v4-pro"
+    assert reloaded.deepseek_reasoning_effort == "max"
+
+
+def test_web_composer_commands_lists_skills(tmp_path: Path) -> None:
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    (skills / "research.md").write_text("# Research skill", encoding="utf-8")
+    port = _free_port()
+    runtime = _web_runtime(tmp_path)
+    _start_server(runtime, port)
+    base = f"http://127.0.0.1:{port}"
+    req = urllib.request.Request(f"{base}/api/composer/commands", method="GET")  # noqa: S310
+    with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
+        payload = json.loads(resp.read().decode("utf-8"))
+    names = {item["name"] for item in payload["commands"]}
+    assert "remember" in names
+    assert payload["skills"][0]["name"] == "research"
+
 
 def test_web_static_index_served(tmp_path: Path) -> None:
     port = _free_port()

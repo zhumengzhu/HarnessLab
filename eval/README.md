@@ -65,7 +65,7 @@ When `harnesslab propose` surfaces a recurring failure cluster:
 
 ## Shipped coverage (Phase 3.1+)
 
-Fourteen tasks in `eval/baseline.json`. Task `fetch_url_weather` is tagged
+Fifteen tasks in `eval/baseline.json`. Task `fetch_url_weather` is tagged
 ``network`` and skipped by default in CI (`--skip-tags network` /
 `pytest -m "not network"`). Optional live lane: ``RUN_LIVE_EVAL=1 pytest -m network``.
 
@@ -85,3 +85,4 @@ Fourteen tasks in `eval/baseline.json`. Task `fetch_url_weather` is tagged
 | `fetch_url_weather` | allowlisted HTTP fetch (wttr.in); tag: ``network`` |
 | `shell_profile_strict` | named shell profile denies dev runners |
 | `workspace_memory_persists` | workspace memory across sessions |
+| `plan_then_execute` | non-terminal `plan` decision + `plan_emitted` |

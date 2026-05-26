@@ -136,6 +136,47 @@ def test_merge_adapter_meta_clamps_negative_values_to_none() -> None:
     assert merged.static_block_tokens is None
 
 
+def test_build_prompt_block_meta_categories_static_blocks() -> None:
+    from harnesslab.core.context import build_prompt_block_meta, category_for_prompt_block
+    from harnesslab.core.prompt.composer import DEFAULT_STATIC_BLOCKS
+
+    assert category_for_prompt_block("identity", "system") == "system_prompt"
+    assert category_for_prompt_block("safety", "system") == "rules"
+    assert category_for_prompt_block("tool_guide", "system") == "tool_definitions"
+
+    meta = build_prompt_block_meta(DEFAULT_STATIC_BLOCKS)
+    breakdown = meta["prompt_block_breakdown"]
+    assert breakdown["system_prompt"] > 0
+    assert breakdown["rules"] > 0
+
+
+def test_build_prompt_block_meta_includes_wire_tool_specs() -> None:
+    from harnesslab.core.context import build_prompt_block_meta
+    from harnesslab.core.prompt.block import PromptBlock
+
+    blocks = [
+        PromptBlock(
+            name="identity",
+            content="You are a test agent.",
+            origin="static:00_identity.md",
+        ),
+    ]
+    wire = [
+        {
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "description": "read a file",
+                "parameters": {"type": "object"},
+            },
+        }
+    ]
+    meta = build_prompt_block_meta(blocks, wire_tool_specs=wire)
+    breakdown = meta["prompt_block_breakdown"]
+    assert breakdown["system_prompt"] > 0
+    assert breakdown["tool_definitions"] > 0
+
+
 # ---------- loop integration: model_call event carries snapshot ----------
 
 

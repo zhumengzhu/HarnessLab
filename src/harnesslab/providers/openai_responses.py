@@ -10,7 +10,8 @@ import httpx
 from openai import APIConnectionError, APITimeoutError
 from openai import APIStatusError as OpenAIAPIStatusError
 
-from harnesslab.core.compaction import ModelOverflowError, estimate_tokens
+from harnesslab.core.compaction import ModelOverflowError
+from harnesslab.core.context import build_prompt_block_meta
 from harnesslab.core.models import Decision, Session
 from harnesslab.core.prompt import ComposedPrompt, PromptBlock, PromptComposer
 from harnesslab.providers.catalog import ModelCatalog
@@ -81,7 +82,10 @@ class OpenAIResponsesModel:
 
     def decide(self, session: Session, user_input: str) -> Decision:
         body = self._request_body(session, user_input)
-        prompt_meta = _prompt_meta(self._last_prompt)
+        prompt_meta = build_prompt_block_meta(
+            self._last_prompt.blocks if self._last_prompt else [],
+            wire_tool_specs=body.get("tools"),
+        )
         base_meta = {
             "provider": "openai",
             "api_family": "openai_responses",
@@ -212,50 +216,6 @@ def _responses_tools_from_openai(specs: list[dict[str, Any]]) -> list[dict[str, 
             }
         )
     return out
-
-
-def _prompt_meta(prompt: ComposedPrompt | None) -> dict[str, Any]:
-    if prompt is None:
-        return {}
-    static_tokens = 0
-    dynamic_tokens = 0
-    prompt_total = 0
-    names: list[str] = []
-    breakdown: dict[str, int] = {}
-    for block in prompt.blocks:
-        block_tokens = estimate_tokens(block.content)
-        prompt_total += block_tokens
-        names.append(block.name)
-        if block.origin.startswith("static:"):
-            static_tokens += block_tokens
-        elif block.origin.startswith("dynamic:"):
-            dynamic_tokens += block_tokens
-        category = _context_category_for_block(block.name, block.role)
-        if category is not None:
-            breakdown[category] = breakdown.get(category, 0) + block_tokens
-    return {
-        "prompt_tokens_estimate": prompt_total,
-        "static_block_tokens": static_tokens,
-        "dynamic_block_tokens": dynamic_tokens,
-        "prompt_block_names": names,
-        "prompt_block_breakdown": breakdown,
-    }
-
-
-def _context_category_for_block(name: str, role: str) -> str | None:
-    if name == "conversation":
-        return None
-    if name == "tool_guide":
-        return "tool_definitions"
-    if name == "skills":
-        return "skills"
-    if name in {"agents_md", "safety", "engineering"}:
-        return "rules"
-    if name in {"subagents", "subagent_definitions"}:
-        return "subagent_definitions"
-    if role == "system":
-        return "system_prompt"
-    return None
 
 
 def _usage_meta(raw_usage: Any) -> dict[str, int]:

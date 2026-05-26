@@ -20,9 +20,10 @@ def replay_policy(session: Session, entry: CatalogEntry) -> ReplayPolicy:
             drop_reasoning_on_new_user_turn=True,
         )
     in_tool_loop = bool(session.messages and session.messages[-1].role == "tool")
+    has_persisted = _session_has_tool_call_reasoning(session)
     return ReplayPolicy(
-        include_reasoning_in_tool_loop=in_tool_loop,
-        drop_reasoning_on_new_user_turn=True,
+        include_reasoning_in_tool_loop=in_tool_loop or has_persisted,
+        drop_reasoning_on_new_user_turn=not has_persisted,
     )
 
 
@@ -34,16 +35,9 @@ def serialize_messages(
     """Build OpenAI-style messages, applying replay policy for reasoning."""
 
     wire = composed.as_openai_messages()
-    policy = replay_policy(session, entry)
-    if not policy.include_reasoning_in_tool_loop:
+    if entry.reasoning_support == "none":
         return wire
-    assistant_id = _open_tool_loop_assistant_id(session)
-    if assistant_id is None:
-        return wire
-    reasoning = _reasoning_for_message(session, assistant_id)
-    if not reasoning:
-        return wire
-    return _inject_reasoning_on_assistant(wire, reasoning)
+    return _inject_reasoning_for_tool_assistants(wire, session)
 
 
 def parse_response(
@@ -72,6 +66,12 @@ def parse_response(
         )
 
     reasoning_raw = message.get("reasoning_content")
+    if not isinstance(reasoning_raw, str) or not reasoning_raw.strip():
+        for key in ("reasoning", "reasoning_text"):
+            alt = message.get(key)
+            if isinstance(alt, str) and alt.strip():
+                reasoning_raw = alt
+                break
     reasoning_text = (
         reasoning_raw.strip()
         if isinstance(reasoning_raw, str) and reasoning_raw.strip()
@@ -139,46 +139,37 @@ def parse_response(
     )
 
 
-def _open_tool_loop_assistant_id(session: Session) -> str | None:
-    if not session.messages or session.messages[-1].role != "tool":
-        return None
-    index = len(session.messages) - 1
-    while index >= 0 and session.messages[index].role == "tool":
-        index -= 1
-    if index < 0:
-        return None
-    candidate = session.messages[index]
-    if candidate.role == "assistant" and candidate.tool_calls:
-        return candidate.id
-    return None
+def _session_has_tool_call_reasoning(session: Session) -> bool:
+    return any(
+        m.role == "assistant" and m.tool_calls and m.reasoning_text for m in session.messages
+    )
 
 
-def _reasoning_for_message(session: Session, message_id: str) -> str | None:
-    for message in session.messages:
-        if message.id == message_id and message.reasoning_text:
-            return message.reasoning_text
-    return None
+def _ordered_tool_assistant_reasonings(session: Session) -> list[str]:
+    return [
+        m.reasoning_text  # type: ignore[misc]
+        for m in session.messages
+        if m.role == "assistant" and m.tool_calls and m.reasoning_text
+    ]
 
 
-def _inject_reasoning_on_assistant(
+def _inject_reasoning_for_tool_assistants(
     wire: list[dict[str, Any]],
-    reasoning: str,
+    session: Session,
 ) -> list[dict[str, Any]]:
-    """Attach ``reasoning_content`` to the last assistant message with tool_calls."""
+    """Attach ``reasoning_content`` to every assistant message with tool_calls."""
 
+    reasonings = _ordered_tool_assistant_reasonings(session)
+    if not reasonings:
+        return wire
+    idx = 0
     out: list[dict[str, Any]] = []
-    injected = False
-    for index in range(len(wire) - 1, -1, -1):
-        msg = wire[index]
-        if (
-            not injected
-            and msg.get("role") == "assistant"
-            and msg.get("tool_calls")
-        ):
+    for msg in wire:
+        if msg.get("role") == "assistant" and msg.get("tool_calls") and idx < len(reasonings):
             updated = dict(msg)
-            updated["reasoning_content"] = reasoning
-            out.insert(0, updated)
-            injected = True
+            updated["reasoning_content"] = reasonings[idx]
+            idx += 1
+            out.append(updated)
             continue
-        out.insert(0, msg)
-    return out if injected else wire
+        out.append(msg)
+    return out

@@ -11,15 +11,57 @@ type ModelSelectorProps = {
   onDismissError: () => void;
 };
 
-function effortLabel(level: string): string {
+function effortLabel(level: string, model?: ModelInfo): string {
   if (!level) return "";
+  if (model?.backend === "deepseek") {
+    if (level === "disabled") return "Off";
+    if (level === "high") return "High";
+    if (level === "max") return "Max";
+    if (level === "enabled") return "High";
+  }
+  if (model?.thinking_schema === "toggle") {
+    if (level === "disabled") return "Off";
+    if (level === "enabled") return "Thinking";
+  }
+  if (level === "minimal") return "Minimal";
   return level.charAt(0).toUpperCase() + level.slice(1);
 }
 
-function describeEffort(m: ModelInfo): string {
-  if (m.current_effort) return effortLabel(m.current_effort);
-  if (m.effort_levels.length > 0) return effortLabel(m.thinking_default);
+function effortSectionTitle(model: ModelInfo): string {
+  if (model.backend === "deepseek") {
+    return "Reasoning";
+  }
+  if (model.thinking_schema === "toggle") {
+    return "Thinking";
+  }
+  return "Reasoning";
+}
+
+function formatContextLabel(m: ModelInfo): string {
+  if (m.context_label && m.context_label !== "–") {
+    return `${m.context_label} tokens`;
+  }
+  if (m.context_window > 0) {
+    return `${Math.round(m.context_window / 1000)}K tokens`;
+  }
+  return "–";
+}
+
+function contextHint(m: ModelInfo): string {
+  if (m.context_editable === false && m.context_window > 0) {
+    return "Fixed by model · runtime uses full window";
+  }
   return "";
+}
+
+function describeEffort(m: ModelInfo): string {
+  if (m.current_effort) return effortLabel(m.current_effort, m);
+  if (m.effort_levels.length > 0) return effortLabel(m.thinking_default, m);
+  return "";
+}
+
+function modelSupportsEdit(m: ModelInfo): boolean {
+  return m.effort_levels.length > 0;
 }
 
 export function ModelSelector({
@@ -115,9 +157,9 @@ export function ModelSelector({
                     onClick={() => pickModel(m)}
                   >
                     <span className="model-sel-row-label">{m.label}</span>
-                    {m.effort_levels.length > 0 && (
+                    {modelSupportsEdit(m) && (
                       <span className="model-sel-row-effort">
-                        {effortLabel(m.current_effort || m.thinking_default)}
+                        {effortLabel(m.current_effort || m.thinking_default, m)}
                       </span>
                     )}
                     {!m.configured && m.backend !== "simple" && (
@@ -125,7 +167,7 @@ export function ModelSelector({
                     )}
                     {m.current && <span className="model-sel-row-check">✓</span>}
                   </button>
-                  {(isHovered || isEditing) && m.effort_levels.length > 0 && (
+                  {(isHovered || isEditing) && modelSupportsEdit(m) && (
                     <button
                       type="button"
                       className="model-sel-row-edit"
@@ -145,9 +187,11 @@ export function ModelSelector({
           {editingModel && (
             <div className="model-sel-flyout-sub">
               <div className="model-sel-dropdown-header">Options · {editingModel.label}</div>
-              {editingModel.effort_levels.length > 0 && (
+              {modelSupportsEdit(editingModel) && (
                 <div className="model-sel-section">
-                  <div className="model-sel-section-title">Reasoning</div>
+                  <div className="model-sel-section-title">
+                    {effortSectionTitle(editingModel)}
+                  </div>
                   {editingModel.effort_levels.map((lv) => {
                     const active =
                       (editingModel.current_effort || editingModel.thinking_default) === lv;
@@ -158,7 +202,7 @@ export function ModelSelector({
                         className={`model-sel-effort-btn${active ? " model-sel-effort-active" : ""}`}
                         onClick={() => applyEffort(editingModel, lv)}
                       >
-                        <span>{effortLabel(lv)}</span>
+                        <span>{effortLabel(lv, editingModel)}</span>
                         {active && <span className="model-sel-row-check">✓</span>}
                       </button>
                     );
@@ -168,10 +212,11 @@ export function ModelSelector({
               <div className="model-sel-section">
                 <div className="model-sel-section-title">Context</div>
                 <div className="model-sel-context-readonly">
-                  {editingModel.context_window > 0
-                    ? `${Math.round(editingModel.context_window / 1000)}K tokens`
-                    : "–"}
+                  {formatContextLabel(editingModel)}
                 </div>
+                {contextHint(editingModel) && (
+                  <div className="model-sel-context-hint">{contextHint(editingModel)}</div>
+                )}
               </div>
             </div>
           )}

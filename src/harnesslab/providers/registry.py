@@ -166,11 +166,18 @@ def _create_single_model(
 
     model_name = resolve_deepseek_model_name(config=config)
     thinking = (config.deepseek_thinking if config else "disabled") or "disabled"
-    _log.info("model backend=deepseek model_name=%s thinking=%s", model_name, thinking)
+    reasoning_effort = getattr(config, "deepseek_reasoning_effort", None) if config else None
+    _log.info(
+        "model backend=deepseek model_name=%s thinking=%s effort=%s",
+        model_name,
+        thinking,
+        reasoning_effort or "-",
+    )
     return DeepSeekModel(
         tool_specs_provider=tool_specs_provider,
         model_name=model_name,
         thinking_mode=thinking,
+        reasoning_effort=reasoning_effort,
         composer=composer,
         dynamic_blocks_provider=dynamic_blocks_provider,
     )

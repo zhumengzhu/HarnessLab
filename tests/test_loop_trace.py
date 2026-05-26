@@ -162,6 +162,7 @@ def test_user_input_event_is_recorded_before_decision(tmp_path: Path) -> None:
     keep = {
         "user_input_received",
         "step_started",
+        "model_call_started",
         "model_call",
         "decision_made",
         "step_completed",
@@ -171,6 +172,7 @@ def test_user_input_event_is_recorded_before_decision(tmp_path: Path) -> None:
     one_turn = [
         "user_input_received",
         "step_started",
+        "model_call_started",
         "model_call",
         "decision_made",
         "step_completed",
@@ -197,6 +199,7 @@ def test_decision_made_payload_is_replay_complete(tmp_path: Path) -> None:
         "tool_name": "write_file",
         "tool_args": {"path": "x.txt", "content": "y"},
         "assistant_message": None,
+        "reasoning_text": None,
     }
 
 
@@ -212,6 +215,20 @@ def test_model_call_event_contains_latency_and_kind(tmp_path: Path) -> None:
     assert payload["model_name"] == "SimpleModel"
     assert payload["decision_kind"] == "final"
     assert payload["latency_ms"] >= 0
+    assert "prompt_blocks" not in payload or payload.get("prompt_blocks") == []
+
+
+def test_model_call_started_precedes_model_call(tmp_path: Path) -> None:
+    loop = build_runtime(tmp_path)
+    session = loop.start(goal="call started")
+    loop.run_turn(session.id, "hello")
+
+    events = _read_trace(tmp_path)
+    types = [e["event_type"] for e in events]
+    started_idx = types.index("model_call_started")
+    call_idx = types.index("model_call")
+    assert started_idx < call_idx
+    assert events[started_idx]["payload"]["step_index"] == 0
 
 
 # ----- Phase 2.1 prerequisites: step + session_finished trace events -----

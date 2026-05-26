@@ -11,6 +11,7 @@ from harnesslab.core.skill_policy import (
     choose_skill_names,
     format_skill_state_message,
     list_skills,
+    parse_direct_skill_command,
     parse_skill_command,
     selected_skills_from_messages,
 )
@@ -36,6 +37,15 @@ def test_parse_skill_command_variants() -> None:
     )
     assert parse_skill_command("/skill clear") == SkillCommand(kind="clear")
     assert parse_skill_command("/skill research") == SkillCommand(kind="add", name="research")
+
+
+def test_parse_direct_skill_command_invokes_workspace_skill() -> None:
+    assert parse_direct_skill_command("/research", ["research", "debug"]) == SkillCommand(
+        kind="add", name="research"
+    )
+    assert parse_direct_skill_command("/skill list", ["research"]) is None
+    assert parse_direct_skill_command("/remember x", ["research"]) is None
+    assert parse_direct_skill_command("hello", ["research"]) is None
 
 
 def test_list_skills_reads_workspace_directory(tmp_path: Path) -> None:
