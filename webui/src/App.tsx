@@ -211,6 +211,13 @@ export function App() {
     );
   }, [traceRows]);
 
+  const childSessions = useMemo(() => {
+    if (!selectedSessionId) return [];
+    return (sessions.data?.sessions ?? []).filter(
+      (s) => s.parent_session_id === selectedSessionId
+    );
+  }, [selectedSessionId, sessions.data?.sessions]);
+
   const currentModelId = health.data?.model_id ?? null;
   const currentLabel = health.data?.model_label ?? health.data?.model ?? "–";
   const models: ModelInfo[] = modelsQuery.data?.models ?? [];
@@ -322,6 +329,7 @@ export function App() {
             turnEnrichments={turnEnrichments}
             liveTurn={liveTurn}
             budgetEvents={budgetEvents}
+            childSessions={childSessions}
             hasStreamTrace={streamTrace.length > 0}
             onClearStreamTrace={() => setStreamTrace([])}
           />

@@ -80,6 +80,7 @@ export function SessionPicker({
                 >
                   <strong>{sessionLabel(s)}</strong>
                   <small>
+                    {s.parent_session_id ? "child · " : ""}
                     {s.status} · {s.message_count} msgs
                   </small>
                 </button>

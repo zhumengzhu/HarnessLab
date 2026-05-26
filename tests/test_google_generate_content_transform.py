@@ -148,6 +148,96 @@ def test_parse_response_text() -> None:
     assert turn.decision.assistant_message == "hello gemini"
 
 
+def test_serialize_replays_all_tool_assistants_in_multi_turn_history() -> None:
+    thought_one = [{"text": "turn one plan", "thought": True, "thought_signature": "sig_1"}]
+    thought_two = [{"text": "turn two plan", "thought": True, "thought_signature": "sig_2"}]
+    session = _session(
+        Message(
+            id="msg_u1",
+            role="user",
+            content="run tool",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+        ),
+        Message(
+            id="msg_a1",
+            role="assistant",
+            content="",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+            tool_calls=[
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "grep", "arguments": '{"pattern":"x"}'},
+                }
+            ],
+            provider_extra={"thought_parts": thought_one},
+        ),
+        Message(
+            id="msg_t1",
+            role="tool",
+            content="matches",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+            tool_call_id="call_1",
+        ),
+        Message(
+            id="msg_a2",
+            role="assistant",
+            content="done",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+        ),
+        Message(
+            id="msg_u2",
+            role="user",
+            content="again",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+        ),
+        Message(
+            id="msg_a3",
+            role="assistant",
+            content="",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+            tool_calls=[
+                {
+                    "id": "call_2",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": '{"path":"a.txt"}'},
+                }
+            ],
+            provider_extra={"thought_parts": thought_two},
+        ),
+        Message(
+            id="msg_t2",
+            role="tool",
+            content="file",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+            tool_call_id="call_2",
+        ),
+    )
+    composed = PromptComposer().build(session)
+    wire = serialize_request(composed, session, _level_entry())
+    tool_turns = [
+        turn
+        for turn in wire["contents"]
+        if turn.get("role") == "model"
+        and isinstance(turn.get("parts"), list)
+        and any(
+            isinstance(part, dict) and ("functionCall" in part or "function_call" in part)
+            for part in turn["parts"]
+        )
+    ]
+    assert len(tool_turns) == 2
+    assert tool_turns[0]["parts"][0]["thought"] is True
+    assert tool_turns[0]["parts"][0]["text"] == "turn one plan"
+    assert tool_turns[1]["parts"][0]["text"] == "turn two plan"
+
+
 def test_parse_response_thought_and_tool() -> None:
     payload = {
         "candidates": [

@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+from harnesslab.checkpoint.store import preview_restore, restore_snapshots
 from harnesslab.core.loop import DEFAULT_MAX_STEPS, HarnessLoop
 from harnesslab.core.memory_policy import session_memory_key
 from harnesslab.core.models import Session, TraceEvent
@@ -388,6 +389,91 @@ def _tool_cards_for_turn(events: list[TraceEvent], turn_index: int) -> list[dict
     return cards
 
 
+def _checkpoint_store_for(runtime: WebRuntime):
+    return getattr(runtime.loop, "_checkpoint_store", None)
+
+
+def _checkpoints_payload(runtime: WebRuntime, session_id: str) -> dict[str, Any]:
+    store = _checkpoint_store_for(runtime)
+    if store is None:
+        return {"session_id": session_id, "checkpoints": []}
+    runtime.loop._sessions.get(session_id)  # noqa: SLF001
+    rows = store.list(session_id)
+    return {
+        "session_id": session_id,
+        "checkpoints": [
+            {
+                "id": row.id,
+                "session_id": row.session_id,
+                "tool_name": row.tool_name,
+                "created_at": row.created_at.isoformat(),
+            }
+            for row in rows
+        ],
+    }
+
+
+def _checkpoint_preview_payload(
+    runtime: WebRuntime,
+    session_id: str,
+    checkpoint_id: str,
+) -> dict[str, Any]:
+    store = _checkpoint_store_for(runtime)
+    if store is None:
+        raise ValueError("checkpoints require sqlite storage")
+    runtime.loop._sessions.get(session_id)  # noqa: SLF001
+    checkpoint = store.get(checkpoint_id)
+    if checkpoint.session_id != session_id:
+        raise ValueError("checkpoint does not belong to session")
+    changes = preview_restore(runtime.workspace_root, checkpoint.snapshots)
+    return {
+        "session_id": session_id,
+        "checkpoint": {
+            "id": checkpoint.id,
+            "tool_name": checkpoint.tool_name,
+            "tool_args": checkpoint.tool_args,
+            "created_at": checkpoint.created_at.isoformat(),
+        },
+        "changes": changes,
+    }
+
+
+def _rewind_session(
+    runtime: WebRuntime,
+    *,
+    session_id: str,
+    checkpoint_id: str,
+) -> dict[str, Any]:
+    store = _checkpoint_store_for(runtime)
+    if store is None:
+        raise ValueError("rewind requires sqlite storage")
+    runtime.loop._sessions.get(session_id)  # noqa: SLF001
+    checkpoint = store.get(checkpoint_id)
+    if checkpoint.session_id != session_id:
+        raise ValueError("checkpoint does not belong to session")
+    preview = preview_restore(runtime.workspace_root, checkpoint.snapshots)
+    touched = restore_snapshots(runtime.workspace_root, checkpoint.snapshots)
+    session = runtime.loop._sessions.get(session_id)  # noqa: SLF001
+    runtime.loop._trace.record(  # noqa: SLF001
+        TraceEvent(
+            run_id=session.id,
+            session_id=session.id,
+            event_type="checkpoint_restored",
+            payload={
+                "checkpoint_id": checkpoint_id,
+                "paths": touched,
+            },
+            created_at=runtime.loop._clock.now(),  # noqa: SLF001
+        )
+    )
+    return {
+        "session_id": session_id,
+        "checkpoint_id": checkpoint_id,
+        "paths": touched,
+        "preview": preview,
+    }
+
+
 def _session_trace_events(runtime: WebRuntime, session_id: str) -> list[TraceEvent]:
     path = runtime.trace_path
     if path is None or not path.is_file():
@@ -624,6 +710,19 @@ class _Handler(BaseHTTPRequestHandler):
                     if e.event_type in TOOL_PANEL_EVENT_TYPES
                 ]
                 return self._json_ok({"session_id": session_id, "events": filtered})
+            if action == "checkpoints":
+                return self._json_ok(_checkpoints_payload(self.runtime, session_id))
+            if action.startswith("checkpoints/"):
+                checkpoint_id = action[len("checkpoints/") :].strip("/")
+                if not checkpoint_id:
+                    raise ValueError("checkpoint id required")
+                return self._json_ok(
+                    _checkpoint_preview_payload(
+                        self.runtime,
+                        session_id,
+                        checkpoint_id,
+                    )
+                )
             raise ValueError("invalid session path")
 
         self._json_error(HTTPStatus.NOT_FOUND, "not found")
@@ -717,6 +816,23 @@ class _Handler(BaseHTTPRequestHandler):
                         goal=goal_str or None,
                     )
                 return self._json_ok({"session": _session_json(forked)})
+
+            if remainder.endswith("/rewind"):
+                session_id = remainder[: -len("/rewind")].strip("/")
+                if not session_id:
+                    raise ValueError("session id required")
+                checkpoint_id = str(body.get("checkpoint_id", "")).strip()
+                if not checkpoint_id:
+                    raise ValueError("checkpoint_id is required")
+                if not bool(body.get("confirm")):
+                    raise ValueError("confirm=true is required")
+                return self._json_ok(
+                    _rewind_session(
+                        self.runtime,
+                        session_id=session_id,
+                        checkpoint_id=checkpoint_id,
+                    )
+                )
 
         if path == "/api/model":
             backend = str(body.get("backend", "")).strip() or None

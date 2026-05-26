@@ -22,9 +22,10 @@ def replay_policy(session: Session, entry: CatalogEntry) -> ReplayPolicy:
             drop_reasoning_on_new_user_turn=True,
         )
     in_tool_loop = bool(session.messages and session.messages[-1].role == "tool")
+    has_persisted = _session_has_tool_reasoning(session)
     return ReplayPolicy(
-        include_reasoning_in_tool_loop=in_tool_loop,
-        drop_reasoning_on_new_user_turn=True,
+        include_reasoning_in_tool_loop=in_tool_loop or has_persisted,
+        drop_reasoning_on_new_user_turn=not has_persisted,
     )
 
 
@@ -37,13 +38,8 @@ def serialize_messages(
 
     openai_wire = composed.as_openai_messages()
     system, messages = _openai_messages_to_anthropic(openai_wire)
-    policy = replay_policy(session, entry)
-    if policy.include_reasoning_in_tool_loop:
-        assistant_id = _open_tool_loop_assistant_id(session)
-        if assistant_id is not None:
-            thinking_blocks = _thinking_blocks_for_message(session, assistant_id)
-            if thinking_blocks:
-                messages = _inject_thinking_blocks(messages, thinking_blocks)
+    if entry.reasoning_support != "none":
+        messages = _inject_all_thinking_blocks(messages, session)
     return {"system": system, "messages": messages}
 
 
@@ -249,6 +245,53 @@ def _thinking_blocks_for_message(session: Session, message_id: str) -> list[dict
         if message.reasoning_text:
             return [{"type": "thinking", "thinking": message.reasoning_text}]
     return []
+
+
+def _session_has_tool_reasoning(session: Session) -> bool:
+    for message in session.messages:
+        if message.role != "assistant" or not message.tool_calls:
+            continue
+        if _thinking_blocks_for_message(session, message.id):
+            return True
+    return False
+
+
+def _inject_all_thinking_blocks(
+    messages: list[dict[str, Any]],
+    session: Session,
+) -> list[dict[str, Any]]:
+    """Prepend thinking blocks to every assistant turn that includes tool_use."""
+
+    thinking_by_order = [
+        _thinking_blocks_for_message(session, message.id)
+        for message in session.messages
+        if message.role == "assistant" and message.tool_calls
+    ]
+    if not any(thinking_by_order):
+        return messages
+
+    idx = 0
+    out: list[dict[str, Any]] = []
+    for msg in messages:
+        if msg.get("role") != "assistant" or idx >= len(thinking_by_order):
+            out.append(msg)
+            continue
+        content = msg.get("content")
+        if not isinstance(content, list) or not any(
+            isinstance(block, dict) and block.get("type") == "tool_use" for block in content
+        ):
+            out.append(msg)
+            continue
+        blocks = thinking_by_order[idx]
+        idx += 1
+        if not blocks:
+            out.append(msg)
+            continue
+        merged = [dict(block) for block in blocks] + [
+            dict(block) for block in content if isinstance(block, dict)
+        ]
+        out.append({"role": "assistant", "content": merged})
+    return out
 
 
 def _inject_thinking_blocks(

@@ -162,3 +162,27 @@ def restore_snapshots(workspace_root: Path, snapshots: dict[str, str | None]) ->
         path.write_text(content, encoding="utf-8")
         touched.append(rel)
     return touched
+
+
+def preview_restore(
+    workspace_root: Path,
+    snapshots: dict[str, str | None],
+) -> list[dict[str, str | None]]:
+    """Compare checkpoint snapshots to current workspace files."""
+
+    root = workspace_root.resolve()
+    preview: list[dict[str, str | None]] = []
+    for rel, snapshot_content in snapshots.items():
+        path = root / rel
+        current = path.read_text(encoding="utf-8") if path.is_file() else None
+        if current == snapshot_content:
+            continue
+        preview.append(
+            {
+                "path": rel,
+                "current": current,
+                "restore_to": snapshot_content,
+            }
+        )
+    preview.sort(key=lambda row: row["path"] or "")
+    return preview

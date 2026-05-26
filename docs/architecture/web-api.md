@@ -208,6 +208,45 @@ Fork a session branch.
 
 Response: `{ "session": { ... new fork metadata ... } }`
 
+### `GET /api/sessions/{id}/checkpoints`
+
+List checkpoint metadata for a session (SQLite storage only).
+
+Response:
+
+```json
+{
+  "session_id": "ses_abc",
+  "checkpoints": [
+    {
+      "id": "cp_001",
+      "session_id": "ses_abc",
+      "tool_name": "write_file",
+      "created_at": "2026-05-26T12:00:00+00:00"
+    }
+  ]
+}
+```
+
+### `GET /api/sessions/{id}/checkpoints/{checkpoint_id}`
+
+Preview file diffs that a rewind would apply.
+
+Response includes `changes[]` with `{ path, current, restore_to }`.
+
+### `POST /api/sessions/{id}/rewind`
+
+Restore workspace files from a checkpoint. Requires explicit confirmation.
+
+```json
+{
+  "checkpoint_id": "cp_001",
+  "confirm": true
+}
+```
+
+Response: `{ "session_id", "checkpoint_id", "paths", "preview" }`
+
 ### `POST /api/model`
 
 Switch active model backend; persists to `~/.config/harnesslab/config.json`.

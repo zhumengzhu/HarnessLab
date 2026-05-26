@@ -1,0 +1,14 @@
+name: spawn_sub_agent_roundtrip
+goal: supervisor delegates to a child session
+description: |
+  Phase 6 PoC: ``spawn_sub_agent`` creates a child session, runs it to
+  completion, and returns JSON with ``child_session_id``.
+turns:
+  - input: '/tool spawn_sub_agent {"goal": "/final child done", "max_steps": 1}'
+    max_steps: 2
+expected:
+  events_include:
+    - event_type: tool_executed
+      payload_contains:
+        tool: spawn_sub_agent
+        ok: true

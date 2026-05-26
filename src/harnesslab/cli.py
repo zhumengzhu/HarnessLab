@@ -72,6 +72,7 @@ from harnesslab.replay import (
 )
 from harnesslab.session.in_memory import InMemorySessionStore
 from harnesslab.session.sqlite_store import SqliteSessionStore
+from harnesslab.skills.catalog import install_skill, list_skill_records, search_skills
 from harnesslab.telemetry.aggregate import aggregate, render_metrics
 from harnesslab.telemetry.jsonl_recorder import JsonlTraceRecorder
 from harnesslab.telemetry.log import configure_logging, get_logger
@@ -115,6 +116,7 @@ SUBCOMMANDS = (
     "artifact",
     "context",
     "serve",
+    "skill",
     "tui",
 )
 
@@ -1035,6 +1037,29 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Default inner-loop step budget per message (default: config or 20).",
     )
 
+    # ----- skill (Phase 7) -----
+    sk = sub.add_parser(
+        "skill",
+        help="List, search, and install workspace skills.",
+    )
+    sk.add_argument(
+        "--workspace-root",
+        default=".",
+        help="Workspace root containing skills/*.md.",
+    )
+    sk_sub = sk.add_subparsers(dest="skill_action", required=True, metavar="ACTION")
+    sk_sub.add_parser("list", help="List workspace and user-global skills.")
+    sk_search = sk_sub.add_parser("search", help="Search skills by name/description/tags.")
+    sk_search.add_argument("query", help="Case-insensitive substring query.")
+    sk_install = sk_sub.add_parser("install", help="Install a skill markdown file.")
+    sk_install.add_argument("source", help="Path to a .md skill file.")
+    sk_install.add_argument(
+        "--scope",
+        choices=["workspace", "user"],
+        default="workspace",
+        help="Install target directory (default: workspace/skills).",
+    )
+
     return parser
 
 
@@ -1085,11 +1110,42 @@ def main() -> None:
         sys.exit(_cmd_context(args))
     if args.command == "serve":
         sys.exit(_cmd_serve(args))
+    if args.command == "skill":
+        sys.exit(_cmd_skill(args))
     if args.command == "tui":
         sys.exit(_cmd_tui(args))
 
     parser.print_help(sys.stderr)
     sys.exit(EXIT_USAGE)
+
+
+def _cmd_skill(args: argparse.Namespace) -> int:
+    workspace_root = Path(args.workspace_root).resolve()
+    if args.skill_action == "list":
+        records = list_skill_records(workspace_root)
+        if not records:
+            print("(no skills)")
+            return EXIT_OK
+        for record in records:
+            tags = f" [{', '.join(record.tags)}]" if record.tags else ""
+            print(f"{record.name}\t{record.scope}{tags}\t{record.description}")
+        return EXIT_OK
+    if args.skill_action == "search":
+        records = search_skills(workspace_root, args.query)
+        if not records:
+            print("(no matches)")
+            return EXIT_OK
+        for record in records:
+            tags = f" [{', '.join(record.tags)}]" if record.tags else ""
+            print(f"{record.name}\t{record.scope}{tags}\t{record.description}")
+        return EXIT_OK
+    try:
+        dest = install_skill(workspace_root, Path(args.source), scope=args.scope)
+    except (FileNotFoundError, ValueError) as exc:
+        print(str(exc), file=sys.stderr)
+        return EXIT_USAGE
+    print(f"installed: {dest}")
+    return EXIT_OK
 
 
 def _cmd_run(args: argparse.Namespace) -> int:

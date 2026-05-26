@@ -160,6 +160,16 @@
         "denials": 0,
         "invalid_args": 0
       }
+    },
+    "spawn_sub_agent_roundtrip": {
+      "passed": true,
+      "metrics": {
+        "turns": 1,
+        "tool_calls": 1,
+        "tool_failures": 0,
+        "denials": 0,
+        "invalid_args": 0
+      }
     }
   }
 }

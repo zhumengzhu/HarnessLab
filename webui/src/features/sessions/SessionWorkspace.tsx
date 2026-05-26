@@ -6,6 +6,7 @@ import type {
 import type { TurnEnrichment } from "../../lib/turnEnrichments";
 import { AssistantTurnCard } from "../live-turn/AssistantTurnCard";
 import type { LiveTurnState } from "../live-turn/liveTurnReducer";
+import { CheckpointPanel } from "./CheckpointPanel";
 import { ChatMessage } from "../chat/ChatMessage";
 import { TracePanel } from "../trace/TracePanel";
 
@@ -24,6 +25,7 @@ type SessionWorkspaceProps = {
   turnEnrichments: Record<string, TurnEnrichment>;
   liveTurn: LiveTurnState | null;
   budgetEvents: TraceEventItem[];
+  childSessions: Array<{ id: string; goal: string; title: string | null; status: string }>;
   hasStreamTrace: boolean;
   onClearStreamTrace: () => void;
 };
@@ -43,6 +45,7 @@ export function SessionWorkspace(props: SessionWorkspaceProps) {
     turnEnrichments,
     liveTurn,
     budgetEvents,
+    childSessions,
     hasStreamTrace,
     onClearStreamTrace,
   } = props;
@@ -106,6 +109,27 @@ export function SessionWorkspace(props: SessionWorkspaceProps) {
                   ) : null}
                 </div>
               </details>
+            ) : null}
+
+            {uiMode === "advanced" && childSessions.length ? (
+              <details className="diag-block" open>
+                <summary>Child sessions ({childSessions.length})</summary>
+                <ul className="checkpoint-list">
+                  {childSessions.map((child) => (
+                    <li key={child.id} className="checkpoint-item">
+                      <div className="checkpoint-meta">
+                        <strong>{child.title?.trim() || child.goal.slice(0, 48)}</strong>
+                        <span>{child.status}</span>
+                        <code>{child.id}</code>
+                      </div>
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            ) : null}
+
+            {uiMode === "advanced" && selectedSessionId ? (
+              <CheckpointPanel sessionId={selectedSessionId} />
             ) : null}
 
             <div className="messages">

@@ -22,9 +22,10 @@ def replay_policy(session: Session, entry: CatalogEntry) -> ReplayPolicy:
             drop_reasoning_on_new_user_turn=True,
         )
     in_tool_loop = bool(session.messages and session.messages[-1].role == "tool")
+    has_persisted = _session_has_tool_reasoning(session)
     return ReplayPolicy(
-        include_reasoning_in_tool_loop=in_tool_loop,
-        drop_reasoning_on_new_user_turn=True,
+        include_reasoning_in_tool_loop=in_tool_loop or has_persisted,
+        drop_reasoning_on_new_user_turn=not has_persisted,
     )
 
 
@@ -37,13 +38,8 @@ def serialize_request(
 
     openai_wire = composed.as_openai_messages()
     system_instruction, contents = _openai_messages_to_gemini(openai_wire)
-    policy = replay_policy(session, entry)
-    if policy.include_reasoning_in_tool_loop:
-        assistant_id = _open_tool_loop_assistant_id(session)
-        if assistant_id is not None:
-            thought_parts = _thought_parts_for_message(session, assistant_id)
-            if thought_parts:
-                contents = _inject_thought_parts(contents, thought_parts)
+    if entry.reasoning_support != "none":
+        contents = _inject_all_thought_parts(contents, session)
     return {
         "system_instruction": system_instruction,
         "contents": contents,
@@ -272,6 +268,54 @@ def _thought_parts_for_message(session: Session, message_id: str) -> list[dict[s
         if message.reasoning_text:
             return [{"text": message.reasoning_text, "thought": True}]
     return []
+
+
+def _session_has_tool_reasoning(session: Session) -> bool:
+    for message in session.messages:
+        if message.role != "assistant" or not message.tool_calls:
+            continue
+        if _thought_parts_for_message(session, message.id):
+            return True
+    return False
+
+
+def _inject_all_thought_parts(
+    contents: list[dict[str, Any]],
+    session: Session,
+) -> list[dict[str, Any]]:
+    """Prepend thought parts to every model turn that includes a function call."""
+
+    parts_by_order = [
+        _thought_parts_for_message(session, message.id)
+        for message in session.messages
+        if message.role == "assistant" and message.tool_calls
+    ]
+    if not any(parts_by_order):
+        return contents
+
+    idx = 0
+    out: list[dict[str, Any]] = []
+    for msg in contents:
+        if msg.get("role") != "model" or idx >= len(parts_by_order):
+            out.append(msg)
+            continue
+        parts = msg.get("parts")
+        if not isinstance(parts, list) or not any(
+            isinstance(part, dict) and ("functionCall" in part or "function_call" in part)
+            for part in parts
+        ):
+            out.append(msg)
+            continue
+        thought_parts = parts_by_order[idx]
+        idx += 1
+        if not thought_parts:
+            out.append(msg)
+            continue
+        merged = [dict(part) for part in thought_parts] + [
+            dict(part) for part in parts if isinstance(part, dict)
+        ]
+        out.append({"role": "model", "parts": merged})
+    return out
 
 
 def _inject_thought_parts(

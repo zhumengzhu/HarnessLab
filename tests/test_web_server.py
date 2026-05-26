@@ -241,7 +241,41 @@ def test_web_sse_stream_returns_done_event(tmp_path: Path) -> None:
     base = f"http://127.0.0.1:{port}"
 
     body = _post_sse(f"{base}/api/sessions", {"message": "stream me", "stream": True})
+    assert "event: trace" in body
     assert "event: done" in body
+    assert body.index("event: trace") < body.index("event: done")
+
+
+def test_web_checkpoints_list_preview_and_rewind(tmp_path: Path) -> None:
+    port = _free_port()
+    runtime = _web_runtime(tmp_path, max_steps=3)
+    _start_server(runtime, port)
+    base = f"http://127.0.0.1:{port}"
+
+    target = tmp_path / "rewind.txt"
+    target.write_text("v1\n", encoding="utf-8")
+    created = _post(
+        f"{base}/api/sessions",
+        {
+            "message": '/tool write_file {"path": "rewind.txt", "content": "v2\\n"}',
+            "max_steps": 2,
+        },
+    )
+    session_id = created["session"]["id"]
+    listed = _get(f"{base}/api/sessions/{session_id}/checkpoints")
+    assert listed["checkpoints"], "expected at least one checkpoint"
+    checkpoint_id = listed["checkpoints"][0]["id"]
+
+    preview = _get(f"{base}/api/sessions/{session_id}/checkpoints/{checkpoint_id}")
+    assert preview["changes"]
+    assert preview["changes"][0]["path"] == "rewind.txt"
+
+    result = _post(
+        f"{base}/api/sessions/{session_id}/rewind",
+        {"checkpoint_id": checkpoint_id, "confirm": True},
+    )
+    assert "rewind.txt" in result["paths"]
+    assert target.read_text(encoding="utf-8") == "v1\n"
 
 
 def test_web_trace_endpoint(tmp_path: Path) -> None:

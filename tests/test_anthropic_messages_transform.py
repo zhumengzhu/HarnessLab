@@ -171,6 +171,103 @@ def test_parse_response_final_with_thinking() -> None:
     }
 
 
+def test_serialize_replays_all_tool_assistants_in_multi_turn_history() -> None:
+    """Closed tool loop + new user turn must still replay earlier thinking blocks."""
+
+    thinking_one = {
+        "type": "thinking",
+        "thinking": "turn one plan",
+        "signature": "sig_1",
+    }
+    thinking_two = {
+        "type": "thinking",
+        "thinking": "turn two plan",
+        "signature": "sig_2",
+    }
+    session = _session(
+        Message(
+            id="msg_u1",
+            role="user",
+            content="run tool",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+        ),
+        Message(
+            id="msg_a1",
+            role="assistant",
+            content="",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+            tool_calls=[
+                {
+                    "id": "toolu_01",
+                    "type": "function",
+                    "function": {"name": "grep", "arguments": '{"pattern":"foo"}'},
+                }
+            ],
+            provider_extra={"thinking_blocks": [thinking_one]},
+        ),
+        Message(
+            id="msg_t1",
+            role="tool",
+            content="matches",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+            tool_call_id="toolu_01",
+        ),
+        Message(
+            id="msg_a2",
+            role="assistant",
+            content="done after tool",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+        ),
+        Message(
+            id="msg_u2",
+            role="user",
+            content="run another tool",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+        ),
+        Message(
+            id="msg_a3",
+            role="assistant",
+            content="",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+            tool_calls=[
+                {
+                    "id": "toolu_02",
+                    "type": "function",
+                    "function": {"name": "read_file", "arguments": '{"path":"a.txt"}'},
+                }
+            ],
+            provider_extra={"thinking_blocks": [thinking_two]},
+        ),
+        Message(
+            id="msg_t2",
+            role="tool",
+            content="file",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+            tool_call_id="toolu_02",
+        ),
+    )
+    composed = PromptComposer().build(session)
+    wire = serialize_messages(composed, session, _entry())
+    tool_assistants = [
+        m
+        for m in wire["messages"]
+        if m.get("role") == "assistant"
+        and isinstance(m.get("content"), list)
+        and any(b.get("type") == "tool_use" for b in m["content"])
+    ]
+    assert len(tool_assistants) == 2
+    assert tool_assistants[0]["content"][0] == thinking_one
+    assert tool_assistants[1]["content"][0] == thinking_two
+    assert replay_policy(session, _entry()).include_reasoning_in_tool_loop is True
+
+
 def test_parse_response_tool_use() -> None:
     turn = parse_response(
         {

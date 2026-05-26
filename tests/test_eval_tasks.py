@@ -67,4 +67,5 @@ def test_shipped_tasks_cover_expected_paths() -> None:
         "workspace_memory_persists",
         "plan_then_execute",
         "research_summary",
+        "spawn_sub_agent_roundtrip",
     } <= names

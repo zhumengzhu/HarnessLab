@@ -42,6 +42,7 @@ from harnesslab.tools.patch import ApplyPatchTool
 from harnesslab.tools.registry import ToolRegistry
 from harnesslab.tools.research_tools import HtmlToMarkdownTool, WebSearchTool
 from harnesslab.tools.shell_tool import RunShellSafeTool
+from harnesslab.tools.spawn_sub_agent import SpawnSubAgentTool
 
 
 def _limits_for_task(task: Task) -> RuntimeLimits:
@@ -170,6 +171,8 @@ class TaskRunner:
             ReplayModel(decisions=task.decisions) if task.decisions else SimpleModel()
         )
 
+        loop_holder: list[HarnessLoop] = []
+        tools.register(SpawnSubAgentTool(lambda: loop_holder[0]))
         loop = HarnessLoop(
             model=model,
             policy=DefaultPolicy(
@@ -177,6 +180,7 @@ class TaskRunner:
                 shell_profile=(
                     task.policy.shell_profile if task.policy is not None else None
                 ),
+                enable_spawn_sub_agent=True,
             ),
             sessions=InMemorySessionStore(),
             tools=tools,
@@ -187,6 +191,7 @@ class TaskRunner:
             memory=memory,
             workspace_root=workspace,
         )
+        loop_holder.append(loop)
 
         session = loop.start(goal=task.goal)
         replies = _drive_turns(loop, session.id, task.turns, default_goal=task.goal)
