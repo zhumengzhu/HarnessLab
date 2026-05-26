@@ -6,7 +6,7 @@ import os
 import sys
 from dataclasses import replace
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from harnesslab.artifact.in_memory import InMemoryArtifactStore
 from harnesslab.artifact.sqlite_store import SqliteArtifactStore
@@ -267,6 +267,26 @@ def _build_checkpoint_store(
         db_path = workspace_root / db_path
     db_path.parent.mkdir(parents=True, exist_ok=True)
     return SqliteCheckpointStore(db_path)
+
+
+def _serve_settings_snapshot(
+    config: OperatorConfig,
+    *,
+    workspace_root: Path,
+    model_backend: str,
+    loop: HarnessLoop,
+) -> dict[str, Any]:
+    """Settings payload for ``WebRuntime`` including runtime-only fields."""
+
+    settings = config_settings_snapshot(
+        config,
+        workspace_root=workspace_root,
+        model_backend=model_backend,
+    )
+    mcp_health = getattr(loop, "_mcp_health", None)
+    if isinstance(mcp_health, dict):
+        settings["mcp_health"] = mcp_health
+    return settings
 
 
 def _build_semantic_memory(
@@ -1149,10 +1169,11 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         trace_hub=trace_hub,
         trace_path=trace_path,
         operator_config=config,
-        settings=config_settings_snapshot(
+        settings=_serve_settings_snapshot(
             config,
             workspace_root=workspace_root,
             model_backend=model_backend,
+            loop=loop,
         ),
     )
     serve(runtime, host=host, port=port)

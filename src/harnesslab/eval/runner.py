@@ -40,6 +40,7 @@ from harnesslab.tools.file_tools import (
 )
 from harnesslab.tools.patch import ApplyPatchTool
 from harnesslab.tools.registry import ToolRegistry
+from harnesslab.tools.research_tools import HtmlToMarkdownTool, WebSearchTool
 from harnesslab.tools.shell_tool import RunShellSafeTool
 
 
@@ -59,6 +60,8 @@ def _build_tool_registry(workspace: Path, limits: RuntimeLimits) -> ToolRegistry
     tools.register(GrepTool(workspace, limits=limits))
     tools.register(GlobTool(workspace, limits=limits))
     tools.register(FetchUrlTool(limits=limits))
+    tools.register(WebSearchTool())
+    tools.register(HtmlToMarkdownTool(limits=limits))
     tools.register(RunShellSafeTool(workspace, limits=limits))
     return tools
 

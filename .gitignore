@@ -8,5 +8,6 @@ scratch/
 eval/reports/
 node_modules/
 webui/node_modules/
+webui/package-lock.json
 src/harnesslab/web/static_ts/
 

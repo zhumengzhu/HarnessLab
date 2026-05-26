@@ -1,59 +1,47 @@
 # Frontend TS Migration RFC (OpenClaw-style)
 
-Status: In progress (Phase A–C complete; Phase D started; **Phase E partial** —
+Status: In progress (Phase A–C **complete**; Phase D **in progress**; Phase E **partial** —
 TS bundle is default when built)
 
 ## Why this exists
 
-HarnessLab's current Web UI is a lightweight static frontend
-(`web/static/index.html` + `app.js`). It is good for rapid iteration,
-but Phase 5+ features (proposal review, budgets, hooks, checkpoints,
-streaming UX) benefit from:
+HarnessLab's legacy Web UI lives under `web/static/` (`index.html` + `app.js`).
+Phase 5+ features (proposal review, budgets, hooks, checkpoints, streaming UX)
+benefit from:
 
 - stronger type safety
 - modular UI composition
 - reusable API client + SSE abstractions
 - better testability and maintainability
 
-This RFC defines a migration plan to a TypeScript-based frontend,
+This RFC defines the migration plan to a TypeScript-based frontend,
 while keeping the existing Python runtime and API contracts stable.
 
 Product UX principles, turn layout, and Thinking/Thought semantics are
 documented in [`webui-design.md`](webui-design.md).
 
-Current progress snapshot:
+## Current progress snapshot
 
-- `webui/` scaffold exists (Vite + React + TS + typed API/SSE helper stubs).
-- Build target is `src/harnesslab/web/static_ts/`.
+- `webui/` scaffold exists (Vite + React + TS + typed API/SSE helpers).
+- Build target is `src/harnesslab/web/static_ts/` (`bun run build` or `./hl-serve build`).
 - `harnesslab serve` prefers the TS bundle when `static_ts/` exists
   (`HARNESSLAB_WEB_UI_VERSION` defaults to `ts`; legacy fallback otherwise).
-- Phase B read surfaces are live in TS UI (sessions/trace/proposals/settings).
+- Phase B read surfaces are live in TS UI (sessions / trace / proposals / settings).
 - Phase C interactive parity shipped:
-  - composer send + SSE `trace/done/error`
-  - token-level `reasoning_delta` / `assistant_delta` (DeepSeek first)
+  - composer send + SSE `trace` / `reasoning_delta` / `assistant_delta` / `done` / `error`
   - `/` slash palette via `GET /api/composer/commands`
-  - Cursor-style `/skillname` direct invoke; `/compact`, `/remember`, `/remember-global`
+  - Cursor-style `/skillname`; `/compact`, `/remember`, `/remember-global`
   - session fork; tool cards; stream error rendering
   - IME-safe composer; localStorage session/mode restore; model picker → `config.json`
-  - final answer peek → expand → collapse
-- Phase D started: proposal status transitions (accept/reject/supersede)
-  wired in TS UI against guarded backend API, with explicit gate
-  acknowledgements before `accepted`.
-- Proposal panel includes gate-run buttons (`pytest`/`eval`) with inline
-  pass/fail output cards to support operator decisions.
-- Feature-slice migration started in code (`features/proposals`,
-  `features/sessions`) to reduce `App.tsx` coupling.
-- Continued split for shared surfaces (`features/composer`,
-  `features/settings`) so `App.tsx` stays orchestration-focused.
-- Trace and send-flow state handling are now split (`features/trace`,
-  `features/composer/useComposerController`) to reduce top-level component
-  state coupling.
-- Frontend test skeleton started with Vitest (utility-level tests first,
-  expanding toward component tests in later phases).
-- Proposal panel component-level test coverage has started (`ProposalPanel`
-  gate run + checkbox sync path).
-- **Simple Chat Mode** (default): header toggle hides trace/proposals/settings
-  until operator switches to Advanced; reduces onboarding friction for daily chat.
+  - **Main assistant replies always full** (Cursor-like); Thinking / Tool rows use left-side disclosure
+- Phase D started:
+  - proposal status transitions + gate-run UI
+  - budget usage + budget trace events in Advanced mode
+  - **MCP health** panel in Settings (startup probe from `mcp_health` in `/api/settings`)
+  - session checkpoints / rewind UI — **not yet** (CLI only today)
+- Phase E partial:
+  - TS bundle is default when built; legacy remains as fallback
+  - **Exit remaining:** delete `web/static/` after one stable release window
 
 ## Scope and non-goals
 
@@ -71,158 +59,87 @@ Non-goals:
 
 ## Design principles (OpenClaw-inspired)
 
-Reference style: clear contract boundaries, typed data models, modular
-feature slices, and stable event streaming wrappers.
-
-Apply to HarnessLab as:
-
-1. **Typed boundary first**: generate/maintain TS API types from
-   documented JSON payload shapes.
-2. **Feature modules**: `sessions`, `trace`, `proposals`, `settings`,
-   `composer` as independent UI modules.
-3. **Single stream abstraction**: one SSE client layer for trace/done/error.
+1. **Typed boundary first**: maintain TS schemas aligned with documented JSON payloads.
+2. **Feature modules**: `sessions`, `trace`, `proposals`, `settings`, `composer` as slices.
+3. **Single stream abstraction**: one SSE client layer for trace/delta/done/error.
 4. **State is explicit**: loading/error/empty states per feature module.
-5. **Progressive migration**: old static UI remains fallback until parity.
+5. **Progressive migration**: legacy static UI remains fallback until Phase E exit.
 
 ## Target stack
 
 - Runtime: `React` + `TypeScript`
-- Build/dev: `Vite`
-- Package manager: `bun` (primary) with npm-compatible scripts preserved
-- Data fetching/cache: `@tanstack/react-query`
-- Forms/validation: `zod` + thin helpers
-- UI primitives: minimal local components first (no heavy design system initially)
-- Testing:
-  - Unit/component: `vitest` + `@testing-library/react`
-  - E2E smoke (optional phase): `playwright` (UI only, no agent browser automation)
-
-## Proposed directory layout
-
-```
-webui/
-  src/
-    app/
-    features/
-      sessions/
-      trace/
-      proposals/
-      settings/
-      composer/
-    lib/
-      api-client.ts
-      sse-client.ts
-      schemas.ts
-    components/
-  index.html
-  vite.config.ts
-```
-
-Build output is copied/symlinked into `src/harnesslab/web/static/`
-for `harnesslab serve` to host unchanged.
-
-## API contract strategy
-
-Do not change server routes as migration prerequisite. Keep:
-
-- `GET /api/settings`
-- `GET /api/sessions`
-- `GET /api/sessions/{id}`
-- `GET /api/sessions/{id}/trace`
-- `POST /api/sessions`
-- `POST /api/sessions/{id}/messages`
-- `POST /api/sessions/{id}/fork`
-- `GET /api/proposals`
-- `GET /api/proposals/{id}`
-
-Add typed TS schemas for each payload; keep runtime validation at API edge.
+- Build/dev: `Vite` + `bun` (see `webui/README.md`)
+- Data fetching: `@tanstack/react-query`
+- Validation: `zod` + thin helpers
+- Testing: `vitest` + `@testing-library/react`; optional Playwright smoke later
 
 ## Migration phases
 
-### Phase A: foundation
+### Phase A: foundation — DONE
 
-- Initialize `webui/` with TS toolchain.
-- Implement typed `api-client` + `sse-client`.
-- Add build pipeline to emit assets consumed by Python server.
+Typed `api-client` + `sse-client`; build pipeline → `static_ts/`.
 
-Exit: TS app can render shell and fetch `/api/health` + `/api/settings`.
+### Phase B: read surfaces parity — DONE
 
-### Phase B: read surfaces parity
+Session list/detail, trace panel, proposal list/detail read-only.
 
-- Migrate session list/detail rendering.
-- Migrate trace panel (including hook events, budget events).
-- Migrate proposal list/detail read-only panel.
+### Phase C: interactive parity — DONE
 
-Exit: old and new UI read paths are functionally equivalent.
+Composer, SSE streaming, fork, slash commands, tool cards, model picker persistence.
 
-### Phase C: interactive parity
+### Phase D: advanced controls — IN PROGRESS
 
-- Migrate composer + send stream handling.
-- Migrate fork, `/remember`, `/skill` affordances.
-- Ensure tool cards and streaming done/error behavior parity.
+| Item | Status |
+| --- | --- |
+| Proposal transitions + gate runs | Done |
+| Budget usage / budget events in session workspace | Done |
+| MCP health in Settings | Done (needs `tools.mcp_servers` in config) |
+| Hook event visualization in trace | Partial (trace labels exist) |
+| Session checkpoints list + rewind confirm + file diff preview | **Next** |
+| Provider failover surfacing | Planned |
 
-Exit: core chat workflow parity complete.
+**Exit:** Phase 5 Web surfaces fully hosted in TS frontend.
 
-### Phase D: advanced controls
+### Phase E: default switch & legacy removal — PARTIAL
 
-- Proposal status transitions + gate actions UI.
-- Budget/plan/hook richer visualizations.
-- Session checkpoints/rewind UI (when backend is ready).
-
-Exit: Phase 5 Web surfaces fully hosted in TS frontend.
-
-### Phase E: default switch (partial)
-
-- TS build output is **default** when `static_ts/` exists (`HARNESSLAB_WEB_UI_VERSION=ts`).
-- Legacy static UI remains available via `HARNESSLAB_WEB_UI_VERSION=legacy` and
-  automatic fallback when the bundle is missing.
-
-Exit (remaining): remove legacy JS UI after one stable release window.
-
-## Compatibility and rollout controls
-
-- Config flag: `web.ui_version = legacy|ts` (or env override).
-- During rollout:
-  - CI runs existing Python tests + frontend TS tests.
-  - No API breaking changes without schema/version notes.
+- TS build output is **default** when `static_ts/` exists.
+- Legacy static UI: `HARNESSLAB_WEB_UI_VERSION=legacy` or missing bundle fallback.
+- **Deprecation:** `web/static/` is frozen; no new features land there.
+- **Exit (remaining):** remove legacy JS after one stable release window; drop env fallback.
 
 ## Frontend testing coverage strategy
 
-The TS UI uses layered test coverage so migration can proceed without slowing
-feature delivery:
+Layered tests so migration does not block feature delivery:
 
-- **Utility layer (fastest):** pure helpers in `features/*` and `lib/*`
-  (example: proposal gate output summarization).
-- **Component layer (current focus):** React Testing Library + Vitest around
-  feature slices; mock `/api/*` and assert user-visible states (loading, error,
-  success, disabled transitions).
-- **Stream integration layer (next):** targeted SSE flow tests for
-  `trace/done/error` ordering and tool-card rendering.
-- **E2E smoke layer (optional):** Playwright checks for core chat workflows,
-  run as a non-blocking lane until TS UI becomes default.
+| Layer | Purpose | Status |
+| --- | --- | --- |
+| Utility | Pure helpers (`gate-utils`, `thoughtUtils`, …) | Active |
+| Component | RTL + Vitest on feature slices | Active |
+| **Stream integration** | SSE ordering: `trace` → deltas → `done`; error events | **Started** — `webui/src/lib/sse-client.test.ts` mocks `fetch` ReadableStream |
+| E2E smoke (optional) | Playwright core chat workflow | Planned, non-blocking |
 
-Current baseline:
+**Stream integration plan (concrete):**
 
-- Proposal panel has utility coverage and component scenarios for:
-  - gate success -> confirmation auto-check
-  - gate failure -> confirmation reset behavior
-  - gate API error -> inline error message rendering
-- App-level mode toggle tests cover Simple default and Advanced panel visibility.
+1. **Unit (done):** `sse-client.test.ts` feeds synthetic SSE chunks; asserts handler call order and `stream:true` on POST body.
+2. **Reducer (done):** `liveTurnStream.test.ts` for delta → LiveTurn state.
+3. **Next (optional):** `useComposerController` integration test with mocked `postSse` returning a full turn script (tool trace + done).
+4. **Python side (future):** `tests/test_web_server.py` POST `/api/sessions/{id}/messages` with `stream:true` against `ReplayModel` / `simple` backend; assert event sequence in response body (complements TS tests).
+
+## Compatibility and rollout controls
+
+- Env: `HARNESSLAB_WEB_UI_VERSION=legacy|ts`
+- Config: `web_ui_version` in operator config
+- CI: Python tests + `cd webui && bun run check && bun test`
+- `./hl-serve build` / `./hl-serve restart --build` for local frontend refresh
 
 ## Risks and mitigations
 
-- **Risk:** API drift between Python and TS models.
-  - **Mitigation:** shared schema snapshots + contract tests.
-- **Risk:** SSE regressions under long-running tool turns.
-  - **Mitigation:** dedicated stream integration tests.
-- **Risk:** migration interrupts active feature delivery.
-  - **Mitigation:** phased replacement, feature-by-feature.
+- **API drift** → contract tests + schema docs in `web-api.md`
+- **SSE regressions** → stream integration tests (above)
+- **Migration vs features** → phased replacement; legacy frozen
 
-## Acceptance criteria for scheduling
+## Acceptance criteria for legacy removal (Phase E exit)
 
-This migration remains deferred until:
-
-1. Phase 5 core items are stable enough to avoid moving UI targets.
-2. Phase 6 shape is settled (avoid remigrating around multi-agent UX shifts).
-3. Web API contract is declared stable for one release cycle.
-
-When these are met, this RFC becomes implementation plan-of-record.
+1. TS UI covers all Phase D items (including rewind).
+2. One release cycle with TS default and no P2 regressions reported.
+3. `web/static/` deleted; docs and `serve` fallback simplified.

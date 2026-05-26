@@ -24,7 +24,7 @@ Exit codes: `0` ok, `2` task failure, `3` baseline regression.
 
 | Lane | Env | What it exercises |
 |------|-----|-------------------|
-| Eval network tasks | `RUN_LIVE_EVAL=1` | wttr.in fetch (`fetch_url_weather`) |
+| Eval network tasks | `RUN_LIVE_EVAL=1` | wttr.in fetch (`fetch_url_weather`); research chain (`research_summary`) |
 | DeepSeek provider | `RUN_DEEPSEEK_LIVE=1` + `DEEPSEEK_API_KEY` | Real `deepseek-v4-flash`: thinking disabled/enabled smoke only (no tool tests) |
 
 CI runs `pytest -m "not network"` and `eval --skip-tags network` only.
@@ -65,9 +65,10 @@ When `harnesslab propose` surfaces a recurring failure cluster:
 
 ## Shipped coverage (Phase 3.1+)
 
-Fifteen tasks in `eval/baseline.json`. Task `fetch_url_weather` is tagged
+Sixteen tasks in `eval/baseline.json`. Task `fetch_url_weather` is tagged
 ``network`` and skipped by default in CI (`--skip-tags network` /
-`pytest -m "not network"`). Optional live lane: ``RUN_LIVE_EVAL=1 pytest -m network``.
+``pytest -m "not network"``). Task ``research_summary`` uses the same lane.
+Optional live lane: ``RUN_LIVE_EVAL=1 pytest -m network``.
 
 | Task | Path exercised |
 |------|----------------|

@@ -73,7 +73,9 @@ export DEEPSEEK_API_KEY="***"   # or another provider key; see Configuration
 Lifecycle helper (repo root):
 
 ```bash
-./hl-serve start      # stop | restart | status
+./hl-serve start      # stop | restart | status | build
+./hl-serve build      # bun run build → static_ts/
+./hl-serve restart --build   # build then restart (common after webui edits)
 ./hl-serve            # full help
 
 # Optional secrets: ~/.config/harnesslab/env
@@ -97,6 +99,8 @@ Use `--model simple` for offline smoke tests. Bind address must stay on
 Rebuild the frontend:
 
 ```bash
+./hl-serve build
+# or, after webui edits: ./hl-serve restart --build
 cd webui && bun install && bun run check && bun test && bun run build
 ```
 

@@ -82,7 +82,7 @@ everything through Phase 4 **plus** most of Phase 5:
   **production sub-agent** planned (Phase 6)
 - **Workspace skills** — `skills/*.md`, `/skillname`, composer palette;
   **skill search/install** planned (Phase 7)
-- **Fifteen eval tasks** + GitHub Actions offline gate (`--skip-tags network`)
+- **Sixteen eval tasks** + GitHub Actions offline gate (`--skip-tags network`)
 
 **Authoritative future work:** see [What's next](#whats-next-prioritized) below.
 
@@ -774,8 +774,8 @@ Same **Entry / Deliverables / Exit** bar as previous phases.
       `robots.txt` advisory check, response size + content-type caps,
       and an env-deny list.
   - `html_to_markdown` and `read_pdf` (via `pypdfium2`) for ingest.
-  - Optional eval task `research_summary` (network-tagged) — **not yet
-    shipped**; see What's next.
+  - Optional eval task `research_summary` (network-tagged) — **DONE**
+    (`eval/tasks/16_research_summary.yaml`; live lane via `RUN_LIVE_EVAL=1`).
 - **Exit**: `harnesslab eval --skip-tags network` stays green; policy denials
   produce normalized `ToolResult(ok=False)`; docs in `tool-runtime.md` updated.
 
@@ -987,78 +987,74 @@ This section is the **living backlog** after Phase 5 substantial completion.
 Items are ordered by impact on daily use and learning clarity. Each should
 ship with tests + doc updates per `AGENTS.md`.
 
+**Priority note (2026-05):** Phase 6 sub-agent production and Phase 7 skills
+discovery/install are **elevated** — daily research workflows depend on them
+more than incremental provider polish.
+
 ### P0 — Correctness & provider parity
 
 | Item | Why | Entry signal |
 | --- | --- | --- |
-| **Multi-turn thinking replay (OpenAI-chat / DeepSeek)** | API 400 without historical `reasoning_content` on tool assistants | **DONE** — transform replays all tool-loop assistants |
-| **Anthropic / Gemini multi-turn tool+thinking replay audit** | Same class of bug on other `api_family` transforms | First live multi-turn tool session fails replay |
-| **Token streaming beyond DeepSeek** | Web UI already renders deltas; other backends still step-only | Operator expects live thinking on Claude/GPT/Gemini |
+| **Multi-turn thinking replay (OpenAI-chat / DeepSeek)** | API 400 without historical `reasoning_content` on tool assistants | **DONE** |
+| **Anthropic / Gemini multi-turn tool+thinking replay audit** | Same class of bug on other transforms | Extend **fixture tests** in `tests/test_anthropic_messages_transform.py` / `tests/test_google_generate_content_transform.py` — **live API keys not required** for transform/replay coverage; live smoke optional via OpenRouter or native keys |
+| **Token streaming beyond DeepSeek** | Web UI renders deltas; other backends step-only | After P0 replay audit green |
 
-### P1 — Close Phase 5
+### P1 — Multi-agent & skills (elevated)
+
+> Formerly P3 / P4. Sub-agent PoC and workspace skills exist; next is
+> **operator-visible production paths**.
+
+#### Phase 6 — Sub-agent production
 
 | Item | Why | Notes |
 | --- | --- | --- |
-| **5.10 cost budgets** | Token/time limits exist; USD guardrails incomplete | Price table in catalog; `max_session_cost_usd_total`; CLI `session show` budget block |
-| **5.10 eval tasks** | Pin soft/hard budget crossings deterministically | YAML tasks with `ReplayModel` |
-| **5.9 Web UI rewind** | CLI rewind shipped; browser lacks confirm+diff UX | Reuse checkpoint API; Advanced mode |
-| **`research_summary` eval task** | Phase 5.1 optional deliverable never added | Network-tagged; `RUN_LIVE_EVAL=1` lane |
+| **Supervisor loop hardening** | Safe, observable child runs | Trace fan-in; budget isolation |
+| **Web UI: child session panel** | spawn → child activity → result | Sidebar or nested turn card |
+| **Streaming / LiveTurn for children** | Parent turn shows progress | Nested Thinking/Tool rows |
+| **Eval tasks for spawn** | Deterministic regression | `supervisor_research_then_write` |
+| **Depth & concurrency limits** | Prevent runaway trees | `max_sub_agent_depth`, caps |
+| **Operator enable path** | Discoverable toggle | Config + Web settings |
 
-### P2 — Web UI & operator UX
+#### Phase 7 — Skills discovery & install
+
+| Item | Why | Notes |
+| --- | --- | --- |
+| **Skill catalog / search** | Find skills without manual copy | Local cache + optional remote index |
+| **`harnesslab skill search` / `install`** | CLI discovery + install | Git URL, catalog id, file path |
+| **Web UI skill browser** | Search, preview, install | Composer `/` unchanged after install |
+| **Global vs workspace scope** | Share across projects | `~/.config/harnesslab/skills/` |
+| **Trust model** | No autonomous installs | Operator explicit only |
+
+### P2 — Close Phase 5 & Web operator UX
+
+| Item | Why | Notes |
+| --- | --- | --- |
+| **5.10 cost budgets** | USD guardrails incomplete | Price table; `max_session_cost_usd_total` |
+| **5.10 eval tasks** | Pin budget crossings | YAML + `ReplayModel` |
+| **5.9 Web UI rewind** | CLI only today | Confirm + file diff in Advanced mode |
+| **`research_summary` eval** | Phase 5.1 deliverable | **DONE** — `16_research_summary.yaml` |
+| **TS migration Phase D** | Advanced controls in TS only | MCP health **DONE**; rewind UI **next** |
+| **TS migration Phase E** | Remove legacy `web/static/` | Deprecated; delete after stable window |
+| **SSE stream integration tests** | Guard event ordering | **Started** — `sse-client.test.ts`; optional Python SSE test next |
+| **Optional Playwright smoke** | E2E chat workflow | Non-blocking |
+| **Provider failover UX** | P6 backend exists | Web surfacing TBD |
+| **Chat long-reply expand UX** | **DONE** — Cursor-like full replies |
+
+### P3 — Provider expansion & live smoke
 
 | Item | Why |
 | --- | --- |
-| **TS migration Phase D/E completion** | Remove legacy static UI after stable release window |
-| **SSE stream integration tests** | Guard `trace`/`delta`/`done` ordering regressions |
-| **Optional Playwright smoke** | Non-blocking E2E for core chat workflow |
-| **MCP health in settings panel** | Phase 5.4 deliverable partially deferred |
-| **Provider failover UX** | P6 backend exists; Web UI surfacing TBD |
-| **Chat long-reply expand UX** | **DONE** — main replies always full (Cursor-like); Thinking/Tool stay collapsible |
+| **Live multi-provider smoke** | OpenRouter or native keys — optional `RUN_*_LIVE=1` lanes |
+| **OpenRouter / proxy profile** | Document `OPENAI_BASE_URL` + catalog `reasoning_support: proxy` caveats |
+| **Constrained provider plugins** | §6.7 local entry_points only |
 
-### P3 — Sub-agent (Phase 6 production)
-
-> **PoC shipped:** `spawn_sub_agent` tool + `start_child` + eval path
-> (`loop.multi_agent` config). **Goal:** first-class sub-agent support for
-> supervisor-style research and coding workflows — not a hidden one-off tool.
-
-| Item | Why | Notes |
-| --- | --- | --- |
-| **Supervisor loop hardening** | Safe, observable child runs | Trace fan-in; budget isolation; policy defaults per child |
-| **Web UI: child session panel** | See spawn → child activity → result in chat | Sidebar link or nested turn card |
-| **Streaming / LiveTurn for children** | Parent turn shows sub-agent progress | Optional nested Thinking/Tool rows |
-| **Eval tasks for spawn** | Deterministic regression | e.g. `supervisor_research_then_write` in multi-agent RFC |
-| **Depth & concurrency limits** | Prevent runaway spawn trees | `max_sub_agent_depth`, per-session caps |
-| **Operator enable path** | Discoverable toggle | Config + Web settings; document in README |
-| **Product shape decision** | Lock supervisor vs pipeline | [`multi-agent-exploration.md`](architecture/multi-agent-exploration.md) |
-| **AGENTS.md gate** | Promote from "Must NOT" when accepted | Distributed fleet orchestration still out of scope |
-
-### P4 — Skills discovery & install (Phase 7)
-
-> **Today:** skills are **workspace-local** only (`<workspace>/skills/*.md`);
-> discovery is `list_skills()` + composer `GET /api/composer/commands`.
-> No remote search or install.
-
-| Item | Why | Notes |
-| --- | --- | --- |
-| **Skill catalog / search** | Find skills without manual copy | Local cache + optional remote index URLs |
-| **`harnesslab skill search`** | CLI discovery | Query name, description, tags (YAML front-matter) |
-| **`harnesslab skill install`** | Install `.md` into workspace or user dir | Git URL, catalog id, or file path |
-| **Web UI skill browser** | Search, preview, install from settings/composer | After install, `/skillname` pin unchanged |
-| **Global vs workspace scope** | Share skills across projects | e.g. `~/.config/harnesslab/skills/` + workspace override |
-| **Trust model** | No autonomous installs | Operator explicit only — not a plugin marketplace |
-| **Eval / replay** | Skills remain static prompt files | No replay contract change |
-
-**Phase 7 explicitly excludes:** public marketplace, paid listings, model-initiated
-install without human confirmation.
-
-### P5 — Learning harness depth (optional)
+### P4 — Learning harness depth (optional)
 
 | Item | Why |
 | --- | --- |
-| **Vector / semantic memory** | Deferred until ≥3 real research sessions lack recall — see Deferred |
-| **Offline metrics HTML dashboard** | Nice-to-have; OTel + Grafana cover most needs |
-| **Constrained provider plugins** | §6.7 in provider-expansion — local entry_points only, no marketplace |
-| **TUI client (`harnesslab tui`)** | Experimental; Textual stack in `tui-stack-options.md` |
+| **Vector / semantic memory** | Deferred until ≥3 real sessions lack recall |
+| **Offline metrics HTML dashboard** | OTel + Grafana cover most needs |
+| **TUI client (`harnesslab tui`)** | Experimental |
 
 ### Explicit non-goals (unchanged)
 
@@ -1097,7 +1093,7 @@ Goals of the exploration:
 - Identify which AGENTS.md rules must change and which must hold.
 
 Phase 6 **started** with the design RFC and a deterministic eval PoC.
-Next steps are in [What's next — Sub-agent (Phase 6)](#p3--sub-agent-phase-6-production).
+Next steps are in [What's next — P1 Multi-agent & skills](#p1--multi-agent--skills-elevated).
 See the full RFC for candidate product shapes, decision criteria, and the
 recommended supervisor PoC path.
 

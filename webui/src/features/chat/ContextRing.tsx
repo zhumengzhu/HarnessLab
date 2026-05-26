@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { ContextSnapshot } from "../../lib/schemas";
 
 type ContextRingProps = {
@@ -173,7 +173,28 @@ function DonutRing({
 
 export function ContextRing({ snapshot }: ContextRingProps) {
   const [open, setOpen] = useState(false);
-  const btnRef = useRef<HTMLButtonElement>(null);
+  const wrapRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    function onPointerDown(event: MouseEvent) {
+      const root = wrapRef.current;
+      if (root && !root.contains(event.target as Node)) {
+        setOpen(false);
+      }
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        setOpen(false);
+      }
+    }
+    document.addEventListener("mousedown", onPointerDown);
+    document.addEventListener("keydown", onKeyDown);
+    return () => {
+      document.removeEventListener("mousedown", onPointerDown);
+      document.removeEventListener("keydown", onKeyDown);
+    };
+  }, [open]);
 
   if (!snapshot) {
     return (
@@ -194,13 +215,13 @@ export function ContextRing({ snapshot }: ContextRingProps) {
   const pct = Math.round(ratio * 100);
 
   return (
-    <div className="ctx-ring-wrap">
+    <div className="ctx-ring-wrap" ref={wrapRef}>
       <button
-        ref={btnRef}
         type="button"
         className="ctx-ring-btn"
         title={`Context: ${pct}% full — click for details`}
         onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
       >
         <DonutRing ratio={ratio} segments={segments} limit={limit} />
         <span

@@ -1,0 +1,44 @@
+name: research_summary
+goal: research a topic and summarize findings
+description: |
+  Phase 5.1 deliverable: multi-step research chain using ``web_search`` and
+  ``html_to_markdown``, then a concise final summary. Uses ``ReplayModel``
+  decisions; ``web_search`` may call DuckDuckGo when no API key is set.
+tags:
+  - network
+decisions:
+  - kind: tool
+    tool_name: web_search
+    tool_args:
+      query: HarnessLab agent harness learning
+      max_results: 3
+  - kind: tool
+    tool_name: html_to_markdown
+    tool_args:
+      html: |
+        <article>
+          <h1>HarnessLab</h1>
+          <p>Learning-first local agent harness with policy-gated tools,
+          session memory, and trace recording.</p>
+        </article>
+  - kind: final
+    assistant_message: |
+      HarnessLab is a learning-first local agent harness: policy-gated tools,
+      sessions, and traces for studying agent loops.
+turns:
+  - input: research HarnessLab and give a short summary
+    max_steps: 4
+expected:
+  final_reply_contains:
+    - learning-first
+  events_include:
+    - event_type: tool_executed
+      payload_contains:
+        tool: web_search
+        ok: true
+    - event_type: tool_executed
+      payload_contains:
+        tool: html_to_markdown
+        ok: true
+  no_event_types:
+    - tool_denied

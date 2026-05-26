@@ -21,11 +21,11 @@ bun run vitest run src/features/proposals/ProposalPanel.test.tsx
 ```
 
 Build output goes to `src/harnesslab/web/static_ts/` (gitignored; run
-`bun run build` before serving TS UI).
+`bun run build` or `./hl-serve build` before serving TS UI).
 
 ## Simple chat (3 steps)
 
-1. Build the bundle (`bun run build`), then from repo root:
+1. Build the bundle (`./hl-serve build` or `bun run build`), then from repo root:
    `./hl-serve start` or `uv run harnesslab serve --workspace-root .`
 2. In the browser, click **新对话** in the left **Sessions** panel.
 3. Type in **Composer** at the bottom; type `/` for slash commands; press

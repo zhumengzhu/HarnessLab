@@ -48,7 +48,6 @@ export function ThinkingBlock({ thought, showWhenIdle }: ThinkingBlockProps) {
   }
 
   const duration = thought.durationMs ?? elapsedMs;
-  const preview = thought.text?.split("\n").find((l) => l.trim())?.trim() ?? "";
   const durationLabel =
     duration > 0 ? `Thought for ${formatDuration(duration)}` : "Thought";
 
@@ -62,12 +61,7 @@ export function ThinkingBlock({ thought, showWhenIdle }: ThinkingBlockProps) {
 
   return (
     <details className="thinking-block thinking-block-done">
-      <summary>
-        {durationLabel}
-        {preview && !thought.text ? null : preview ? (
-          <span className="thinking-preview"> — {preview.slice(0, 72)}{preview.length > 72 ? "…" : ""}</span>
-        ) : null}
-      </summary>
+      <summary>{durationLabel}</summary>
       {thought.text ? (
         <div className="thinking-block-body">
           <MarkdownView markdown={thought.text} />

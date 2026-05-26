@@ -27,11 +27,12 @@ function buildSections(settings: Record<string, unknown> | undefined): SettingsS
     "limits",
     "workspace_root",
   ];
+  const skip = new Set(["mcp_health"]);
   const sections: SettingsSection[] = [];
   const seen = new Set<string>();
 
   for (const key of order) {
-    if (!(key in settings)) continue;
+    if (!(key in settings) || skip.has(key)) continue;
     sections.push({
       id: key,
       title: key.replace(/_/g, " "),
@@ -41,11 +42,57 @@ function buildSections(settings: Record<string, unknown> | undefined): SettingsS
   }
 
   for (const [key, value] of Object.entries(settings)) {
-    if (seen.has(key)) continue;
+    if (seen.has(key) || skip.has(key)) continue;
     sections.push({ id: key, title: key.replace(/_/g, " "), value });
   }
 
   return sections;
+}
+
+type McpHealthEntry = {
+  status: string;
+  tools: number;
+  error: string | null;
+};
+
+function McpHealthPanel({
+  servers,
+  health,
+}: {
+  servers: unknown;
+  health: Record<string, McpHealthEntry> | undefined;
+}) {
+  const configured = Array.isArray(servers) ? servers.length : 0;
+  if (!configured && !health) return null;
+
+  const entries = health ? Object.entries(health) : [];
+
+  return (
+    <details className="settings-section settings-mcp-health" open>
+      <summary>MCP servers</summary>
+      <p className="settings-mcp-hint">
+        MCP 已支持（Phase 5.4）：在 <code>config.json</code> 的{" "}
+        <code>tools.mcp_servers</code> 配置 stdio 服务后，启动时注册为{" "}
+        <code>mcp_*</code> 工具。下方为最近一次启动探测结果。
+      </p>
+      {!configured ? (
+        <p className="settings-mcp-empty">未配置 MCP server。</p>
+      ) : entries.length ? (
+        <ul className="settings-mcp-list">
+          {entries.map(([name, row]) => (
+            <li key={name} className={`settings-mcp-item settings-mcp-row-${row.status}`}>
+              <span className="settings-mcp-name">{name}</span>
+              <span className="settings-mcp-status">{row.status}</span>
+              <span className="settings-mcp-tools">{row.tools} tools</span>
+              {row.error ? <code className="settings-mcp-error">{row.error}</code> : null}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="settings-mcp-empty">已配置 {configured} 个 server，暂无 health 快照。</p>
+      )}
+    </details>
+  );
 }
 
 export function SettingsPanel(props: SettingsPanelProps) {
@@ -53,6 +100,7 @@ export function SettingsPanel(props: SettingsPanelProps) {
   const settings = data?.settings;
   const configSource = data?.config_source;
   const sections = useMemo(() => buildSections(settings), [settings]);
+  const mcpHealth = settings?.mcp_health as Record<string, McpHealthEntry> | undefined;
 
   const fullJson5 = useMemo(() => {
     if (configSource?.trim()) return configSource;
@@ -82,6 +130,8 @@ export function SettingsPanel(props: SettingsPanelProps) {
             </summary>
             <JsonHighlight source={fullJson5} />
           </details>
+
+          <McpHealthPanel servers={settings.mcp_servers} health={mcpHealth} />
 
           <div className="settings-sections">
             {sections.map((sec) => {

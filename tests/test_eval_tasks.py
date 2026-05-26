@@ -66,4 +66,5 @@ def test_shipped_tasks_cover_expected_paths() -> None:
         "shell_profile_strict",
         "workspace_memory_persists",
         "plan_then_execute",
+        "research_summary",
     } <= names

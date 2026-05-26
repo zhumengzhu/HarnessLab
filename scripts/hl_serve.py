@@ -3,8 +3,9 @@
 
 Usage::
 
-    ./hl-serve start|stop|restart|status
-    ./scripts/hl_serve.py restart
+    ./hl-serve start|stop|restart|status|build
+    ./hl-serve restart --build
+    ./scripts/hl_serve.py build
 
 Environment (all optional):
 
@@ -26,6 +27,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import signal
 import subprocess
 import sys
@@ -35,6 +37,8 @@ import urllib.request
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+WEBUI_DIR = ROOT / "webui"
+STATIC_TS_DIR = ROOT / "src" / "harnesslab" / "web" / "static_ts"
 SRC = ROOT / "src"
 if str(SRC) not in sys.path:
     sys.path.insert(0, str(SRC))
@@ -153,6 +157,47 @@ def kill_pids(pids: list[int], *, force: bool = False) -> None:
             os.kill(pid, sig)
         except OSError:
             pass
+
+
+def resolve_bun_executable() -> Path | None:
+    """Return ``bun`` from PATH or ``~/.bun/bin/bun`` when installed there."""
+
+    bun = shutil.which("bun")
+    if bun:
+        return Path(bun)
+    home_bun = Path.home() / ".bun" / "bin" / "bun"
+    if home_bun.is_file() and os.access(home_bun, os.X_OK):
+        return home_bun
+    return None
+
+
+def build_web_ui() -> int:
+    """Run ``bun run build`` in ``webui/`` (Vite → ``static_ts/``)."""
+
+    if not WEBUI_DIR.is_dir():
+        print(f"webui directory not found: {WEBUI_DIR}", file=sys.stderr)
+        return 1
+
+    bun = resolve_bun_executable()
+    if bun is None:
+        print(
+            "bun not found — install from https://bun.sh or add ~/.bun/bin to PATH",
+            file=sys.stderr,
+        )
+        return 1
+
+    print(f"Building TS web UI ({bun} run build in webui/)...")
+    proc = subprocess.run(
+        [str(bun), "run", "build"],
+        cwd=WEBUI_DIR,
+        check=False,
+    )
+    if proc.returncode != 0:
+        print("Web UI build failed", file=sys.stderr)
+        return proc.returncode
+
+    print(f"Web UI build ok — output: {STATIC_TS_DIR.relative_to(ROOT)}/")
+    return 0
 
 
 def stop_server(port: int) -> int:
@@ -274,7 +319,8 @@ def build_parser() -> argparse.ArgumentParser:
             "commands:\n"
             "  start     bind localhost and launch harnesslab serve\n"
             "  stop      stop the process listening on HL_SERVE_PORT\n"
-            "  restart   stop then start\n"
+            "  restart   stop then start (--build to rebuild TS UI first)\n"
+            "  build     run bun run build in webui/ (Vite → static_ts/)\n"
             "  status    show PID, port, and /api/health JSON\n"
             "\n"
             "environment (all optional):\n"
@@ -291,6 +337,8 @@ def build_parser() -> argparse.ArgumentParser:
             "\n"
             "examples:\n"
             "  ./hl-serve start\n"
+            "  ./hl-serve build\n"
+            "  ./hl-serve restart --build\n"
             "  HL_SERVE_PORT=8788 ./hl-serve restart\n"
             "  ./hl-serve status"
         ),
@@ -298,8 +346,13 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "command",
         nargs="?",
-        choices=["start", "stop", "restart", "status"],
+        choices=["start", "stop", "restart", "build", "status"],
         help="action to perform (omit to print this help)",
+    )
+    parser.add_argument(
+        "--build",
+        action="store_true",
+        help="with restart: rebuild TS web UI (webui/) before starting serve",
     )
     return parser
 
@@ -340,7 +393,16 @@ def main(argv: list[str] | None = None) -> int:
         )
     if args.command == "stop":
         return stop_server(port)
+    if args.command == "build":
+        if args.build:
+            print("--build applies only to restart", file=sys.stderr)
+            return 2
+        return build_web_ui()
     if args.command == "restart":
+        if args.build:
+            code = build_web_ui()
+            if code != 0:
+                return code
         stop_server(port)
         return start_server(
             host=host,
@@ -349,6 +411,9 @@ def main(argv: list[str] | None = None) -> int:
             workspace=workspace,
             max_steps=max_steps,
         )
+    if args.build:
+        print("--build applies only to restart", file=sys.stderr)
+        return 2
     return status_server(host, port)
 
 
