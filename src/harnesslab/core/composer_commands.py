@@ -65,7 +65,7 @@ def composer_commands_payload(workspace_root: Path | None) -> dict[str, Any]:
                 "name": name,
                 "usage": f"/{name}",
                 "description": _skill_description(root, name),
-                "insert": f"/{name}",
+                "insert": f"/{name} ",
                 "kind": "skill",
             }
         )

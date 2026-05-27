@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from dataclasses import dataclass
 from html import unescape
@@ -18,6 +19,32 @@ from harnesslab.core.models import ToolCall, ToolResult
 DEFAULT_WEB_SEARCH_BACKEND = "duckduckgo"
 DEFAULT_WEB_SEARCH_MAX_RESULTS = 5
 DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS = 15.0
+
+_BACKEND_API_KEY_ENVS: dict[str, str] = {
+    "brave": "BRAVE_API_KEY",
+    "tavily": "TAVILY_API_KEY",
+    "serpapi": "SERPAPI_API_KEY",
+}
+
+
+def resolve_web_search_api_key(
+    backend: str,
+    configured_api_key_env: str | None,
+) -> str | None:
+    """Resolve the API key for a paid ``web_search`` backend."""
+
+    normalized = backend.strip().lower()
+    generic = (os.environ.get("WEB_SEARCH_API_KEY") or "").strip() or None
+    if configured_api_key_env:
+        configured = (os.environ.get(configured_api_key_env) or "").strip()
+        if configured:
+            return configured
+    env_name = _BACKEND_API_KEY_ENVS.get(normalized)
+    if env_name:
+        specific = (os.environ.get(env_name) or "").strip()
+        if specific:
+            return specific
+    return generic
 
 _TEXTLIKE_CONTENT_TYPES = (
     "text/",
@@ -139,6 +166,12 @@ class WebSearchTool:
     def _required_api_key(self, env_name: str) -> str:
         if self._api_key:
             return self._api_key
+        specific = (os.environ.get(env_name) or "").strip()
+        if specific:
+            return specific
+        generic = (os.environ.get("WEB_SEARCH_API_KEY") or "").strip()
+        if generic:
+            return generic
         raise ValueError(
             f"{env_name} is required for web_search backend {self._backend!r}"
         )
@@ -330,6 +363,32 @@ _DDG_HEADERS = {
 }
 
 
+def _duckduckgo_antibot_page(*, status_code: int, html: str) -> bool:
+    """Return True when DDG served the JS-only anti-bot shell instead of results."""
+
+    if status_code == 202:
+        return True
+    if "result__a" in html:
+        return False
+    lowered = html.lower()
+    return (
+        'rel="canonical" href="https://duckduckgo.com/"' in lowered
+        or "<title>\n        duckduckgo\n    </title>" in lowered
+    )
+
+
+def _duckduckgo_blocked_message() -> str:
+    return (
+        "DuckDuckGo HTML search returned an anti-bot page (HTTP 202 or empty "
+        "results). This is common from mainland China or when the process "
+        "does not use your VPN proxy. Fixes: (1) add "
+        "HTTPS_PROXY=http://127.0.0.1:<port> to ~/.config/harnesslab/env "
+        "(match your Clash/Surge local port), restart ./hl-serve; (2) switch "
+        "tools.web_search.backend to tavily, brave, or serpapi with an API key "
+        "in the same env file."
+    )
+
+
 def _search_duckduckgo(client: httpx.Client, *, query: str, max_results: int) -> list[SearchHit]:
     # ``html.duckduckgo.com`` returns scrapeable result rows when called
     # via POST with a real browser User-Agent; bare GET on
@@ -351,6 +410,8 @@ def _search_duckduckgo(client: httpx.Client, *, query: str, max_results: int) ->
     )
     response.raise_for_status()
     html = response.text
+    if _duckduckgo_antibot_page(status_code=response.status_code, html=html):
+        raise ValueError(_duckduckgo_blocked_message())
     pattern = re.compile(
         r'<a[^>]*class="[^"]*result__a[^"]*"[^>]*href="([^"]+)"[^>]*>(.*?)</a>',
         re.IGNORECASE | re.DOTALL,

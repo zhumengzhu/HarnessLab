@@ -11,6 +11,18 @@ export type ComposerCommandsResponse = {
   skills: ComposerCommandItem[];
 };
 
+export type SkillRecord = {
+  name: string;
+  description: string;
+  tags: string[];
+  scope: string;
+  path: string;
+};
+
+export type SkillsResponse = {
+  skills: SkillRecord[];
+};
+
 export type HealthResponse = {
   ok: boolean;
   model: string;

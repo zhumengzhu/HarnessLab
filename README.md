@@ -89,7 +89,9 @@ missing, it falls back to the legacy static UI.
 - **Simple** mode — chat, thinking/tool activity, model picker, slash commands.
 - **Advanced** — trace panel, proposals, session metadata, budget events.
 - **Slash commands** — `/remember`, `/remember-global`, `/compact`, `/skill list`,
-  and workspace skills as `/skillname` (see `skills/*.md`).
+  and workspace skills as `/skillname <task>` (Cursor-style; see `skills/*.md`).
+- **Sub-agent (PoC)** — set `loop.multi_agent.enabled: true` in config; model may
+  call `spawn_sub_agent` (see [multi-agent exploration](docs/architecture/multi-agent-exploration.md)).
 - **Composer** — type `/` for the command palette; SSE streaming for tool steps
   and (with thinking models) token-level reasoning/answer deltas.
 
@@ -266,6 +268,7 @@ runtime contracts belong in [`docs/architecture/`](docs/architecture/).
 | [`docs/roadmap.md`](docs/roadmap.md) | Phased delivery + **What's next** backlog |
 | [`docs/architecture/overview.md`](docs/architecture/overview.md) | Runtime map and flows |
 | [`docs/architecture/tool-runtime.md`](docs/architecture/tool-runtime.md) | Tools and policy |
+| [`docs/guides/web-research-providers.md`](docs/guides/web-research-providers.md) | Web search/fetch backends, pricing, VPN/proxy |
 | [`docs/architecture/data-model.md`](docs/architecture/data-model.md) | Messages, traces, sessions |
 | [`docs/architecture/compaction.md`](docs/architecture/compaction.md) | Auto/manual compaction |
 | [`docs/architecture/web-api.md`](docs/architecture/web-api.md) | HTTP + SSE API |

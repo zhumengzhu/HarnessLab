@@ -87,7 +87,7 @@ Trace 面板对 `model_call` 展示 **Prompt inspector**（按 block 折叠 + AP
 
 - 左：Agent 模式 + 模型选择
 - 输入 `/` 弹出命令/技能 palette（``GET /api/composer/commands``）
-- 工作区技能以 ``/skillname`` 直接唤起（等价于 pin skill）
+- 工作区技能：``/skillname <任务>`` 一次发送即 pin + 执行（Cursor 式）；仅 ``/skillname`` 则只 pin
 - 内置：``/remember``、``/remember-global``、``/compact``；管理：``/skill list``
 - 右：Context 圆环 + 发送 / 停止
 - 运行中可继续输入；Enter 将消息 **入队** 顺序发送

@@ -52,6 +52,14 @@ class TaskPolicy(BaseModel):
     shell_profile: str | None = None
 
 
+class TaskBudget(BaseModel):
+    """Optional budget overrides for a single eval task."""
+
+    enabled: bool = False
+    max_session_cost_usd_total: float | None = None
+    action_on_hard: str = "final"
+
+
 class TaskExpected(BaseModel):
     final_reply_contains: list[str] = Field(default_factory=list)
     events_include: list[ExpectedEvent] = Field(default_factory=list)
@@ -67,6 +75,8 @@ class Task(BaseModel):
     turns: list[TaskTurn]
     limits: TaskLimits | None = None
     policy: TaskPolicy | None = None
+    budget: TaskBudget | None = None
+    replay_call_meta: dict[str, Any] | None = None
     expected: TaskExpected = Field(default_factory=TaskExpected)
 
 

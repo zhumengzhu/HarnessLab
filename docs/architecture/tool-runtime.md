@@ -162,6 +162,10 @@ stateDiagram-v2
 | `glob` | Workspace-relative glob match returning sorted relative paths; default `max_results=100`, hard cap `5000`; same noise-dir skip list (Phase 2.5) | `_check_optional_path` |
 | `fetch_url` | Read-only HTTP GET; defaults to open HTTPS (SSRF-safe: blocks private/loopback/link-local + cloud-metadata hosts); strict mode falls back to a host allowlist; text-like content only | `_check_fetch_url` |
 | `web_search` | Web search hits via backend (`duckduckgo`, `brave`, `tavily`, `serpapi`) with capped result count | allow |
+
+Backend selection: `tools.web_search.backend` in operator config or `WEB_SEARCH_BACKEND`
+env var. Proxy and provider notes: [`docs/guides/web-research-providers.md`](../guides/web-research-providers.md).
+Diagnostics: `harnesslab check network` (loads `~/.config/harnesslab/env` by default).
 | `html_to_markdown` | Convert HTML to markdown-like text for summarization and downstream parsing | allow |
 | `read_pdf` | Extract text from workspace PDF files with optional page cap | `_check_path` |
 | `run_shell_safe` | Argv shell invocation against the expanded allowlist + git subcommand gate (Phase 2.5) | `_check_shell` |

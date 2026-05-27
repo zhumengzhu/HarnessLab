@@ -43,6 +43,9 @@ def test_parse_direct_skill_command_invokes_workspace_skill() -> None:
     assert parse_direct_skill_command("/research", ["research", "debug"]) == SkillCommand(
         kind="add", name="research"
     )
+    assert parse_direct_skill_command(
+        "/research investigate topic X", ["research", "debug"]
+    ) == SkillCommand(kind="invoke", name="research", task="investigate topic X")
     assert parse_direct_skill_command("/skill list", ["research"]) is None
     assert parse_direct_skill_command("/remember x", ["research"]) is None
     assert parse_direct_skill_command("hello", ["research"]) is None

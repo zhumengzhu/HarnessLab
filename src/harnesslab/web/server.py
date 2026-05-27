@@ -34,7 +34,6 @@ from harnesslab.replay.trace_reader import read_trace
 from harnesslab.telemetry.log import get_logger
 from harnesslab.web.trace_hub import TraceHub
 
-_LEGACY_STATIC_DIR = Path(__file__).resolve().parent / "static"
 _TS_STATIC_DIR = Path(__file__).resolve().parent / "static_ts"
 _log = get_logger("web.server")
 _GATE_TIMEOUT_SECONDS = 600
@@ -61,6 +60,7 @@ TOOL_PANEL_EVENT_TYPES = frozenset(
         "hook_blocked",
         "hook_failed",
         "model_call",
+        "session_finished",
     }
 )
 
@@ -672,6 +672,31 @@ class _Handler(BaseHTTPRequestHandler):
                 composer_commands_payload(self.runtime.workspace_root)
             )
 
+        if path == "/api/skills":
+            from harnesslab.skills.catalog import list_skill_records, search_skills  # noqa: PLC0415
+
+            qs = parse_qs(parsed.query)
+            query = qs.get("q", [""])[0]
+            records = (
+                search_skills(self.runtime.workspace_root, query)
+                if query.strip()
+                else list_skill_records(self.runtime.workspace_root)
+            )
+            return self._json_ok(
+                {
+                    "skills": [
+                        {
+                            "name": record.name,
+                            "description": record.description,
+                            "tags": list(record.tags),
+                            "scope": record.scope,
+                            "path": str(record.path),
+                        }
+                        for record in records
+                    ]
+                }
+            )
+
         if path.startswith("/api/sessions/") and path.endswith("/context"):
             remainder = path[len("/api/sessions/") :]
             session_id = remainder[: -len("/context")].strip("/")
@@ -848,6 +873,40 @@ class _Handler(BaseHTTPRequestHandler):
                 raise ValueError(str(exc)) from exc
             return self._json_ok({"model": self.runtime.model_backend})
 
+        if path == "/api/settings/multi-agent":
+            enabled = bool(body.get("enabled"))
+            from harnesslab.core.operator_config import (  # noqa: PLC0415
+                load_operator_config,
+                patch_loop_multi_agent_enabled,
+            )
+
+            config_path = patch_loop_multi_agent_enabled(enabled=enabled)
+            config = load_operator_config(config_path)
+            self.runtime.operator_config = config
+            self.runtime.settings["multi_agent_enabled"] = config.multi_agent_enabled
+            return self._json_ok(
+                {
+                    "ok": True,
+                    "multi_agent_enabled": config.multi_agent_enabled,
+                    "needs_restart": True,
+                    "message": "Restart harnesslab serve for spawn_sub_agent registration.",
+                }
+            )
+
+        if path == "/api/skills/install":
+            from harnesslab.skills.catalog import install_skill  # noqa: PLC0415
+
+            source = str(body.get("source", "")).strip()
+            if not source:
+                raise ValueError("source is required")
+            scope = str(body.get("scope", "workspace")).strip() or "workspace"
+            dest = install_skill(
+                self.runtime.workspace_root,
+                Path(source),
+                scope=scope,
+            )
+            return self._json_ok({"ok": True, "path": str(dest), "scope": scope})
+
         self._json_error(HTTPStatus.NOT_FOUND, "not found")
 
     def _turn_payload(self, session: Session, reply: str) -> dict[str, Any]:
@@ -881,13 +940,28 @@ class _Handler(BaseHTTPRequestHandler):
 
         write = self._sse_writer()
         hub = self.runtime.trace_hub
+        child_session_ids: set[str] = set()
+
+        def _event_visible(event: TraceEvent) -> bool:
+            if event.session_id == session_id:
+                return True
+            if (
+                event.event_type == "session_started"
+                and event.payload.get("parent_session_id") == session_id
+            ):
+                child_session_ids.add(event.session_id)
+                return True
+            return event.session_id in child_session_ids
 
         def on_event(event: TraceEvent) -> None:
-            if event.session_id != session_id:
+            if not _event_visible(event):
                 return
             if event.event_type not in TOOL_PANEL_EVENT_TYPES:
                 return
-            write("trace", _trace_event_json(event))
+            payload = _trace_event_json(event)
+            if event.session_id != session_id:
+                payload["child_session_id"] = event.session_id
+            write("trace", payload)
 
         if hub is not None:
             hub.subscribe(on_event)
@@ -927,7 +1001,21 @@ class _Handler(BaseHTTPRequestHandler):
         return _session_trace_events(self.runtime, session_id)
 
     def _serve_static(self, rel: str) -> None:
-        static_dir = _select_static_dir()
+        try:
+            static_dir = _select_static_dir()
+        except RuntimeError as exc:
+            body = (
+                "<!doctype html><html><body>"
+                f"<h1>HarnessLab Web UI</h1><p>{exc}</p>"
+                "<p>Run <code>./hl-serve build</code> from the repo root.</p>"
+                "</body></html>"
+            ).encode("utf-8")
+            self.send_response(HTTPStatus.SERVICE_UNAVAILABLE)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
         safe = Path(rel)
         if safe.is_absolute() or ".." in safe.parts:
             self._json_error(HTTPStatus.NOT_FOUND, "not found")
@@ -1000,10 +1088,14 @@ def serve(
 def _select_static_dir() -> Path:
     requested = os.environ.get("HARNESSLAB_WEB_UI_VERSION", "ts").strip().lower()
     if requested == "legacy":
-        return _LEGACY_STATIC_DIR
+        raise RuntimeError(
+            "Legacy Web UI removed (Phase E). Build webui/ and use the TS bundle."
+        )
     if _TS_STATIC_DIR.is_dir():
         return _TS_STATIC_DIR
-    return _LEGACY_STATIC_DIR
+    raise RuntimeError(
+        "TS Web UI bundle missing. Run: ./hl-serve build  (or cd webui && bun run build)"
+    )
 
 
 def _last_context_snapshot(

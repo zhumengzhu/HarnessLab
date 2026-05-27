@@ -30,14 +30,22 @@ class ReplayModel:
         self,
         decisions: Iterable[Decision],
         exhausted_message: str = "(replay exhausted)",
+        *,
+        call_meta: dict[str, object] | None = None,
     ) -> None:
         self._queue: deque[Decision] = deque(decisions)
         self._exhausted = Decision(kind="assistant", assistant_message=exhausted_message)
+        self._call_meta = dict(call_meta or {})
+        self._last_call_meta: dict[str, object] = dict(self._call_meta)
 
     def decide(self, session: Session, user_input: str) -> Decision:
         if not self._queue:
             return self._exhausted
+        self._last_call_meta = dict(self._call_meta)
         return self._queue.popleft()
+
+    def last_call_meta(self) -> dict[str, object]:
+        return dict(self._last_call_meta)
 
     @property
     def remaining(self) -> int:

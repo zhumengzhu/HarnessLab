@@ -1,0 +1,26 @@
+name: supervisor_research_then_write
+goal: supervisor delegates research then writes report
+description: |
+  Phase 6: parent spawns a child (SimpleModel ``/final`` goal), receives
+  JSON tool output, then continues with a parent final decision.
+decisions:
+  - kind: tool
+    tool_name: spawn_sub_agent
+    tool_args:
+      goal: child research topic
+      max_steps: 1
+  - kind: final
+    assistant_message: child research done
+  - kind: final
+    assistant_message: Wrote report using child output.
+turns:
+  - input: research topic X then write report
+    max_steps: 4
+expected:
+  final_reply_contains:
+    - Wrote report using child output
+  events_include:
+    - event_type: tool_executed
+      payload_contains:
+        tool: spawn_sub_agent
+        ok: true

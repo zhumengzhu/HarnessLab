@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from harnesslab.cli import build_runtime
+from harnesslab.core.loop import HarnessLoop
 from harnesslab.core.operator_config import OperatorConfig
 
 
@@ -65,6 +66,102 @@ def test_direct_skill_slash_pins_skill(tmp_path: Path) -> None:
     session = loop.start(goal="slash skill")
     reply = loop.run_turn(session.id, "/research")
     assert "Selected skill 'research'" in reply
+
+
+def test_direct_skill_slash_with_task_runs_model(tmp_path: Path) -> None:
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    (skills / "research.md").write_text("search deeply", encoding="utf-8")
+
+    loop = build_runtime(tmp_path)
+    session = loop.start(goal="slash skill")
+    reply = loop.run_turn(session.id, "/research investigate topic X")
+    assert "Selected skill" not in reply
+    assert "HarnessLab is ready" in reply
+
+    listed = loop.run_turn(session.id, "/skill list")
+    assert "Selected skills: research" in listed
+
+
+def test_stream_reasoning_persisted_on_tool_turn(tmp_path: Path) -> None:
+    from harnesslab.core.models import Decision
+    from harnesslab.core.runtime import SystemClock, UuidIdProvider
+    from harnesslab.core.stream_context import emit_stream_delta, stream_sink_active
+    from harnesslab.policy.default_policy import DefaultPolicy
+    from harnesslab.session.in_memory import InMemorySessionStore
+    from harnesslab.telemetry.jsonl_recorder import JsonlTraceRecorder
+    from harnesslab.tools.registry import ToolRegistry
+
+    class StreamReasoningModel:
+        def decide(self, session, user_input: str) -> Decision:
+            if stream_sink_active():
+                emit_stream_delta("reasoning", "plan: search web")
+            return Decision(
+                kind="tool",
+                tool_name="grep",
+                tool_args={"pattern": "x"},
+            )
+
+        def last_call_meta(self) -> dict:
+            return {}
+
+    from harnesslab.tools.file_tools import GrepTool
+
+    tools = ToolRegistry()
+    tools.register(GrepTool(tmp_path))
+    loop = HarnessLoop(
+        model=StreamReasoningModel(),
+        policy=DefaultPolicy(tmp_path),
+        sessions=InMemorySessionStore(),
+        tools=tools,
+        trace=JsonlTraceRecorder(tmp_path / "trace.jsonl"),
+        clock=SystemClock(),
+        ids=UuidIdProvider(),
+        workspace_root=tmp_path,
+        stream_sink=lambda *_args: None,
+    )
+    session = loop.start(goal="stream reasoning")
+    loop.run_turn(session.id, "search")
+    assistant = [m for m in session.messages if m.role == "assistant" and m.tool_calls]
+    assert assistant
+    assert assistant[-1].reasoning_text == "plan: search web"
+
+
+def test_max_steps_appends_continue_hint(tmp_path: Path) -> None:
+    from harnesslab.core.models import Decision
+    from harnesslab.core.runtime import SystemClock, UuidIdProvider
+    from harnesslab.policy.default_policy import DefaultPolicy
+    from harnesslab.session.in_memory import InMemorySessionStore
+    from harnesslab.telemetry.jsonl_recorder import JsonlTraceRecorder
+    from harnesslab.tools.file_tools import GrepTool
+    from harnesslab.tools.registry import ToolRegistry
+
+    class AlwaysToolModel:
+        def decide(self, session, user_input: str) -> Decision:
+            return Decision(kind="tool", tool_name="grep", tool_args={"pattern": "x"})
+
+        def last_call_meta(self) -> dict:
+            return {}
+
+    tools = ToolRegistry()
+    tools.register(GrepTool(tmp_path))
+    loop = HarnessLoop(
+        model=AlwaysToolModel(),
+        policy=DefaultPolicy(tmp_path),
+        sessions=InMemorySessionStore(),
+        tools=tools,
+        trace=JsonlTraceRecorder(tmp_path / "trace.jsonl"),
+        clock=SystemClock(),
+        ids=UuidIdProvider(),
+        workspace_root=tmp_path,
+    )
+    session = loop.start(goal="research")
+    reply = loop.run_session(session.id, "keep searching", max_steps=2)
+    assert "Step budget reached" in reply
+    assert session.status == "waiting_user"
+    assert any(
+        "Step budget reached" in m.content for m in session.messages if m.role == "assistant"
+    )
 
 
 def test_compact_command_runs_manual_compaction(tmp_path: Path) -> None:

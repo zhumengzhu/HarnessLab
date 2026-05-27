@@ -11,6 +11,25 @@ from openai import APIStatusError as OpenAIAPIStatusError
 
 from harnesslab.core.compaction import ModelOverflowError
 
+
+def _reasoning_piece_from_delta(delta: object) -> str | None:
+    """Extract one reasoning delta chunk (DeepSeek ``reasoning_content`` variants)."""
+
+    for attr in ("reasoning_content", "reasoning"):
+        piece = getattr(delta, attr, None)
+        if isinstance(piece, str) and piece:
+            return piece
+    model_dump = getattr(delta, "model_dump", None)
+    if callable(model_dump):
+        dumped = model_dump(exclude_unset=True)
+        if isinstance(dumped, dict):
+            for key in ("reasoning_content", "reasoning"):
+                val = dumped.get(key)
+                if isinstance(val, str) and val:
+                    return val
+    return None
+
+
 _OVERFLOW_HINTS = (
     "context_length_exceeded",
     "context length exceeded",
@@ -132,8 +151,8 @@ class OpenAIChatTransport:
             if not chunk.choices:
                 continue
             delta = chunk.choices[0].delta
-            reasoning_piece = getattr(delta, "reasoning_content", None)
-            if isinstance(reasoning_piece, str) and reasoning_piece:
+            reasoning_piece = _reasoning_piece_from_delta(delta)
+            if reasoning_piece:
                 on_delta("reasoning", reasoning_piece)
                 reasoning_parts.append(reasoning_piece)
             if isinstance(delta.content, str) and delta.content:

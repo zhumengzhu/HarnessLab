@@ -53,6 +53,30 @@ def test_web_search_duckduckgo_parses_results() -> None:
     assert "Mozilla/5.0" in ua, "DuckDuckGo blocks default httpx UA"
 
 
+def test_web_search_duckduckgo_antibot_returns_actionable_error() -> None:
+    antibot_html = """
+    <!DOCTYPE html><html><head>
+      <link rel="canonical" href="https://duckduckgo.com/">
+      <title>DuckDuckGo</title>
+    </head><body></body></html>
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "duckduckgo.com" and request.url.path == "/":
+            return httpx.Response(200, text="<html></html>")
+        return httpx.Response(202, text=antibot_html)
+
+    tool = WebSearchTool(backend="duckduckgo", transport=httpx.MockTransport(handler))
+    try:
+        result = tool.execute(ToolCall(name="web_search", args={"query": "example"}))
+    finally:
+        tool.close()
+    assert not result.ok
+    assert result.error is not None
+    assert "anti-bot" in result.error.lower()
+    assert "HTTPS_PROXY" in result.error
+
+
 def test_web_search_tavily_requires_key() -> None:
     tool = WebSearchTool(backend="tavily")
     try:

@@ -81,6 +81,7 @@ _TRACE_OUTPUT_PREVIEW_BYTES = 512
 _log = get_logger("core.loop")
 
 DEFAULT_MAX_STEPS = 20
+SKILL_INVOKE_MIN_STEPS = 40
 
 
 class HarnessLoop:
@@ -142,6 +143,7 @@ class HarnessLoop:
         self._budget_limits = budget_limits or BudgetLimits(enabled=False)
         self._hook_runner = hook_runner
         self._stream_sink = stream_sink
+        self._last_stream_reasoning: str | None = None
 
     def start(self, goal: str) -> Session:
         session = Session(
@@ -284,8 +286,16 @@ class HarnessLoop:
             skill_command = parse_direct_skill_command(
                 user_input, list_skills(self._workspace_root)
             )
+        model_user_input = user_input
         if skill_command is not None:
-            return self._run_skill_turn(session, skill_command)
+            if skill_command.kind == "invoke":
+                model_user_input = self._prepare_skill_invoke(session, skill_command)
+            else:
+                return self._run_skill_turn(session, skill_command)
+
+        effective_max_steps = max_steps
+        if skill_command is not None and skill_command.kind == "invoke":
+            effective_max_steps = max(max_steps, SKILL_INVOKE_MIN_STEPS)
 
         last_response = ""
         terminal_reason = "max_steps"
@@ -295,7 +305,7 @@ class HarnessLoop:
         turn_started_at = self._clock.now()
         session_wall_base = session.budget_usage.wall_time_ms_total
 
-        for step_index in range(max_steps):
+        for step_index in range(effective_max_steps):
             self._record(
                 session=session,
                 event_type="step_started",
@@ -333,7 +343,7 @@ class HarnessLoop:
                 )
                 break
 
-            step_input = user_input if step_index == 0 else ""
+            step_input = model_user_input if step_index == 0 else ""
             self._record(
                 session=session,
                 event_type="model_call_started",
@@ -398,9 +408,6 @@ class HarnessLoop:
                 },
             )
 
-            if decision.kind in TERMINAL_DECISION_KINDS:
-                terminal_reason = decision.kind
-                break
             turn_usage.wall_time_ms = self._elapsed_ms(turn_started_at)
             session.budget_usage.wall_time_ms_total = self._session_wall_time_total(
                 base_ms=session_wall_base,
@@ -424,11 +431,34 @@ class HarnessLoop:
                     )
                 )
                 break
+
+            if decision.kind in TERMINAL_DECISION_KINDS:
+                terminal_reason = decision.kind
+                break
             self._maybe_emit_replan_reminder(
                 session=session,
                 steps_used=steps_used,
-                max_steps=max_steps,
+                max_steps=effective_max_steps,
             )
+
+        if (
+            terminal_reason == "max_steps"
+            and steps_used >= effective_max_steps
+            and effective_max_steps > 1
+        ):
+            last_response = (
+                f"Step budget reached ({effective_max_steps} inner steps). "
+                "This session is still open — send **continue** to keep researching, "
+                "or **summarize what you have so far** for a partial report."
+            )
+            session.messages.append(
+                self._make_message(
+                    role="assistant",
+                    content=last_response,
+                    session=session,
+                )
+            )
+            session.status = "waiting_user"
 
         turn_usage.wall_time_ms = self._elapsed_ms(turn_started_at)
         session.budget_usage.wall_time_ms_total = self._session_wall_time_total(
@@ -578,6 +608,30 @@ class HarnessLoop:
         self._maybe_auto_title(session)
         self._sessions.save(session)
         return reply
+
+    def _prepare_skill_invoke(self, session: Session, command: SkillCommand) -> str:
+        """Pin ``command.name`` and return the task text for the model loop."""
+
+        available = list_skills(self._workspace_root)
+        name = (command.name or "").strip()
+        task = (command.task or "").strip()
+        if not name or name not in available:
+            raise ValueError(f"Skill '{name}' not found under skills/*.md.")
+        if not task:
+            raise ValueError("skill invoke requires a task after the skill name")
+
+        selected = selected_skills_from_messages(session.messages)
+        if name not in selected:
+            selected.append(name)
+        session.messages.append(
+            self._make_message(
+                role="system",
+                content=format_skill_state_message(selected),
+                session=session,
+            )
+        )
+        self._sessions.save(session)
+        return task
 
     def _run_skill_turn(self, session: Session, command: SkillCommand) -> str:
         """Handle ``/skill`` commands without model calls."""
@@ -881,12 +935,24 @@ class HarnessLoop:
         step_index: int = 0,
     ) -> tuple[Decision, datetime, datetime]:
         started = self._clock.now()
-        token = bind_stream_sink(self._stream_sink, step_index=step_index)
+        stream_reasoning_parts: list[str] = []
+        sink = self._stream_sink
+
+        def _stream_sink(kind: str, text: str, step_idx: int) -> None:
+            if kind == "reasoning" and text:
+                stream_reasoning_parts.append(text)
+            if sink is not None:
+                sink(kind, text, step_idx)
+
+        token = bind_stream_sink(_stream_sink if sink is not None else None, step_index=step_index)
         try:
             set_stream_step_index(step_index)
             decision = self._model.decide(session, user_input)
         finally:
             reset_stream_sink(token)
+        self._last_stream_reasoning = (
+            "".join(stream_reasoning_parts).strip() or None
+        )
         ended = self._clock.now()
         return decision, started, ended
 
@@ -1212,11 +1278,13 @@ class HarnessLoop:
         """Optional reasoning from the last model call (networked adapters)."""
 
         raw = self._model_raw_meta()
-        if not raw:
-            return None
-        reasoning = raw.get("reasoning_text")
-        if isinstance(reasoning, str) and reasoning.strip():
-            return reasoning.strip()
+        if raw:
+            reasoning = raw.get("reasoning_text")
+            if isinstance(reasoning, str) and reasoning.strip():
+                return reasoning.strip()
+        stream = self._last_stream_reasoning
+        if isinstance(stream, str) and stream.strip():
+            return stream.strip()
         return None
 
     def _model_provider_extra(self) -> dict | None:
@@ -1435,9 +1503,6 @@ class HarnessLoop:
             "output_preview": output_preview,
             "output_truncated": truncated,
         }
-        if result.artifact_ref:
-            payload["artifact_ref"] = result.artifact_ref
-        return payload
         if result.artifact_ref:
             payload["artifact_ref"] = result.artifact_ref
         return payload

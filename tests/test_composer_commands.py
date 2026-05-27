@@ -17,5 +17,5 @@ def test_composer_commands_payload_lists_builtins_and_skills(tmp_path: Path) -> 
     assert "remember" in names
     assert "remember-global" in names
     assert payload["skills"][0]["name"] == "research"
-    assert payload["skills"][0]["insert"] == "/research"
+    assert payload["skills"][0]["insert"] == "/research "
     assert "Deep research" in payload["skills"][0]["description"]

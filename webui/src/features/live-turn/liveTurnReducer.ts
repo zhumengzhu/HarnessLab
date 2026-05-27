@@ -163,6 +163,19 @@ export function reduceLiveTurn(
     return { ...state, thoughts, phase: "running" };
   }
 
+  if (evt.event_type === "session_finished") {
+    const reason = String(payload.reason || "");
+    if (reason === "max_steps") {
+      const hint =
+        "Step budget reached. Send **continue** to keep going or ask for a partial summary.";
+      return {
+        ...state,
+        assistantText: state.assistantText || hint,
+        phase: "answering",
+      };
+    }
+  }
+
   return state;
 }
 

@@ -170,6 +170,26 @@
         "denials": 0,
         "invalid_args": 0
       }
+    },
+    "supervisor_research_then_write": {
+      "passed": true,
+      "metrics": {
+        "turns": 1,
+        "tool_calls": 1,
+        "tool_failures": 0,
+        "denials": 0,
+        "invalid_args": 0
+      }
+    },
+    "budget_cost_hard_stop": {
+      "passed": true,
+      "metrics": {
+        "turns": 1,
+        "tool_calls": 0,
+        "tool_failures": 0,
+        "denials": 0,
+        "invalid_args": 0
+      }
     }
   }
 }

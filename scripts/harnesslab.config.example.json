@@ -29,7 +29,7 @@
   "serve": {
     "host": "127.0.0.1",
     "port": 8787,
-    "max_steps": 20
+    "max_steps": 40
   },
   "policy": {
     "shell_profile": "dev",
@@ -46,7 +46,7 @@
       "max_session_cost_usd_total": 5.0
     },
     "multi_agent": {
-      "enabled": false
+      "enabled": true
     }
   },
   "web": {

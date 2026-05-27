@@ -17,6 +17,7 @@ _RESERVED_SKILL_SLASH = frozenset({"remember", "remember-global", "skill", "comp
 class SkillCommand:
     kind: str
     name: str | None = None
+    task: str | None = None
 
 
 def parse_skill_command(user_input: str) -> SkillCommand | None:
@@ -41,7 +42,7 @@ def parse_skill_command(user_input: str) -> SkillCommand | None:
 def parse_direct_skill_command(
     user_input: str, available: list[str]
 ) -> SkillCommand | None:
-    """``/research`` → pin workspace skill ``research`` (Cursor-style invoke)."""
+    """``/skillname`` pins; ``/skillname <task>`` pins and runs the task (Cursor-style)."""
 
     text = user_input.strip()
     if not text.startswith("/"):
@@ -51,22 +52,24 @@ def parse_direct_skill_command(
     rest = text[1:].strip()
     if not rest:
         return None
-    name = rest.split()[0].strip()
+    parts = rest.split(maxsplit=1)
+    name = parts[0].strip()
     if not name or name.lower() in _RESERVED_SKILL_SLASH:
         return None
     if name not in available:
         return None
+    task = parts[1].strip() if len(parts) > 1 else None
+    if task:
+        return SkillCommand(kind="invoke", name=name, task=task)
     return SkillCommand(kind="add", name=name)
 
 
 def list_skills(workspace_root: Path | None) -> list[str]:
     if workspace_root is None:
         return []
-    skills_dir = workspace_root / "skills"
-    if not skills_dir.is_dir():
-        return []
-    names = [path.stem for path in sorted(skills_dir.glob("*.md")) if path.is_file()]
-    return [name for name in names if name]
+    from harnesslab.skills.catalog import list_skill_records
+
+    return [record.name for record in list_skill_records(workspace_root)]
 
 
 def format_skill_state_message(selected: list[str]) -> str:

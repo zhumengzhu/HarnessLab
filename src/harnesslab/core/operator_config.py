@@ -150,6 +150,35 @@ def save_operator_config(config: OperatorConfig, path: Path | None = None) -> Pa
     return path
 
 
+def patch_loop_multi_agent_enabled(*, enabled: bool, path: Path | None = None) -> Path:
+    """Merge ``loop.multi_agent.enabled`` into the on-disk config file."""
+
+    path = path or config_path_from_env()
+    if path.is_file():
+        data = json5.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            data = {"version": CONFIG_VERSION}
+    else:
+        data = {"version": CONFIG_VERSION}
+
+    loop_raw = data.get("loop")
+    loop: dict[str, Any] = loop_raw if isinstance(loop_raw, dict) else {}
+    data["loop"] = loop
+    multi_raw = loop.get("multi_agent")
+    multi: dict[str, Any] = multi_raw if isinstance(multi_raw, dict) else {}
+    loop["multi_agent"] = multi
+    multi["enabled"] = bool(enabled)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(
+        json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    tmp.replace(path)
+    return path
+
+
 def _patch_model_section(data: dict[str, Any], config: OperatorConfig) -> None:
     from harnesslab.providers.deepseek_config import deepseek_ui_effort
 

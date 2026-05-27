@@ -90,7 +90,12 @@ from harnesslab.tools.mcp_adapter import McpServerConfig, register_mcp_servers
 from harnesslab.tools.patch import ApplyPatchTool
 from harnesslab.tools.python_sandbox_tool import RunPythonSandboxedTool
 from harnesslab.tools.registry import ToolRegistry
-from harnesslab.tools.research_tools import HtmlToMarkdownTool, ReadPdfTool, WebSearchTool
+from harnesslab.tools.research_tools import (
+    HtmlToMarkdownTool,
+    ReadPdfTool,
+    WebSearchTool,
+    resolve_web_search_api_key,
+)
 from harnesslab.tools.shell_tool import RunShellSafeTool
 from harnesslab.tools.spawn_sub_agent import SpawnSubAgentTool
 from harnesslab.web.server import WebRuntime, serve
@@ -117,6 +122,7 @@ SUBCOMMANDS = (
     "context",
     "serve",
     "skill",
+    "check",
     "tui",
 )
 
@@ -401,12 +407,9 @@ def build_runtime(
         if operator_config is not None and operator_config.web_search_api_key_env
         else None
     )
-    web_search_api_key = (
-        os.environ.get("WEB_SEARCH_API_KEY")
-        or (os.environ.get(configured_api_key_env) if configured_api_key_env else None)
-        or os.environ.get("BRAVE_API_KEY")
-        or os.environ.get("TAVILY_API_KEY")
-        or os.environ.get("SERPAPI_API_KEY")
+    web_search_api_key = resolve_web_search_api_key(
+        web_search_backend,
+        configured_api_key_env,
     )
 
     # Memory store is wired into the loop for session-scoped notes (Phase 3.3).
@@ -1060,6 +1063,28 @@ def _build_parser() -> argparse.ArgumentParser:
         help="Install target directory (default: workspace/skills).",
     )
 
+    # ----- check (diagnostics) -----
+    ck = sub.add_parser(
+        "check",
+        help="Run HarnessLab diagnostics.",
+    )
+    ck_sub = ck.add_subparsers(dest="check_action", required=True, metavar="ACTION")
+    ck_net = ck_sub.add_parser(
+        "network",
+        help="Probe proxy env, web_search backend, and sample fetch_url targets.",
+    )
+    ck_net.add_argument(
+        "--env-file",
+        default=None,
+        help="Dotenv file to load before checks (default: ~/.config/harnesslab/env).",
+    )
+    ck_net.add_argument(
+        "--timeout",
+        type=float,
+        default=20.0,
+        help="HTTP timeout in seconds (default: 20).",
+    )
+
     return parser
 
 
@@ -1112,11 +1137,33 @@ def main() -> None:
         sys.exit(_cmd_serve(args))
     if args.command == "skill":
         sys.exit(_cmd_skill(args))
+    if args.command == "check":
+        sys.exit(_cmd_check(args))
     if args.command == "tui":
         sys.exit(_cmd_tui(args))
 
     parser.print_help(sys.stderr)
     sys.exit(EXIT_USAGE)
+
+
+def _cmd_check(args: argparse.Namespace) -> int:
+    if args.check_action == "network":
+        from harnesslab.core.env_file import apply_env_file, env_file_path
+        from harnesslab.diagnostics.network_check import (
+            format_network_report,
+            network_check_exit_code,
+            run_network_checks,
+        )
+
+        env_path = Path(args.env_file).expanduser() if args.env_file else env_file_path()
+        loaded = apply_env_file(env_path)
+        if loaded is not None:
+            print(f"Loaded env: {loaded}")
+        lines = run_network_checks(timeout_seconds=args.timeout)
+        print(format_network_report(lines))
+        return network_check_exit_code(lines)
+    print("Unknown check action.", file=sys.stderr)
+    return EXIT_USAGE
 
 
 def _cmd_skill(args: argparse.Namespace) -> int:

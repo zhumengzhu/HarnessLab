@@ -1,6 +1,7 @@
 import { useMemo } from "react";
 import type { SettingsResponse } from "../../lib/schemas";
 import { JsonHighlight, settingsToJson5Text } from "../../lib/jsonHighlight";
+import { OperatorControls } from "./OperatorControls";
 
 type SettingsPanelProps = {
   loading: boolean;
@@ -130,6 +131,12 @@ export function SettingsPanel(props: SettingsPanelProps) {
             </summary>
             <JsonHighlight source={fullJson5} />
           </details>
+
+          <OperatorControls
+            multiAgentEnabled={Boolean(settings.multi_agent_enabled)}
+            failoverEnabled={Boolean(settings.model_failover_enabled)}
+            fallbacks={Array.isArray(settings.model_fallbacks) ? (settings.model_fallbacks as string[]) : []}
+          />
 
           <McpHealthPanel servers={settings.mcp_servers} health={mcpHealth} />
 

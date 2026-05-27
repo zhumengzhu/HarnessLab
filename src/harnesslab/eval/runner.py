@@ -14,6 +14,9 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import httpx
+
+from harnesslab.core.budget import BudgetLimits
 from harnesslab.core.config import RuntimeLimits
 from harnesslab.core.loop import HarnessLoop
 from harnesslab.core.models import TraceEvent
@@ -52,6 +55,26 @@ def _limits_for_task(task: Task) -> RuntimeLimits:
     return replace(base, **task.limits.model_dump(exclude_none=True))
 
 
+def _eval_web_search_transport() -> httpx.MockTransport:
+    """Deterministic DuckDuckGo HTML for replay eval tasks."""
+
+    html = """
+    <html><body>
+      <a class="result__a" href="https://example.com/harnesslab">HarnessLab</a>
+      <a class="result__snippet" href="https://example.com/harnesslab">
+        Learning-first agent harness.
+      </a>
+    </body></html>
+    """
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "duckduckgo.com" and request.url.path == "/":
+            return httpx.Response(200, text="<html></html>")
+        return httpx.Response(200, text=html)
+
+    return httpx.MockTransport(handler)
+
+
 def _build_tool_registry(workspace: Path, limits: RuntimeLimits) -> ToolRegistry:
     tools = ToolRegistry()
     tools.register(ReadFileTool(workspace, limits=limits))
@@ -61,7 +84,7 @@ def _build_tool_registry(workspace: Path, limits: RuntimeLimits) -> ToolRegistry
     tools.register(GrepTool(workspace, limits=limits))
     tools.register(GlobTool(workspace, limits=limits))
     tools.register(FetchUrlTool(limits=limits))
-    tools.register(WebSearchTool())
+    tools.register(WebSearchTool(transport=_eval_web_search_transport()))
     tools.register(HtmlToMarkdownTool(limits=limits))
     tools.register(RunShellSafeTool(workspace, limits=limits))
     return tools
@@ -167,9 +190,20 @@ class TaskRunner:
         memory = InMemoryMemoryStore()
 
         recorder = ReplayTraceRecorder()
+        replay_meta = dict(task.replay_call_meta or {})
         model: Any = (
-            ReplayModel(decisions=task.decisions) if task.decisions else SimpleModel()
+            ReplayModel(decisions=task.decisions, call_meta=replay_meta)
+            if task.decisions
+            else SimpleModel()
         )
+
+        budget_limits = BudgetLimits(enabled=False)
+        if task.budget is not None:
+            budget_limits = BudgetLimits(
+                enabled=task.budget.enabled,
+                max_session_cost_usd_total=task.budget.max_session_cost_usd_total,
+                action_on_hard=task.budget.action_on_hard,  # type: ignore[arg-type]
+            )
 
         loop_holder: list[HarnessLoop] = []
         tools.register(SpawnSubAgentTool(lambda: loop_holder[0]))
@@ -190,6 +224,7 @@ class TaskRunner:
             limits=limits,
             memory=memory,
             workspace_root=workspace,
+            budget_limits=budget_limits,
         )
         loop_holder.append(loop)
 

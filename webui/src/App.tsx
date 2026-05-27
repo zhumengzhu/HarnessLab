@@ -8,6 +8,7 @@ import type { LiveTurnState } from "./features/live-turn/liveTurnReducer";
 import { ProposalPanel } from "./features/proposals/ProposalPanel";
 import { SessionWorkspace } from "./features/sessions/SessionWorkspace";
 import { SettingsPanel } from "./features/settings/SettingsPanel";
+import { SkillBrowserPanel } from "./features/settings/SkillBrowserPanel";
 import type { TurnEnrichment } from "./lib/turnEnrichments";
 import {
   buildTurnEnrichmentsFromTrace,
@@ -35,7 +36,7 @@ import type {
   TraceResponse,
 } from "./lib/schemas";
 
-type MainView = "chat" | "proposals" | "settings";
+type MainView = "chat" | "proposals" | "settings" | "skills";
 
 export function App() {
   const queryClient = useQueryClient();
@@ -274,6 +275,13 @@ export function App() {
               </button>
               <button
                 type="button"
+                className={mainView === "skills" ? "active" : ""}
+                onClick={() => setMainView("skills")}
+              >
+                Skills
+              </button>
+              <button
+                type="button"
                 className={mainView === "settings" ? "active" : ""}
                 onClick={() => setMainView("settings")}
               >
@@ -373,6 +381,8 @@ export function App() {
           data={settings.data}
         />
       ) : null}
+
+      {mainView === "skills" && uiMode === "advanced" ? <SkillBrowserPanel /> : null}
     </main>
   );
 }

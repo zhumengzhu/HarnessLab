@@ -4,8 +4,8 @@ Multi-source **depth-first research** for learning, decisions, or deliverable
 documents. Produces a **cited Markdown report** saved to the workspace — not a
 chat-only summary.
 
-**Invoke:** `/deep-research` then state your topic, or pin this skill and ask
-for "deep research on …".
+**Invoke:** `/deep-research <your topic>` — pins this skill and runs the task
+in one turn (Cursor-style). `/deep-research` alone only pins without running.
 
 **Inspired by:** [ClawHub Deep Research Pro](https://clawhub.ai/parags/deep-research-pro)
 (parags) — adapted for HarnessLab `web_search`, `fetch_url`, `html_to_markdown`,

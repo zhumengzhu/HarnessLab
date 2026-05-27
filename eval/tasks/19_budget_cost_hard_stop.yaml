@@ -1,0 +1,26 @@
+name: budget_cost_hard_stop
+goal: stop when session cost budget exceeded
+description: |
+  Phase 5.10: ``ReplayModel`` emits token counts; a tiny
+  ``max_session_cost_usd_total`` triggers ``budget_hard_exceeded``.
+budget:
+  enabled: true
+  max_session_cost_usd_total: 0.00001
+  action_on_hard: final
+replay_call_meta:
+  model_name: deepseek-v4-flash
+  request_tokens: 1000
+  response_tokens: 1000
+decisions:
+  - kind: final
+    assistant_message: should not reach here
+turns:
+  - input: expensive turn
+    max_steps: 1
+expected:
+  final_reply_contains:
+    - Budget hard limit exceeded
+  events_include:
+    - event_type: budget_hard_exceeded
+      payload_contains:
+        dimension: max_session_cost_usd_total

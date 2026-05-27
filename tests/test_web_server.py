@@ -504,7 +504,18 @@ def test_web_composer_commands_lists_skills(tmp_path: Path) -> None:
     assert payload["skills"][0]["name"] == "research"
 
 
-def test_web_static_index_served(tmp_path: Path) -> None:
+def test_web_static_index_served(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    ts_static = tmp_path / "ts_static"
+    assets = ts_static / "assets"
+    assets.mkdir(parents=True)
+    (ts_static / "index.html").write_text(
+        '<!doctype html><html><body><div id="root">HarnessLab</div>'
+        '<script type="module" src="/assets/index.js"></script></body></html>',
+        encoding="utf-8",
+    )
+    (assets / "index.js").write_text("console.log('ts ui')", encoding="utf-8")
+    monkeypatch.setattr(web_server, "_TS_STATIC_DIR", ts_static)
+
     port = _free_port()
     runtime = _web_runtime(tmp_path)
     _start_server(runtime, port)
@@ -512,8 +523,8 @@ def test_web_static_index_served(tmp_path: Path) -> None:
     with urllib.request.urlopen(f"{base}/", timeout=5) as resp:  # noqa: S310
         body = resp.read().decode("utf-8")
     assert "HarnessLab" in body
-    assert ("/static/app.js" in body) or ('id="root"' in body and "/assets/" in body)
-    assert ("tool-panel" in body) or ('id="root"' in body)
+    assert 'id="root"' in body
+    assert "/assets/index.js" in body
 
 
 def test_web_can_switch_to_ts_static_bundle(
@@ -545,3 +556,39 @@ def test_web_can_switch_to_ts_static_bundle(
     with urllib.request.urlopen(f"{base}/assets/index.js", timeout=5) as resp:  # noqa: S310
         asset = resp.read().decode("utf-8")
     assert "ts ui" in asset
+
+
+def test_web_skills_list_api(tmp_path: Path) -> None:
+    skills = tmp_path / "skills"
+    skills.mkdir()
+    (skills / "research.md").write_text("# Research\n\nSearch deeply.", encoding="utf-8")
+    port = _free_port()
+    runtime = _web_runtime(tmp_path)
+    _start_server(runtime, port)
+    base = f"http://127.0.0.1:{port}"
+    with urllib.request.urlopen(f"{base}/api/skills", timeout=5) as resp:  # noqa: S310
+        payload = json.loads(resp.read().decode("utf-8"))
+    names = {item["name"] for item in payload["skills"]}
+    assert "research" in names
+
+
+def test_web_patch_multi_agent_setting(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text('{"version": 1, "loop": {"multi_agent": {"enabled": false}}}\n')
+    monkeypatch.setenv("HARNESSLAB_CONFIG", str(config_path))
+
+    port = _free_port()
+    runtime = _web_runtime(tmp_path)
+    _start_server(runtime, port)
+    base = f"http://127.0.0.1:{port}"
+    req = urllib.request.Request(
+        f"{base}/api/settings/multi-agent",
+        data=json.dumps({"enabled": True}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=5) as resp:  # noqa: S310
+        payload = json.loads(resp.read().decode("utf-8"))
+    assert payload["multi_agent_enabled"] is True
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["loop"]["multi_agent"]["enabled"] is True

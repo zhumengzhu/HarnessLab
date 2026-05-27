@@ -9,6 +9,23 @@ from typing import Any
 from harnesslab.core.models import ToolCall, ToolResult
 
 
+def _parent_chain_depth(loop: Any, session_id: str) -> int:
+    """Count ancestors via ``parent_session_id`` (root session → 0)."""
+
+    depth = 0
+    current_id = session_id
+    seen: set[str] = set()
+    while current_id and current_id not in seen:
+        seen.add(current_id)
+        session = loop._sessions.get(current_id)
+        parent_id = getattr(session, "parent_session_id", None)
+        if not parent_id:
+            break
+        depth += 1
+        current_id = parent_id
+    return depth
+
+
 class SpawnSubAgentTool:
     name = "spawn_sub_agent"
     description = (
@@ -63,6 +80,15 @@ class SpawnSubAgentTool:
                 output="",
                 error=f"max sub-agents per session ({self._max_per_session}) exceeded",
             )
+
+        depth = _parent_chain_depth(loop, parent_id)
+        if depth >= self._max_depth:
+            return ToolResult(
+                ok=False,
+                output="",
+                error=f"max sub-agent depth ({self._max_depth}) exceeded",
+            )
+
         self._spawn_counts[parent_id] = count + 1
 
         child = loop.start_child(goal=goal, parent_session_id=parent_id)
