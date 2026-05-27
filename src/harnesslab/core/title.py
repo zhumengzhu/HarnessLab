@@ -99,7 +99,7 @@ class LiveTitleNamer:
         self._model = model
 
     def __call__(self, session: Session) -> str | None:
-        scratch = Session(goal="(session-title)")
+        scratch = Session(id="ses___title_namer", goal="(session-title)")
         scratch.messages.append(
             Message(
                 role="user",

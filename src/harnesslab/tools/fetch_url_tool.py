@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import os
 import socket
 from collections.abc import Iterable
 from typing import Any, Literal
@@ -43,6 +44,8 @@ DEFAULT_FETCH_DENY_HOSTS: frozenset[str] = frozenset(
 )
 
 DEFAULT_FETCH_TIMEOUT_SECONDS = 10.0
+DEFAULT_JINA_READER_BASE = "https://r.jina.ai"
+DEFAULT_FETCH_PROVIDER: Literal["direct", "jina"] = "direct"
 # Open by default — MVP harness is operator-controlled and a strict
 # allowlist proved too restrictive for everyday research tasks (see
 # product feedback comparing to OpenClaw-style agents). Operators can
@@ -141,6 +144,20 @@ def validate_fetch_url(
     return True, "ok"
 
 
+def jina_reader_url(url: str) -> str:
+    """Wrap a public HTTPS URL for Jina Reader."""
+
+    return f"{DEFAULT_JINA_READER_BASE}/{url}"
+
+
+def resolve_jina_api_key(configured_env: str | None) -> str | None:
+    if configured_env:
+        value = (os.environ.get(configured_env) or "").strip()
+        if value:
+            return value
+    return (os.environ.get("JINA_API_KEY") or "").strip() or None
+
+
 class FetchUrlTool:
     """GET an HTTPS URL and return the response body as text."""
 
@@ -151,7 +168,10 @@ class FetchUrlTool:
         "https://wttr.in/City?format=3 , GitHub raw content, etc.). "
         "Private/loopback/link-local addresses and cloud-metadata hosts "
         "are blocked. Operators may pin a stricter allowlist; in that "
-        "mode only hosts on the operator allowlist are reachable."
+        "mode only hosts on the operator allowlist are reachable. "
+        "When provider=jina, the URL is fetched via Jina Reader "
+        "(markdown, JS-friendly) while policy still applies to the "
+        "original URL."
     )
     args_schema: dict[str, Any] = {
         "type": "object",
@@ -176,6 +196,8 @@ class FetchUrlTool:
         deny_hosts: frozenset[str] | None = None,
         mode: Literal["strict", "open"] = DEFAULT_FETCH_MODE,
         check_robots_advisory: bool = True,
+        provider: Literal["direct", "jina"] = DEFAULT_FETCH_PROVIDER,
+        jina_api_key: str | None = None,
         transport: httpx.BaseTransport | None = None,
         timeout_seconds: float = DEFAULT_FETCH_TIMEOUT_SECONDS,
     ) -> None:
@@ -184,6 +206,8 @@ class FetchUrlTool:
         self._deny_hosts = deny_hosts or frozenset()
         self._mode = mode
         self._check_robots_advisory = check_robots_advisory
+        self._provider = provider
+        self._jina_api_key = (jina_api_key or "").strip() or None
         self._timeout = timeout_seconds
         self._client = httpx.Client(
             timeout=timeout_seconds,
@@ -204,21 +228,28 @@ class FetchUrlTool:
         )
         if not ok:
             return ToolResult(ok=False, output="", error=reason)
+        fetch_url = jina_reader_url(url) if self._provider == "jina" else url
+        headers: dict[str, str] = {}
+        if self._provider == "jina" and self._jina_api_key:
+            headers["Authorization"] = f"Bearer {self._jina_api_key}"
         try:
-            response = self._client.get(url)
+            response = self._client.get(fetch_url, headers=headers or None)
             response.raise_for_status()
             content_type = response.headers.get("content-type")
-            if not is_textlike_content_type(content_type):
+            if self._provider != "jina" and not is_textlike_content_type(content_type):
                 return ToolResult(
                     ok=False,
                     output="",
                     error=(
                         "unsupported content-type for fetch_url: "
-                        f"{content_type or 'unknown'}; use read_pdf or another tool"
+                        f"{content_type or 'unknown'}; use read_pdf, provider=jina, "
+                        "or another tool"
                     ),
                 )
             body = response.text
-            if self._check_robots_advisory and self._mode == "open":
+            if self._provider == "jina":
+                body = f"(via Jina Reader)\n\n{body}"
+            if self._check_robots_advisory and self._mode == "open" and self._provider == "direct":
                 advisory = robots_advisory_for_url(self._client, url)
                 if advisory:
                     body = f"{advisory}\n\n{body}"

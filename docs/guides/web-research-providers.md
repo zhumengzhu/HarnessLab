@@ -12,8 +12,8 @@ capabilities to agents, but the architecture and paid backends differ.
 
 | Tool | Implementation | Backend options |
 | --- | --- | --- |
-| `web_search` | `httpx` to a pluggable backend | `duckduckgo` (HTML scrape, free, fragile), `brave`, `tavily`, `serpapi` (API keys) |
-| `fetch_url` | Plain HTTPS GET + raw body text | No JS; SSRF-safe open mode |
+| `web_search` | Pluggable backend | **`ddgs`** (default, free), `exa` (hosted MCP or REST with `EXA_API_KEY`), `duckduckgo` (legacy HTML scrape), `tavily`, `brave`, `serpapi` |
+| `fetch_url` | Direct HTTPS GET or **Jina Reader** (`provider: jina`) | Jina optional `JINA_API_KEY`; SSRF-safe open mode |
 | `html_to_markdown` | Local HTML → markdown parser | Free, offline |
 | `read_pdf` | Local PDF text extraction | Free, offline |
 
@@ -77,6 +77,17 @@ Key differences:
 - Search is often **Exa** or **model-native web search** (Gemini/Google Search grounding, OpenAI web search, OpenRouter plugins)—not DuckDuckGo scrape.
 - Extension model (TypeScript plugins) vs HarnessLab’s config-driven backends.
 
+**Exa vs Tavily:** separate vendors ([exa.ai](https://exa.ai/) vs [tavily.com](https://tavily.com/)); OpenCode’s built-in path is Exa MCP, not Tavily. See [Deep research landscape](https://github.com/zhumengzhu/HarnessLab/blob/c7625595e226daf7ebb715cec82b4d08931ea586/docs/guides/deep-research-landscape.md).
+
+## HarnessLab backend selection (no auto-fallback)
+
+`web_search` uses **exactly one** backend per process (`ddgs` | `duckduckgo` |
+`exa` | `brave` | `tavily` | `serpapi`). Setting `TAVILY_API_KEY` alone does **not**
+enable Tavily unless `tools.web_search.backend` (or `WEB_SEARCH_BACKEND`) is
+`tavily`. **`exa`** without `EXA_API_KEY` uses Exa hosted MCP (shared free quota,
+OpenCode-compatible); with a key it uses Exa REST. There is **no** automatic
+DuckDuckGo → Tavily fallback.
+
 ## Mainland China / VPN note
 
 Browsers use system or extension proxy; **Python `httpx` only sees `HTTP_PROXY` / `HTTPS_PROXY` /
@@ -128,7 +139,8 @@ Verify live pricing before budgeting. “Free tier” rules change; links are of
 4. Run **`uv run harnesslab check network`** after `./hl-serve restart`.
 5. Deep research flow: `web_search` → pick article URLs → `fetch_url` → `html_to_markdown` (avoid Google search URLs).
 
-## Related docs
+## Related docs (tree `c7625595e226daf7ebb715cec82b4d08931ea586`)
 
-- [`docs/architecture/tool-runtime.md`](../architecture/tool-runtime.md) — tool policy and schemas
-- [`skills/deep-research.md`](../../skills/deep-research.md) — research skill workflow
+- [Tool runtime](https://github.com/zhumengzhu/HarnessLab/blob/2273f9c3ff038b4f1bc5499832d5d8951ba3430b) — tool policy and schemas
+- [Deep research skill](https://github.com/zhumengzhu/HarnessLab/blob/c7625595e226daf7ebb715cec82b4d08931ea586/skills/deep-research.md) — research skill workflow
+- [Deep research landscape](https://github.com/zhumengzhu/HarnessLab/blob/c7625595e226daf7ebb715cec82b4d08931ea586/docs/guides/deep-research-landscape.md) — cross-project deep research comparison and HarnessLab design

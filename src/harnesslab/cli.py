@@ -78,7 +78,7 @@ from harnesslab.telemetry.jsonl_recorder import JsonlTraceRecorder
 from harnesslab.telemetry.log import configure_logging, get_logger
 from harnesslab.telemetry.otel_metrics import wrap_trace_recorder_with_metrics
 from harnesslab.telemetry.otel_recorder import wrap_trace_recorder
-from harnesslab.tools.fetch_url_tool import FetchUrlTool
+from harnesslab.tools.fetch_url_tool import FetchUrlTool, resolve_jina_api_key
 from harnesslab.tools.file_tools import (
     EditFileTool,
     GlobTool,
@@ -469,6 +469,16 @@ def build_runtime(
                 frozenset(operator_config.fetch_url_deny_hosts)
                 if operator_config is not None
                 else None
+            ),
+            provider=(
+                operator_config.fetch_url_provider
+                if operator_config is not None
+                else "direct"
+            ),
+            jina_api_key=(
+                resolve_jina_api_key(operator_config.fetch_url_jina_api_key_env)
+                if operator_config is not None
+                else resolve_jina_api_key(None)
             ),
         )
     )

@@ -49,6 +49,36 @@ def test_fetch_url_tool_returns_body() -> None:
     assert "Beijing" in result.output
 
 
+def test_fetch_url_jina_provider() -> None:
+    captured: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.append(str(request.url))
+        assert request.headers.get("Authorization") == "Bearer jina-test"
+        return httpx.Response(
+            200,
+            text="# Article\n\nBody text.",
+            headers={"content-type": "text/plain"},
+        )
+
+    tool = FetchUrlTool(
+        mode="open",
+        provider="jina",
+        jina_api_key="jina-test",
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        result = tool.execute(
+            ToolCall(name="fetch_url", args={"url": "https://example.com/article"})
+        )
+    finally:
+        tool.close()
+    assert result.ok, result.error
+    assert captured == ["https://r.jina.ai/https://example.com/article"]
+    assert "(via Jina Reader)" in result.output
+    assert "# Article" in result.output
+
+
 def test_policy_allows_fetch_url_for_wttr(tmp_path) -> None:
     """Open mode allows public hosts including wttr."""
     policy = DefaultPolicy(workspace_root=tmp_path)

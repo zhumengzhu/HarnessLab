@@ -8,7 +8,9 @@ chat-only summary.
 in one turn (Cursor-style). `/deep-research` alone only pins without running.
 
 **Inspired by:** [ClawHub Deep Research Pro](https://clawhub.ai/parags/deep-research-pro)
-(parags) — adapted for HarnessLab `web_search`, `fetch_url`, `html_to_markdown`,
+(parags), DeerFlow `deep-research`, OpenCode `research-deep` — see
+[Deep research landscape](https://github.com/zhumengzhu/HarnessLab/blob/c7625595e226daf7ebb715cec82b4d08931ea586/docs/guides/deep-research-landscape.md).
+Adapted for HarnessLab `web_search`, `fetch_url`, `html_to_markdown`,
 `read_pdf`, and `write_file`.
 
 ## When to use

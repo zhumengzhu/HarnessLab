@@ -269,6 +269,7 @@ runtime contracts belong in [`docs/architecture/`](docs/architecture/).
 | [`docs/architecture/overview.md`](docs/architecture/overview.md) | Runtime map and flows |
 | [`docs/architecture/tool-runtime.md`](docs/architecture/tool-runtime.md) | Tools and policy |
 | [`docs/guides/web-research-providers.md`](docs/guides/web-research-providers.md) | Web search/fetch backends, pricing, VPN/proxy |
+| [`docs/guides/deep-research-landscape.md`](docs/guides/deep-research-landscape.md) | Deep research cross-project comparison and design |
 | [`docs/architecture/data-model.md`](docs/architecture/data-model.md) | Messages, traces, sessions |
 | [`docs/architecture/compaction.md`](docs/architecture/compaction.md) | Auto/manual compaction |
 | [`docs/architecture/web-api.md`](docs/architecture/web-api.md) | HTTP + SSE API |

@@ -13,6 +13,7 @@ from harnesslab.tools.research_tools import (
     DEFAULT_WEB_SEARCH_BACKEND,
     WebSearchTool,
     _duckduckgo_antibot_page,
+    _search_ddgs,
     _search_duckduckgo,
     resolve_web_search_api_key,
 )
@@ -47,6 +48,28 @@ def _proxy_summary() -> NetworkCheckLine:
         name="proxy_env",
         status="ok",
         detail="; ".join(seen),
+    )
+
+
+def _ddgs_check() -> NetworkCheckLine:
+    try:
+        hits = _search_ddgs(
+            query="HarnessLab network check",
+            max_results=1,
+            timeout_seconds=20.0,
+        )
+    except ValueError as exc:
+        return NetworkCheckLine(name="web_search_ddgs", status="fail", detail=str(exc))
+    if hits:
+        return NetworkCheckLine(
+            name="web_search_ddgs",
+            status="ok",
+            detail=f"{len(hits)} hit(s); example: {hits[0].url}",
+        )
+    return NetworkCheckLine(
+        name="web_search_ddgs",
+        status="warn",
+        detail="Connected but parsed zero results.",
     )
 
 
@@ -118,11 +141,46 @@ def _configured_backend() -> str:
 
 
 def _backend_check(*, backend: str, api_key: str | None) -> NetworkCheckLine:
-    if backend == "duckduckgo":
+    if backend in {"duckduckgo", "ddgs"}:
+        if backend == "duckduckgo":
+            return NetworkCheckLine(
+                name="web_search_duckduckgo",
+                status="skip",
+                detail="Handled by duckduckgo_html probe.",
+            )
         return NetworkCheckLine(
-            name="web_search_duckduckgo",
+            name="web_search_ddgs",
             status="skip",
-            detail="Handled by duckduckgo_html probe.",
+            detail="Handled by ddgs probe.",
+        )
+    if backend == "exa":
+        from harnesslab.core.models import ToolCall
+
+        tool = WebSearchTool(backend="exa", max_results=1, api_key=api_key)
+        try:
+            result = tool.execute(
+                ToolCall(name="web_search", args={"query": "HarnessLab network check"})
+            )
+        finally:
+            tool.close()
+        mode = "REST" if api_key else "hosted MCP (no key)"
+        if result.ok and result.output and result.output != "No results.":
+            first_line = result.output.splitlines()[0][:120]
+            return NetworkCheckLine(
+                name="web_search_exa",
+                status="ok",
+                detail=f"{mode}: {first_line}",
+            )
+        if result.error:
+            return NetworkCheckLine(
+                name="web_search_exa",
+                status="fail",
+                detail=f"{mode}: {result.error}",
+            )
+        return NetworkCheckLine(
+            name="web_search_exa",
+            status="warn",
+            detail=f"{mode}: {result.output or 'No results.'}",
         )
     if backend not in {"brave", "tavily", "serpapi"}:
         return NetworkCheckLine(
@@ -200,6 +258,8 @@ def run_network_checks(
     try:
         if backend == "duckduckgo":
             lines.append(_duckduckgo_check(client))
+        elif backend == "ddgs":
+            lines.append(_ddgs_check())
         else:
             lines.append(_backend_check(backend=backend, api_key=api_key))
             # Still probe DDG when not default backend — helps diagnose proxy-only fixes.

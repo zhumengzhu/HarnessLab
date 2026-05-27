@@ -77,7 +77,9 @@ def test_web_search_duckduckgo_antibot_returns_actionable_error() -> None:
     assert "HTTPS_PROXY" in result.error
 
 
-def test_web_search_tavily_requires_key() -> None:
+def test_web_search_tavily_requires_key(monkeypatch) -> None:
+    monkeypatch.delenv("TAVILY_API_KEY", raising=False)
+    monkeypatch.delenv("WEB_SEARCH_API_KEY", raising=False)
     tool = WebSearchTool(backend="tavily")
     try:
         result = tool.execute(ToolCall(name="web_search", args={"query": "x"}))
@@ -85,6 +87,83 @@ def test_web_search_tavily_requires_key() -> None:
         tool.close()
     assert not result.ok
     assert "TAVILY_API_KEY" in (result.error or "")
+
+
+def test_web_search_ddgs_parses_results(monkeypatch) -> None:
+    class FakeDDGS:
+        def __init__(self, **kwargs: object) -> None:
+            self.kwargs = kwargs
+
+        def __enter__(self) -> FakeDDGS:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def text(self, query: str, max_results: int, backend: str) -> list[dict[str, str]]:
+            assert query == "example"
+            assert backend == "duckduckgo"
+            return [
+                {
+                    "title": "DDGS A",
+                    "href": "https://example.com/a",
+                    "body": "snippet a",
+                },
+            ]
+
+    monkeypatch.setattr("ddgs.DDGS", FakeDDGS)
+    tool = WebSearchTool(backend="ddgs")
+    try:
+        result = tool.execute(ToolCall(name="web_search", args={"query": "example"}))
+    finally:
+        tool.close()
+    assert result.ok, result.error
+    assert "DDGS A" in result.output
+    assert "https://example.com/a" in result.output
+
+
+def test_web_search_exa_rest_via_tool() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "results": [
+                    {"title": "Exa Hit", "url": "https://example.com/exa", "text": "info"},
+                ]
+            },
+        )
+
+    tool = WebSearchTool(
+        backend="exa",
+        api_key="exa-key",
+        transport=httpx.MockTransport(handler),
+    )
+    try:
+        result = tool.execute(ToolCall(name="web_search", args={"query": "test"}))
+    finally:
+        tool.close()
+    assert result.ok, result.error
+    assert "Exa Hit" in result.output
+    assert "https://example.com/exa" in result.output
+
+
+def test_web_search_exa_mcp_without_key() -> None:
+    payload = (
+        '{"result": {"content": [{"type": "text", '
+        '"text": "[Page](https://example.com/page)"}]}}'
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert "exaApiKey" not in str(request.url)
+        return httpx.Response(200, text=payload)
+
+    tool = WebSearchTool(backend="exa", transport=httpx.MockTransport(handler))
+    try:
+        result = tool.execute(ToolCall(name="web_search", args={"query": "test"}))
+    finally:
+        tool.close()
+    assert result.ok, result.error
+    assert "https://example.com/page" in result.output
 
 
 def test_html_to_markdown_extracts_headings_links_and_lists() -> None:

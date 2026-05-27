@@ -160,11 +160,14 @@ stateDiagram-v2
 | `apply_patch` | Unified-diff hunk application (Phase 3.4); context must match exactly | `_check_path` |
 | `grep` | UTF-8 regex search across the workspace, returns `path:lineno: line` matches with `glob` filter; default `max_matches=50`, hard cap `1000`; binary files and noise dirs skipped (Phase 2.5) | `_check_optional_path` |
 | `glob` | Workspace-relative glob match returning sorted relative paths; default `max_results=100`, hard cap `5000`; same noise-dir skip list (Phase 2.5) | `_check_optional_path` |
-| `fetch_url` | Read-only HTTP GET; defaults to open HTTPS (SSRF-safe: blocks private/loopback/link-local + cloud-metadata hosts); strict mode falls back to a host allowlist; text-like content only | `_check_fetch_url` |
-| `web_search` | Web search hits via backend (`duckduckgo`, `brave`, `tavily`, `serpapi`) with capped result count | allow |
+| `fetch_url` | Read-only HTTP GET (or Jina Reader when `provider=jina`); defaults to open HTTPS (SSRF-safe: blocks private/loopback/link-local + cloud-metadata hosts); strict mode falls back to a host allowlist; text-like content only | `_check_fetch_url` |
+| `web_search` | Web search hits via backend (`ddgs`, `duckduckgo`, `exa`, `brave`, `tavily`, `serpapi`) with capped result count | allow |
 
 Backend selection: `tools.web_search.backend` in operator config or `WEB_SEARCH_BACKEND`
-env var. Proxy and provider notes: [`docs/guides/web-research-providers.md`](../guides/web-research-providers.md).
+env var. Default backend is `ddgs` (DuckDuckGo via the `ddgs` library). `exa` uses
+Exa REST when `EXA_API_KEY` is set, otherwise Exa hosted MCP (no key, shared quota).
+`fetch_url.provider` may be `direct` (default) or `jina` (`r.jina.ai`; optional
+`JINA_API_KEY`). Proxy and provider notes: [`docs/guides/web-research-providers.md`](../guides/web-research-providers.md).
 Diagnostics: `harnesslab check network` (loads `~/.config/harnesslab/env` by default).
 | `html_to_markdown` | Convert HTML to markdown-like text for summarization and downstream parsing | allow |
 | `read_pdf` | Extract text from workspace PDF files with optional page cap | `_check_path` |

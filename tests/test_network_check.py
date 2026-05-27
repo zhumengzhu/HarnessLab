@@ -29,6 +29,7 @@ def test_network_check_duckduckgo_antibot_is_fail(monkeypatch) -> None:
     monkeypatch.delenv("HTTPS_PROXY", raising=False)
     monkeypatch.delenv("HTTP_PROXY", raising=False)
     monkeypatch.delenv("WEB_SEARCH_BACKEND", raising=False)
+    monkeypatch.setenv("WEB_SEARCH_BACKEND", "duckduckgo")
 
     antibot = """
     <!DOCTYPE html><html><head>

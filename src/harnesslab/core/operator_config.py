@@ -65,6 +65,8 @@ class OperatorConfig:
     fetch_url_mode: Literal["auto", "strict", "open"] = "auto"
     fetch_url_allowlist: tuple[str, ...] = ("wttr.in",)
     fetch_url_deny_hosts: tuple[str, ...] = ()
+    fetch_url_provider: Literal["direct", "jina"] = "direct"
+    fetch_url_jina_api_key_env: str | None = None
     web_search_backend: str = DEFAULT_WEB_SEARCH_BACKEND
     web_search_max_results: int = DEFAULT_WEB_SEARCH_MAX_RESULTS
     web_search_api_key_env: str | None = None
@@ -332,6 +334,7 @@ def config_settings_snapshot(
         "fetch_url_mode": config.fetch_url_mode,
         "fetch_url_allowlist": list(config.fetch_url_allowlist),
         "fetch_url_deny_hosts": list(config.fetch_url_deny_hosts),
+        "fetch_url_provider": config.fetch_url_provider,
         "web_search_backend": config.web_search_backend,
         "web_search_max_results": config.web_search_max_results,
         "web_search_api_base_url": config.web_search_api_base_url,
@@ -465,6 +468,8 @@ def _parse_config(data: dict[str, Any]) -> OperatorConfig:
         fetch_url_mode=_fetch_mode(fetch_url),
         fetch_url_allowlist=_parse_hosts(fetch_url.get("allowlist"), default=("wttr.in",)),
         fetch_url_deny_hosts=_parse_hosts(fetch_url.get("deny_hosts"), default=()),
+        fetch_url_provider=_fetch_provider(fetch_url),
+        fetch_url_jina_api_key_env=_optional_str(fetch_url.get("jina_api_key_env")),
         web_search_backend=_optional_str(web_search.get("backend")) or DEFAULT_WEB_SEARCH_BACKEND,
         web_search_max_results=_optional_int(web_search.get("max_results"))
         or DEFAULT_WEB_SEARCH_MAX_RESULTS,
@@ -569,6 +574,13 @@ def _fetch_mode(fetch_url: dict[str, Any]) -> Literal["auto", "strict", "open"]:
     if mode not in {"auto", "strict", "open"}:
         return "auto"
     return mode  # type: ignore[return-value]
+
+
+def _fetch_provider(fetch_url: dict[str, Any]) -> Literal["direct", "jina"]:
+    provider = str(fetch_url.get("provider", "direct")).strip().lower()
+    if provider not in {"direct", "jina"}:
+        return "direct"
+    return provider  # type: ignore[return-value]
 
 
 def _anthropic_thinking_mode(anthropic: dict[str, Any]) -> str:

@@ -16,7 +16,7 @@ import httpx
 from harnesslab.core.config import RuntimeLimits
 from harnesslab.core.models import ToolCall, ToolResult
 
-DEFAULT_WEB_SEARCH_BACKEND = "duckduckgo"
+DEFAULT_WEB_SEARCH_BACKEND = "ddgs"
 DEFAULT_WEB_SEARCH_MAX_RESULTS = 5
 DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS = 15.0
 
@@ -24,6 +24,7 @@ _BACKEND_API_KEY_ENVS: dict[str, str] = {
     "brave": "BRAVE_API_KEY",
     "tavily": "TAVILY_API_KEY",
     "serpapi": "SERPAPI_API_KEY",
+    "exa": "EXA_API_KEY",
 }
 
 
@@ -102,6 +103,7 @@ class WebSearchTool:
         self._max_results = max(1, min(max_results, 20))
         self._api_key = (api_key or "").strip() or None
         self._api_base_url = (api_base_url or "").strip() or None
+        self._timeout_seconds = timeout_seconds
         self._client = httpx.Client(
             timeout=timeout_seconds,
             follow_redirects=True,
@@ -132,6 +134,12 @@ class WebSearchTool:
 
     def _search(self, *, query: str, max_results: int) -> list[SearchHit]:
         backend = self._backend
+        if backend == "ddgs":
+            return _search_ddgs(
+                query=query,
+                max_results=max_results,
+                timeout_seconds=self._timeout_seconds,
+            )
         if backend == "duckduckgo":
             return _search_duckduckgo(self._client, query=query, max_results=max_results)
         if backend == "brave":
@@ -158,10 +166,29 @@ class WebSearchTool:
                 api_key=self._required_api_key("SERPAPI_API_KEY"),
                 api_base_url=self._api_base_url,
             )
+        if backend == "exa":
+            from harnesslab.tools.exa_search import search_exa
+
+            return search_exa(
+                self._client,
+                query=query,
+                max_results=max_results,
+                api_key=self._optional_api_key("EXA_API_KEY"),
+                api_base_url=self._api_base_url,
+            )
         raise ValueError(
             f"unknown web_search backend {self._backend!r} "
-            "(known: duckduckgo, brave, tavily, serpapi)"
+            "(known: ddgs, duckduckgo, brave, tavily, serpapi, exa)"
         )
+
+    def _optional_api_key(self, env_name: str) -> str | None:
+        if self._api_key:
+            return self._api_key
+        specific = (os.environ.get(env_name) or "").strip()
+        if specific:
+            return specific
+        generic = (os.environ.get("WEB_SEARCH_API_KEY") or "").strip()
+        return generic or None
 
     def _required_api_key(self, env_name: str) -> str:
         if self._api_key:
@@ -384,9 +411,41 @@ def _duckduckgo_blocked_message() -> str:
         "does not use your VPN proxy. Fixes: (1) add "
         "HTTPS_PROXY=http://127.0.0.1:<port> to ~/.config/harnesslab/env "
         "(match your Clash/Surge local port), restart ./hl-serve; (2) switch "
-        "tools.web_search.backend to tavily, brave, or serpapi with an API key "
-        "in the same env file."
+        "tools.web_search.backend to ddgs, exa, tavily, brave, or serpapi "
+        "(exa works without a key via hosted MCP; set EXA_API_KEY for quota)."
     )
+
+
+def _search_ddgs(*, query: str, max_results: int, timeout_seconds: float) -> list[SearchHit]:
+    """Search via the ``ddgs`` metasearch library (DeerFlow-style default)."""
+
+    try:
+        from ddgs import DDGS
+    except ImportError as exc:  # pragma: no cover
+        raise ValueError(
+            "web_search backend 'ddgs' requires the ddgs package (uv sync)"
+        ) from exc
+    proxy = (os.environ.get("HTTPS_PROXY") or os.environ.get("HTTP_PROXY") or "").strip() or None
+    try:
+        with DDGS(timeout=timeout_seconds, proxy=proxy) as ddgs:
+            rows = ddgs.text(query, max_results=max_results, backend="duckduckgo")
+    except Exception as exc:
+        raise ValueError(f"ddgs search failed: {exc}") from exc
+    hits: list[SearchHit] = []
+    if not isinstance(rows, list):
+        return hits
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        title = str(row.get("title", "")).strip()
+        url = str(row.get("href", row.get("url", ""))).strip()
+        body = row.get("body", row.get("snippet"))
+        snippet = str(body).strip() if isinstance(body, str) and body.strip() else None
+        if title and url:
+            hits.append(SearchHit(title=title, url=url, snippet=snippet))
+        if len(hits) >= max_results:
+            break
+    return hits
 
 
 def _search_duckduckgo(client: httpx.Client, *, query: str, max_results: int) -> list[SearchHit]:

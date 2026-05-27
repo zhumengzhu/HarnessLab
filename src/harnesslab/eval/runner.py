@@ -84,7 +84,7 @@ def _build_tool_registry(workspace: Path, limits: RuntimeLimits) -> ToolRegistry
     tools.register(GrepTool(workspace, limits=limits))
     tools.register(GlobTool(workspace, limits=limits))
     tools.register(FetchUrlTool(limits=limits))
-    tools.register(WebSearchTool(transport=_eval_web_search_transport()))
+    tools.register(WebSearchTool(backend="duckduckgo", transport=_eval_web_search_transport()))
     tools.register(HtmlToMarkdownTool(limits=limits))
     tools.register(RunShellSafeTool(workspace, limits=limits))
     return tools

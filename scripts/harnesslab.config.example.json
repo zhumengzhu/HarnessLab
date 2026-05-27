@@ -55,11 +55,13 @@
   "tools": {
     "fetch_url": {
       "mode": "auto",
+      "provider": "jina",
       "allowlist": ["wttr.in"],
-      "deny_hosts": ["localhost", "127.0.0.1"]
+      "deny_hosts": ["localhost", "127.0.0.1"],
+      "jina_api_key_env": "JINA_API_KEY"
     },
     "web_search": {
-      "backend": "duckduckgo",
+      "backend": "ddgs",
       "max_results": 5,
       "api_key_env": "WEB_SEARCH_API_KEY"
     },
