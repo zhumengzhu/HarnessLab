@@ -82,8 +82,10 @@ def test_returns_final_decision() -> None:
     assert meta["api_family"] == "openai_responses"
     assert meta["model_name"] == "gpt-5-mini"
     assert meta["request_tokens"] == 10
-    assert meta["response_tokens"] == 2
-    assert meta["reasoning_tokens"] == 1
+    assert meta["response_tokens"] == 3
+    assert meta["usage_breakdown"]["output"] == 2
+    assert meta["usage_breakdown"]["reasoning"] == 1
+    assert meta["cost_estimate"]["status"] == "estimated"
 
 
 def test_returns_tool_decision() -> None:

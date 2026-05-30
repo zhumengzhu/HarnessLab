@@ -1,0 +1,9 @@
+{
+  "model_id": "mimo-v2.5-pro",
+  "provider": "xiaomi",
+  "api_family": "openai_chat",
+  "context_window": 1048576,
+  "thinking_default": "dynamic",
+  "reasoning_support": "native",
+  "thinking_schema": "toggle"
+}

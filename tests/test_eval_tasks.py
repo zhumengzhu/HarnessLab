@@ -70,4 +70,5 @@ def test_shipped_tasks_cover_expected_paths() -> None:
         "spawn_sub_agent_roundtrip",
         "supervisor_research_then_write",
         "budget_cost_hard_stop",
+        "budget_cost_soft_threshold",
     } <= names

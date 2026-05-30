@@ -78,10 +78,9 @@ everything through Phase 4 **plus** most of Phase 5:
 - **Proposal review Web UI** with local pytest/eval gates
 - **TS Web UI default** when built — SSE step + token streaming, slash palette,
   `/compact`, `/skillname`, session restore, model persist
-- **Multi-agent PoC** — `spawn_sub_agent` + `start_child` (opt-in via config);
-  **production sub-agent** planned (Phase 6)
-- **Workspace skills** — `skills/*.md`, `/skillname`, composer palette;
-  **skill search/install** planned (Phase 7)
+- **Multi-agent (Phase 6)** — supervisor sub-sessions shipped; fleet orchestration not yet
+- **Skills catalog (Phase 7)** — `harnesslab skill list|search|install|remove`, bundled +
+  configurable catalog sources, Web skill browser with preview
 - **Sixteen eval tasks** + GitHub Actions offline gate (`--skip-tags network`)
 
 **Authoritative future work:** see [What's next](#whats-next-prioritized) below.
@@ -737,7 +736,7 @@ Steps 1–6. Nothing starts until its Entry criteria are objectively true.
 Phase 4 made the harness *trustworthy under daily use*. Phase 5 broadened
 tool reach and task shape (research, artifacts, plan mode, MCP, sandbox,
 budgets, proposal UX). Remaining Phase 5 polish is tracked in
-[What's next](#whats-next-prioritized) (primarily **5.10 cost budgets** and
+[What's next](#whats-next-prioritized) (primarily **Phase 7 skills** and
 a few Web UI gaps).
 
 ```mermaid
@@ -944,29 +943,32 @@ Same **Entry / Deliverables / Exit** bar as previous phases.
 - **Remaining:** Web UI rewind on session timeline with diff preview +
   explicit confirm (see What's next).
 
-### Phase 5.10 — Session token/cost budgets — **In progress**
+### Phase 5.10 — Session token/cost budgets — **Done**
 
 - **Entry**: `ContextSnapshot` and provider token metadata are already
   available from Phase 2.6 + provider expansion.
-- **Current implementation**:
+- **Shipped**:
   - Config + env-backed budget guardrails:
     - per-turn limits: `max_llm_calls_per_turn`,
       `max_tool_calls_per_turn`, `max_turn_wall_time_ms`
     - session limits: `max_session_tokens_total`,
-      `max_session_tool_calls_total`, `max_session_wall_time_ms_total`
+      `max_session_tool_calls_total`, `max_session_wall_time_ms_total`,
+      `max_session_cost_usd_total`
     - soft threshold ratio (`budget.soft_ratio`) and hard action
       (`ask_user|final|error`)
-  - Loop emits `budget_soft_threshold`,
-    `budget_hard_exceeded`, `budget_enforcement_action`.
-  - Session persists cumulative budget usage (llm/tool/tokens/time) in
-    state storage.
-  - Web session detail shows cumulative budget usage and budget event
-    timeline (`soft_threshold`, `hard_exceeded`, `enforcement_action`).
-- **Remaining work**:
-  - Add cost budgeting (`max_session_cost_usd_total`) with provider
-    price-table mapping.
-  - Add explicit budget surfaces in CLI session detail pages.
-  - Add eval tasks that pin deterministic soft/hard crossing behavior.
+  - Provider price table (`providers/pricing.py`) estimates USD per
+    model call from token counts for budget guardrails.
+  - Loop accumulates `cost_usd_total` after each model call and emits
+    `budget_soft_threshold`, `budget_hard_exceeded`,
+    `budget_enforcement_action`.
+  - Session persists cumulative budget usage (llm/tool/tokens/time/cost)
+    in state storage.
+  - CLI `harnesslab session show` surfaces `cost_usd`.
+  - Web UI: Advanced budget panel + Simple mode cost/status strip;
+    budget event timeline in trace.
+  - Eval tasks `budget_cost_hard_stop` and
+    `budget_cost_soft_threshold` pin deterministic crossings via
+    `ReplayModel` + `replay_call_meta`.
 
 **Phase 5 explicitly does NOT include**
 
@@ -988,8 +990,8 @@ Items are ordered by impact on daily use and learning clarity. Each should
 ship with tests + doc updates per `AGENTS.md`.
 
 **Priority note (2026-05):** Phase 6 sub-agent production and Phase 7 skills
-discovery/install are **elevated** — daily research workflows depend on them
-more than incremental provider polish.
+discovery/install are **complete**. Next: provider parity audits (P0) and
+Phase E legacy Web cleanup.
 
 ### P0 — Correctness & provider parity
 
@@ -1008,29 +1010,31 @@ more than incremental provider polish.
 
 | Item | Why | Notes |
 | --- | --- | --- |
-| **Supervisor loop hardening** | Safe, observable child runs | Trace fan-in; budget isolation |
+| **Supervisor loop hardening** | Safe, observable child runs | **Done** — `sub_agent_completed`; budget isolation per session |
 | **Web UI: child session panel** | spawn → child activity → result | **Done** — `ChildSessionsPanel` + Activity spawn |
-| **Streaming / LiveTurn for children** | Parent turn shows progress | Nested Thinking/Tool rows |
-| **Eval tasks for spawn** | Deterministic regression | `supervisor_research_then_write` |
-| **Depth & concurrency limits** | Prevent runaway trees | `max_sub_agent_depth`, caps |
-| **Operator enable path** | Discoverable toggle | Config + Web settings |
+| **Streaming / LiveTurn for children** | Parent turn shows progress | **Done** — nested `ChildAgentRunCard` via SSE fan-in |
+| **Eval tasks for spawn** | Deterministic regression | **Done** — `supervisor_research_then_write` + roundtrip |
+| **Depth & concurrency limits** | Prevent runaway trees | **Done** — `max_sub_agent_depth`, caps |
+| **CLI child visibility** | Operator inspection | **Done** — `session show --include-children` |
+| **Replay tree** | Independent child replay | **Done** — `replay --session-id … --include-children` |
+| **Operator enable path** | Discoverable toggle | **Done** — config + Web settings + [`docs/guides/multi-agent.md`](guides/multi-agent.md) |
 
 #### Phase 7 — Skills discovery & install
 
 | Item | Why | Notes |
 | --- | --- | --- |
-| **Skill catalog / search** | Find skills without manual copy | Local cache + optional remote index |
-| **`harnesslab skill search` / `install`** | CLI discovery + install | Git URL, catalog id, file path |
-| **Web UI skill browser** | Search, preview, install | Composer `/` unchanged after install |
-| **Global vs workspace scope** | Share across projects | `~/.config/harnesslab/skills/` |
-| **Trust model** | No autonomous installs | Operator explicit only |
+| **Skill catalog / search** | Find skills without manual copy | **Done** — bundled + local/HTTPS index |
+| **`harnesslab skill search` / `install`** | CLI discovery + install | **Done** — `--catalog-id`, file path, `remove` |
+| **Web UI skill browser** | Search, preview, install | **Done** — Settings panel + preview API |
+| **Global vs workspace scope** | Share across projects | **Done** — `~/.config/harnesslab/skills/` |
+| **Trust model** | No autonomous installs | **Done** — operator explicit only |
 
 ### P2 — Close Phase 5 & Web operator UX
 
 | Item | Why | Notes |
 | --- | --- | --- |
-| **5.10 cost budgets** | USD guardrails incomplete | Price table; `max_session_cost_usd_total` |
-| **5.10 eval tasks** | Pin budget crossings | YAML + `ReplayModel` |
+| **5.10 cost budgets** | USD guardrails | **Done** — price table; `max_session_cost_usd_total`; eval tasks |
+| **5.10 eval tasks** | Pin budget crossings | **Done** — hard + soft YAML + `ReplayModel` |
 | **5.9 Web UI rewind** | CLI only today | **Done** — Advanced trace column + diff modal |
 | **`research_summary` eval** | Phase 5.1 deliverable | **DONE** — `16_research_summary.yaml` |
 | **TS migration Phase D** | Advanced controls in TS only | MCP health **DONE**; rewind UI **DONE** |
@@ -1065,13 +1069,11 @@ more than incremental provider polish.
 
 ---
 
-## Post-MVP Phase 6 — Multi-agent exploration — **PoC shipped, orchestration incremental**
+## Post-MVP Phase 6 — Multi-agent supervisor — **Done (Phase 6.1)**
 
-> **Status:** `spawn_sub_agent` + `start_child` PoC is live (opt-in via
-> `loop.multi_agent`). Full fleet orchestration is **not approved** until
-> the product shape in
-> [`multi-agent-exploration.md`](architecture/multi-agent-exploration.md)
-> is accepted and AGENTS.md is updated in the same change.
+> **Status:** Opt-in `spawn_sub_agent` + child sessions shipped. Operator guide:
+> [`guides/multi-agent.md`](guides/multi-agent.md). Fleet / async orchestration
+> remains forbidden per `AGENTS.md`.
 
 Goals of the exploration:
 
@@ -1097,21 +1099,20 @@ Next steps are in [What's next — P1 Multi-agent & skills](#p1--multi-agent--sk
 See the full RFC for candidate product shapes, decision criteria, and the
 recommended supervisor PoC path.
 
-### Phase 6.1 — Sub-agent production (planned)
+### Phase 6.1 — Sub-agent production — **Done**
 
 - **Entry:** PoC tool + `parent_session_id` + opt-in config shipped; supervisor
   shape accepted in [`multi-agent-exploration.md`](architecture/multi-agent-exploration.md).
-- **Deliverables:**
-  - Documented operator enable (`loop.multi_agent` + Web settings).
-  - Child session visibility: `harnesslab session show --include-children`;
-    Web UI child panel / nested activity.
-  - Spawn limits enforced and traced (`max_sub_agent_depth`,
-    `max_sub_agents_per_session`).
-  - Deterministic eval task covering parent → child → parent result round-trip.
-  - Optional: LiveTurn rows when parent invokes `spawn_sub_agent`.
-- **Exit:** daily-use supervisor workflow on one research task; child traces
-  replay independently; AGENTS.md updated to list sub-agent under "Must include"
-  (fleet orchestration still forbidden).
+- **Shipped:**
+  - Operator enable (`loop.multi_agent` + Web settings + guide).
+  - Child visibility: `session show|replay --include-children`; Web child panel
+    + nested LiveTurn activity.
+  - Spawn limits (`max_sub_agent_depth`, `max_sub_agents_per_session`).
+  - Eval tasks `spawn_sub_agent_roundtrip`, `supervisor_research_then_write`.
+  - Trace fan-in: `sub_agent_spawned` / `sub_agent_completed`; per-session budgets.
+  - `AGENTS.md` updated (Must include / Must NOT).
+- **Exit criteria met:** deterministic eval green; independent child replay;
+  documented daily-use supervisor path.
 
 ### Phase 6 explicitly does NOT include
 
@@ -1121,7 +1122,7 @@ recommended supervisor PoC path.
 
 ---
 
-## Post-MVP Phase 7 — Skills discovery & install (planned)
+## Post-MVP Phase 7 — Skills discovery & install (Done)
 
 Phase 5.2 shipped **workspace skills** as markdown files the composer can pin
 and inject. Phase 7 adds **discovery and installation** so operators can find
@@ -1141,16 +1142,16 @@ flowchart LR
 - **Deliverables:**
   - Skill metadata schema (YAML front-matter: `name`, `description`, `tags`,
     optional `source` URL) on each `*.md`.
-  - Configurable **catalog sources** in `config.json` (local paths + HTTPS
-    index URLs); offline-first with cached index.
-  - CLI: `harnesslab skill list|search|install|remove`.
-  - Web UI: skill browser (search, markdown preview, install button).
+  - Configurable **catalog sources** in `config.json` (`bundled`, local paths,
+    HTTPS index URLs); offline-first with cached index.
+  - CLI: `harnesslab skill list|search|install|remove` (+ `--catalog-id`).
+  - Web UI: skill browser (search, markdown preview, catalog install).
   - Install targets: `<workspace>/skills/` and optional
     `~/.config/harnesslab/skills/` (workspace wins on name conflict).
-  - Trust: installs require explicit operator action; trace event
-    `skill_installed` (optional) for audit.
-- **Exit:** install from a documented sample catalog; installed skill appears
-  in `/` palette; eval/replay unchanged; architecture doc for skill runtime.
+  - Trust: installs require explicit operator action; optional
+    `skill_installed` payload helper for audit.
+- **Exit:** install from bundled sample catalog; installed skill appears in
+  `/` palette; eval/replay unchanged; [`docs/guides/skills.md`](guides/skills.md).
 
 **Phase 7 explicitly does NOT include:** Curated public marketplace UI,
 auto-install from model tool calls, or skills that execute code outside the

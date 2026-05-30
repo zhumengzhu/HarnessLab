@@ -200,9 +200,11 @@ shapes are what `harnesslab metrics` aggregates.
 | `user_input_received` | `turn_index: int`, `user_input: str` |
 | `user_steer_received` | `turn_index: int`, `step_index: int`, `user_input: str`, `steer_index: int` |
 | `sub_agent_spawned` | `child_session_id: str`, `parent_session_id: str`, `goal: str`, `max_steps: int` |
+| `sub_agent_completed` | `child_session_id: str`, `parent_session_id: str`, `goal: str`, `step_count: int`, `status: str`, `final_response_preview: str`, `budget_usage: object` |
+| `skill_installed` | optional audit payload: `name: str`, `scope: str` (`workspace` \| `user`), `source: str` (catalog id, path, or URL) — emitted only on explicit operator install, not model tool calls |
 | `step_started` | `step_index: int`, `reason: "initial" \| "after_<prev_outcome>"` |
 | `model_call_started` | `step_index`, optional `thinking_likely: bool` |
-| `model_call` | `decision_kind`, `latency_ms`, `context: ContextSnapshot`, optional: `model_name`, `provider`, `request_tokens`, `response_tokens`, `total_tokens`, `reasoning_text`, `prompt_blocks[]`, `api_messages[]` |
+| `model_call` | `decision_kind`, `latency_ms`, `context: ContextSnapshot`, optional: `model_name`, `provider`, `request_tokens`, `response_tokens`, `total_tokens`, `usage_breakdown`, `cost_estimate`, `reasoning_text`, `prompt_blocks[]`, `api_messages[]` |
 | `decision_made` | `kind: "assistant" \| "plan" \| "tool" \| "final" \| "ask_user"`, `tool_name: str \| null`, `tool_args: dict`, `assistant_message: str \| null`, optional `reasoning_text` |
 | `plan_emitted` | `plan: str` |
 | `tool_invalid_args` | `tool_call_id`, `tool`, `args`, `error` |

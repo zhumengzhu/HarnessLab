@@ -16,7 +16,12 @@ export type SkillRecord = {
   description: string;
   tags: string[];
   scope: string;
-  path: string;
+  path: string | null;
+  catalog_id?: string | null;
+};
+
+export type SkillPreviewResponse = {
+  markdown: string;
 };
 
 export type SkillsResponse = {
@@ -181,6 +186,8 @@ export type TraceEventItem = {
   event_type: string;
   payload: Record<string, unknown>;
   created_at: string;
+  /** Present on SSE fan-in when the event belongs to a spawned child session. */
+  child_session_id?: string;
 };
 
 export type TraceResponse = {

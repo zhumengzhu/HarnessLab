@@ -10,19 +10,39 @@ turns recorded by the new agentic loop round-trip correctly.
 
 from __future__ import annotations
 
+import json
 import tempfile
 from dataclasses import replace
 from pathlib import Path
 
 from harnesslab.core.config import RuntimeLimits
 from harnesslab.core.loop import HarnessLoop
-from harnesslab.core.models import Decision, TraceEvent
+from harnesslab.core.models import Decision, ToolCall, ToolResult, TraceEvent
 from harnesslab.core.replay import ReplayModel, ReplayTraceRecorder
 from harnesslab.core.runtime import DEFAULT_REPLAY_CLOCK_START, FrozenClock, SeqIdProvider
 from harnesslab.eval.runner import _build_tool_registry
 from harnesslab.memory.in_memory import InMemoryMemoryStore
 from harnesslab.policy.default_policy import DefaultPolicy
+from harnesslab.replay.trace_reader import group_by_session
 from harnesslab.session.in_memory import InMemorySessionStore
+
+
+class ReplaySpawnSubAgentTool:
+    """Replay stub: return recorded spawn output without nesting a live child."""
+
+    name = "spawn_sub_agent"
+    description = "Replay stub for spawn_sub_agent"
+    args_schema: dict = {
+        "type": "object",
+        "properties": {"goal": {"type": "string"}},
+        "required": ["goal"],
+    }
+
+    def __init__(self, output: str) -> None:
+        self._output = output
+
+    def execute(self, _call: ToolCall) -> ToolResult:
+        return ToolResult(ok=True, output=self._output)
 
 
 class UnreplayableTraceError(Exception):
@@ -49,7 +69,8 @@ def replay_session(
         )
 
     segments = _session_segments(events)
-    return _drive_loop(segments, workspace_root, events)
+    replayed = _drive_loop(segments, workspace_root, events)
+    return _align_replayed_sessions(segments, replayed)
 
 
 def _extract_turns(events: list[TraceEvent]) -> list[TurnPlan]:
@@ -144,6 +165,69 @@ def _decision_from_payload(payload: dict, index: int) -> Decision:
         ) from exc
 
 
+def _segment_goal_and_parent(segment: list[TraceEvent]) -> tuple[str, str | None]:
+    payload = segment[0].payload if segment else {}
+    goal = str(payload.get("goal", ""))
+    parent_id = payload.get("parent_session_id")
+    return goal, str(parent_id) if isinstance(parent_id, str) and parent_id else None
+
+
+def _segment_has_spawn_stub(segment: list[TraceEvent]) -> bool:
+    return any(event.event_type == "sub_agent_spawned" for event in segment)
+
+
+def _spawn_tool_output_from_segment(segment: list[TraceEvent]) -> str:
+    for event in segment:
+        if (
+            event.event_type == "tool_executed"
+            and event.payload.get("tool") == "spawn_sub_agent"
+        ):
+            preview = event.payload.get("output_preview")
+            if isinstance(preview, str) and preview.strip():
+                return preview
+    for event in segment:
+        if event.event_type != "sub_agent_completed":
+            continue
+        payload = event.payload
+        child_id = payload.get("child_session_id")
+        parent_id = payload.get("parent_session_id")
+        if not isinstance(child_id, str) or not isinstance(parent_id, str):
+            continue
+        final = payload.get("final_response_preview", "")
+        return json.dumps(
+            {
+                "child_session_id": child_id,
+                "parent_session_id": parent_id,
+                "final_response": final,
+            },
+            ensure_ascii=False,
+        )
+    return "{}"
+
+
+def _align_replayed_sessions(
+    segments: list[list[TraceEvent]],
+    replayed: list[TraceEvent],
+) -> list[TraceEvent]:
+    """Remap replayed session ids back to the original trace ids."""
+
+    grouped = group_by_session(replayed)
+    replay_sids = list(grouped.keys())
+    aligned: list[TraceEvent] = []
+    for idx, segment in enumerate(segments):
+        if idx >= len(replay_sids) or not segment:
+            continue
+        original_sid = segment[0].session_id
+        original_run_id = segment[0].run_id
+        for event in grouped[replay_sids[idx]]:
+            aligned.append(
+                event.model_copy(
+                    update={"session_id": original_sid, "run_id": original_run_id}
+                )
+            )
+    return aligned
+
+
 def _limits_from_events(events: list[TraceEvent]) -> RuntimeLimits:
     """Restore compaction knobs recorded in ``compaction_started`` events."""
 
@@ -192,20 +276,21 @@ def _run(
     limits = _limits_from_events(source_events)
     tools = _build_tool_registry(workspace, limits)
     shell_profile = _shell_profile_from_segments(segments)
+    enable_spawn = any(_segment_has_spawn_stub(segment) for segment in segments)
 
-    session_plans: list[tuple[str, list[TurnPlan]]] = []
+    session_plans: list[tuple[list[TraceEvent], str, str | None, list[TurnPlan]]] = []
     for segment in segments:
-        goal = segment[0].payload.get("goal", "") if segment else ""
-        session_plans.append((str(goal), _extract_turns(segment)))
-
-    flat_decisions: list[Decision] = [
-        d for _, turns in session_plans for _, ds in turns for d in ds
-    ]
+        goal, parent_id = _segment_goal_and_parent(segment)
+        session_plans.append((segment, goal, parent_id, _extract_turns(segment)))
 
     recorder = ReplayTraceRecorder()
     loop = HarnessLoop(
-        model=ReplayModel(decisions=flat_decisions),
-        policy=DefaultPolicy(workspace_root=workspace, shell_profile=shell_profile),
+        model=ReplayModel(decisions=[]),
+        policy=DefaultPolicy(
+            workspace_root=workspace,
+            shell_profile=shell_profile,
+            enable_spawn_sub_agent=enable_spawn,
+        ),
         sessions=InMemorySessionStore(),
         tools=tools,
         trace=recorder,
@@ -216,8 +301,17 @@ def _run(
         workspace_root=workspace,
     )
 
-    for goal, turns in session_plans:
-        session = loop.start(goal=goal)
+    for segment, goal, parent_id, turns in session_plans:
+        segment_decisions = [d for _, ds in turns for d in ds]
+        loop._model = ReplayModel(decisions=segment_decisions)  # noqa: SLF001
+        if _segment_has_spawn_stub(segment):
+            tools.register(
+                ReplaySpawnSubAgentTool(_spawn_tool_output_from_segment(segment))
+            )
+        if parent_id:
+            session = loop.start_child(goal=goal, parent_session_id=parent_id)
+        else:
+            session = loop.start(goal=goal)
         for user_input, decisions in turns:
             max_steps = max(1, len(decisions))
             loop.run_session(session.id, user_input, max_steps=max_steps)

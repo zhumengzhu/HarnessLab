@@ -66,7 +66,8 @@
       "api_key_env": "WEB_SEARCH_API_KEY"
     },
     "skills": {
-      "selection_mode": "heuristic"
+      "selection_mode": "heuristic",
+      "catalog_sources": ["bundled"]
     },
     "hooks": {
       "pre_tool": [

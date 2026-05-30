@@ -13,12 +13,17 @@ from harnesslab.replay.divergence import (
     detect_divergence,
 )
 from harnesslab.replay.replayer import UnreplayableTraceError, replay_session
-from harnesslab.replay.trace_reader import group_by_session, read_trace
+from harnesslab.replay.trace_reader import (
+    child_session_ids_for_parent,
+    group_by_session,
+    read_trace,
+)
 
 __all__ = [
     "Divergence",
     "DivergenceReport",
     "UnreplayableTraceError",
+    "child_session_ids_for_parent",
     "detect_divergence",
     "group_by_session",
     "read_trace",

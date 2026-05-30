@@ -59,6 +59,34 @@ describe("liveTurnReducer", () => {
     expect(turn.tools[0].tool).toBe("read_file");
   });
 
+  it("tracks child agent progress from spawned SSE events", () => {
+    let turn = createLiveTurn("delegate");
+    turn = reduceLiveTurn(
+      turn,
+      traceEvt("sub_agent_spawned", {
+        child_session_id: "ses_child",
+        goal: "research topic",
+        max_steps: 2,
+      })
+    )!;
+    expect(turn.childRuns).toHaveLength(1);
+    expect(turn.childRuns[0].goal).toBe("research topic");
+
+    turn = reduceLiveTurn(
+      turn,
+      {
+        ...traceEvt("tool_executed", {
+          tool: "read_file",
+          ok: true,
+          output_preview: "notes",
+        }),
+        child_session_id: "ses_child",
+      }
+    )!;
+    expect(turn.childRuns[0].tools).toHaveLength(1);
+    expect(turn.childRuns[0].tools[0].tool).toBe("read_file");
+  });
+
   it("sets assistant text on final decision without duplicating model reasoning", () => {
     let turn = createLiveTurn("question");
     turn = reduceLiveTurn(

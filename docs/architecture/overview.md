@@ -146,7 +146,7 @@ The single-turn `run_turn(session_id, user_input)` is a
 `run_session(..., max_steps=1)` wrapper kept for backward
 compatibility.
 
-### Budget guardrails (Phase 5.10, in progress)
+### Budget guardrails (Phase 5.10)
 
 Budget control is separate from context compaction:
 
@@ -156,10 +156,15 @@ Budget control is separate from context compaction:
 Current budget dimensions:
 
 - Per-turn: LLM call count, tool call count, wall-time (ms)
-- Per-session: token total, tool call total, wall-time (ms)
+- Per-session: token total, tool call total, wall-time (ms), estimated
+  cost (USD via [`providers/pricing`](architecture/pricing.md) catalog)
 
 Behavior:
 
+- After each model call the loop accumulates token totals and estimated
+  USD cost (canonical `usage_breakdown` + `estimate_call_cost`) into
+  `session.budget_usage`. Trace `model_call` payloads include
+  `usage_breakdown` and `cost_estimate` when adapters supply them.
 - Soft threshold (`budget.soft_ratio`) emits `budget_soft_threshold` and continues.
 - Hard threshold emits `budget_hard_exceeded`, then applies
   `budget.action_on_hard` (`ask_user`, `final`, or `error`).
@@ -620,6 +625,20 @@ The selection is controlled with explicit slash commands:
 | ``/skill add <name>`` (or ``/skill <name>``) | Pin a skill for current session |
 | ``/skill remove <name>`` | Unpin a previously selected skill |
 | ``/skill clear`` | Clear all pinned skills for current session |
+
+### Skills catalog (Phase 7)
+
+Discovery and install are **operator-initiated** (no model auto-install):
+
+- **Bundled index** (`bundled` catalog source): sample skills shipped with HarnessLab.
+- **Configurable sources**: ``tools.skills.catalog_sources`` — local JSON index paths
+  and HTTPS URLs (cached under ``~/.config/harnesslab/catalog-cache/``).
+- **CLI**: ``harnesslab skill list|search|install|remove``; ``install --catalog-id``.
+- **Web UI**: Settings → Skills — search, markdown preview, catalog install.
+- **Install targets**: ``<workspace>/skills/`` or ``~/.config/harnesslab/skills/``
+  (workspace wins on name conflict).
+
+See [`docs/guides/skills.md`](../guides/skills.md).
 
 ```mermaid
 flowchart LR

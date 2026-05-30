@@ -70,6 +70,21 @@ export function SessionWorkspace(props: SessionWorkspaceProps) {
 
       {showChat ? (
         <>
+          {uiMode === "simple" && sessionDetailData?.session.budget_usage ? (
+            <div className="budget-summary-simple" aria-live="polite">
+              <span>
+                费用 ${sessionDetailData.session.budget_usage.cost_usd_total.toFixed(4)} USD
+              </span>
+              <span className={`budget-status budget-status-${sessionDetailData.session.budget_usage.last_budget_status}`}>
+                {sessionDetailData.session.budget_usage.last_budget_status === "ok"
+                  ? "预算正常"
+                  : sessionDetailData.session.budget_usage.last_budget_status === "soft_exceeded"
+                    ? "接近预算上限"
+                    : "已超出预算"}
+              </span>
+            </div>
+          ) : null}
+
           {uiMode === "advanced" && sessionDetailData ? (
             <details className="diag-block">
               <summary>Session metadata</summary>

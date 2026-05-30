@@ -21,6 +21,7 @@ from harnesslab.providers.model_resolve import (
 )
 from harnesslab.providers.transforms.openai_responses import parse_response, serialize_request
 from harnesslab.providers.transports.openai_responses import OpenAIResponsesTransport
+from harnesslab.providers.usage_meta import usage_meta_from_response
 from harnesslab.telemetry.log import get_logger
 
 DEFAULT_TIMEOUT_SECONDS = 30.0
@@ -127,7 +128,12 @@ class OpenAIResponsesModel:
 
         self._last_call_meta = {
             **base_meta,
-            **_usage_meta(payload.get("usage")),
+            **usage_meta_from_response(
+                payload.get("usage"),
+                provider="openai",
+                api_mode="openai_responses",
+                model_name=self._model_name,
+            ),
         }
         try:
             entry = self._catalog.get(self._model_name)
@@ -215,26 +221,4 @@ def _responses_tools_from_openai(specs: list[dict[str, Any]]) -> list[dict[str, 
                 "strict": False,
             }
         )
-    return out
-
-
-def _usage_meta(raw_usage: Any) -> dict[str, int]:
-    if not isinstance(raw_usage, dict):
-        return {}
-    out: dict[str, int] = {}
-    for src, dst in (
-        ("input_tokens", "request_tokens"),
-        ("output_tokens", "response_tokens"),
-        ("total_tokens", "total_tokens"),
-    ):
-        value = raw_usage.get(src)
-        if isinstance(value, int):
-            out[dst] = value
-    details = raw_usage.get("output_tokens_details")
-    if isinstance(details, dict):
-        reasoning = details.get("reasoning_tokens")
-        if isinstance(reasoning, int):
-            out["reasoning_tokens"] = reasoning
-    if "total_tokens" not in out and "request_tokens" in out and "response_tokens" in out:
-        out["total_tokens"] = out["request_tokens"] + out["response_tokens"]
     return out

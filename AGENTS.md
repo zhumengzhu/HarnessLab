@@ -19,21 +19,24 @@ provider expansion (P0–P7: catalog, transforms, DeepSeek / Anthropic /
 OpenAI / Gemini adapters, optional failover, optional OTel fan-out) are
 **complete**. The runtime is a daily-usable local agent harness.
 
-**Next planned phase:** Phase 5 — Research-capable harness is **substantially complete**
-(web tools, artifact store, plan mode, MCP adapter, Python sandbox, OTel metrics,
-proposal Web UI, checkpoint/rewind, cost budgets, TS Web UI default). See
-[`docs/roadmap.md`](docs/roadmap.md) Phase 5.
+**Next planned phase:** Phase 6 — Multi-agent supervisor is **complete**
+(opt-in `spawn_sub_agent`, child sessions, trace fan-in, Web UI, CLI/replay
+tree). Phase 7 — Skills discovery/install is next. See [`docs/roadmap.md`](docs/roadmap.md).
 
-**Multi-agent (Phase 6):** supervisor PoC shipped (`spawn_sub_agent` tool,
-`start_child`, deterministic eval path). Full orchestration remains
-incremental; see [`docs/architecture/multi-agent-exploration.md`](docs/architecture/multi-agent-exploration.md).
+**Multi-agent (Phase 6):** opt-in supervisor pattern via `spawn_sub_agent` +
+`start_child`; `sub_agent_spawned` / `sub_agent_completed` trace fan-in;
+`session show|replay --include-children`; nested LiveTurn child rows;
+per-session budget isolation. Operator guide:
+[`docs/guides/multi-agent.md`](docs/guides/multi-agent.md). Fleet / async
+orchestration remains out of scope.
 
 Must include (current):
 
 - Single-process runtime
 - Multi-step agent loop (`run_session` with `max_steps`; terminal decisions
   `final` / `ask_user`)
-- Policy-gated tool execution (eleven built-in tools; named shell profiles
+- Policy-gated tool execution (built-in tools including optional
+  `spawn_sub_agent` when `loop.multi_agent.enabled`; named shell profiles
   `dev` / `read_only` / `strict`; ``fetch_url`` strict/open profile modes;
   web research tools: ``web_search``, ``html_to_markdown``, ``read_pdf``)
 - Modular prompt composition (`PromptComposer` + static/dynamic blocks)
@@ -45,6 +48,11 @@ Must include (current):
   SSE step + token streaming, slash command palette, settings panel, tool cards
 - Optional LLM session auto-titles after first turn (DeepSeek only)
 - Operator config (`~/.config/harnesslab/config.json`) + provider registry
+- Supervisor sub-sessions (Phase 6): `spawn_sub_agent` tool, `parent_session_id`,
+  depth/per-session spawn caps, child trace fan-in, CLI/Web child visibility,
+  `replay --include-children`
+- Skills discovery/install (Phase 7): bundled + HTTPS/local catalog indexes,
+  `harnesslab skill` CLI, Web skill browser (search, preview, install)
 - Trace recording, eval/replay/propose CLI, unit + contract tests
 - DeepSeek provider (`deepseek-v4-flash` / `deepseek-v4-pro`) behind
   `ModelPort` for `harnesslab run --model deepseek`
@@ -52,9 +60,10 @@ Must include (current):
 Must NOT include yet:
 
 - Full multi-agent fleet orchestration / distributed scheduling
+- Asynchronous / background sub-agents without operator-visible trace
 - Vector embedding RAG with auto-write (FTS5 semantic search PoC only)
 - Distributed runtime
-- Plugin marketplace complexity
+- Plugin marketplace complexity / model-initiated skill install
 - Uncontrolled self-modifying pipelines
 - Official OpenAI/Anthropic SDK adapters (MVP uses `httpx`; migrate in
   post-MVP provider expansion)
@@ -130,6 +139,10 @@ If a contract changes, update docs and tests in the same change.
 - Keep tool output normalized (`ok`, `output`, optional `error`).
 - The shell allowlist is not a sandbox against arbitrary code execution via
   `python` / `pytest` / `uv run` — workspace path checks remain primary.
+- Sub-agent spawns are bounded by `RuntimeLimits.max_sub_agent_depth` and
+  `max_sub_agents_per_session`; children are child `Session` rows (never a
+  new Port). `spawn_sub_agent` is policy-gated and off unless
+  `loop.multi_agent.enabled`.
 
 Never bypass policy checks for convenience.
 

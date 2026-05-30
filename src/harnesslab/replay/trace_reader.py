@@ -39,3 +39,29 @@ def group_by_session(events: list[TraceEvent]) -> dict[str, list[TraceEvent]]:
     for event in events:
         grouped.setdefault(event.session_id, []).append(event)
     return grouped
+
+
+def child_session_ids_for_parent(
+    events: list[TraceEvent],
+    parent_session_id: str,
+) -> list[str]:
+    """Return child session ids linked to ``parent_session_id``.
+
+    Order follows first appearance in ``events`` (``sub_agent_spawned`` on
+    the parent, or ``session_started`` with ``parent_session_id``).
+    """
+
+    ordered: OrderedDict[str, None] = OrderedDict()
+    for event in events:
+        if (
+            event.event_type == "sub_agent_spawned"
+            and event.session_id == parent_session_id
+        ):
+            child_id = event.payload.get("child_session_id")
+            if isinstance(child_id, str) and child_id:
+                ordered.setdefault(child_id, None)
+        if event.event_type == "session_started":
+            parent_id = event.payload.get("parent_session_id")
+            if parent_id == parent_session_id:
+                ordered.setdefault(event.session_id, None)
+    return list(ordered.keys())

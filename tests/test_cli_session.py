@@ -64,6 +64,31 @@ def test_in_memory_store_list_respects_limit() -> None:
     assert len(store.list(limit=1)) == 1
 
 
+def test_in_memory_store_list_filters_by_parent() -> None:
+    store = InMemorySessionStore()
+    parent = Session(
+        id="ses_parent",
+        goal="parent",
+        created_at=datetime(2026, 5, 23, 10, 0, tzinfo=UTC),
+    )
+    child = Session(
+        id="ses_child",
+        goal="child",
+        parent_session_id="ses_parent",
+        created_at=datetime(2026, 5, 23, 11, 0, tzinfo=UTC),
+    )
+    other = Session(
+        id="ses_other",
+        goal="other",
+        created_at=datetime(2026, 5, 23, 12, 0, tzinfo=UTC),
+    )
+    store.create(parent)
+    store.create(child)
+    store.create(other)
+    rows = store.list(parent_session_id="ses_parent")
+    assert [s.id for s in rows] == ["ses_child"]
+
+
 def test_sqlite_store_list_newest_first(tmp_path: Path) -> None:
     store = SqliteSessionStore(tmp_path / "s.sqlite")
     older, newer = _seed(store)
@@ -147,6 +172,7 @@ def test_session_ls_prints_table_with_seeded_row(
     assert "ID" in out
     assert "TOKENS" in out
     assert "BUDGET" in out
+    assert "PARENT" in out
     assert sess_id in out
     assert "done" in out
     assert "cli probe" in out
@@ -197,6 +223,61 @@ def test_session_show_prints_metadata_and_messages(
     assert "tokens:   210" in out
     assert "user: hello there" in out
     assert "assistant: hi back" in out
+
+
+def test_session_show_include_children_lists_child_sessions(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    (tmp_path / ".harnesslab").mkdir(parents=True, exist_ok=True)
+    store = SqliteSessionStore(tmp_path / ".harnesslab" / "state.sqlite")
+    parent = Session(
+        id="ses_parent",
+        goal="supervisor",
+        status="done",
+        turn_count=1,
+        step_count=2,
+        created_at=datetime(2026, 5, 23, 12, 0, tzinfo=UTC),
+        title="supervisor",
+    )
+    child = Session(
+        id="ses_child",
+        goal="research child",
+        status="done",
+        turn_count=1,
+        step_count=3,
+        parent_session_id=parent.id,
+        created_at=datetime(2026, 5, 23, 12, 5, tzinfo=UTC),
+        title="research child",
+    )
+    child.budget_usage.tokens_total = 420
+    child.budget_usage.cost_usd_total = 0.001
+    store.create(parent)
+    store.create(child)
+    store.close()
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "harnesslab",
+            "session",
+            "--workspace-root",
+            str(tmp_path),
+            "show",
+            parent.id,
+            "--include-children",
+            "--no-messages",
+        ],
+    )
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    assert exc.value.code == cli.EXIT_OK
+    out = capsys.readouterr().out
+    assert "Children (1):" in out
+    assert child.id in out
+    assert "research child" in out
+    assert "tokens=420" in out
 
 
 def test_session_show_no_messages_flag_omits_transcript(

@@ -93,8 +93,13 @@ def detect_divergence(
     replayed: list[TraceEvent],
     *,
     strict: bool = False,
+    ignore_event_types: frozenset[str] = frozenset(),
 ) -> DivergenceReport:
     """Return a DivergenceReport comparing the two event sequences."""
+
+    if ignore_event_types:
+        original = [e for e in original if e.event_type not in ignore_event_types]
+        replayed = [e for e in replayed if e.event_type not in ignore_event_types]
 
     if strict:
         norm_orig = [_to_jsonable(e) for e in original]

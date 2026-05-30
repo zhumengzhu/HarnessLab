@@ -103,6 +103,25 @@ class SpawnSubAgentTool:
             },
         )
         final = loop.run_session(child.id, goal, max_steps=max_steps)
+        child_session = loop._sessions.get(child.id)  # noqa: SLF001
+        loop._record(  # noqa: SLF001 — parent trace fan-in when child finishes
+            session=loop._sessions.get(parent_id),
+            event_type="sub_agent_completed",
+            payload={
+                "child_session_id": child.id,
+                "parent_session_id": parent_id,
+                "goal": goal,
+                "step_count": child_session.step_count,
+                "status": child_session.status,
+                "final_response_preview": final[:240],
+                "budget_usage": {
+                    "llm_calls_total": child_session.budget_usage.llm_calls_total,
+                    "tool_calls_total": child_session.budget_usage.tool_calls_total,
+                    "tokens_total": child_session.budget_usage.tokens_total,
+                    "cost_usd_total": child_session.budget_usage.cost_usd_total,
+                },
+            },
+        )
         payload = {
             "child_session_id": child.id,
             "parent_session_id": parent_id,

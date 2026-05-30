@@ -21,6 +21,7 @@ from harnesslab.memory.in_memory import InMemoryMemoryStore
 from harnesslab.policy.default_policy import DefaultPolicy
 from harnesslab.replay import (
     UnreplayableTraceError,
+    child_session_ids_for_parent,
     detect_divergence,
     group_by_session,
     read_trace,
@@ -99,6 +100,33 @@ def test_group_by_session_preserves_order(tmp_path: Path) -> None:
     grouped = group_by_session(events)
     assert list(grouped.keys()) == ["s1", "s2"]
     assert [e.event_type for e in grouped["s1"]] == ["a", "b"]
+
+
+def test_child_session_ids_for_parent_follows_trace_order() -> None:
+    parent_id = "ses_parent"
+    child_a = "ses_child_a"
+    child_b = "ses_child_b"
+    events = [
+        TraceEvent(
+            run_id=parent_id,
+            session_id=parent_id,
+            event_type="sub_agent_spawned",
+            payload={"child_session_id": child_b, "parent_session_id": parent_id},
+        ),
+        TraceEvent(
+            run_id=child_a,
+            session_id=child_a,
+            event_type="session_started",
+            payload={"goal": "a", "parent_session_id": parent_id},
+        ),
+        TraceEvent(
+            run_id=parent_id,
+            session_id=parent_id,
+            event_type="sub_agent_spawned",
+            payload={"child_session_id": child_a, "parent_session_id": parent_id},
+        ),
+    ]
+    assert child_session_ids_for_parent(events, parent_id) == [child_b, child_a]
 
 
 # ---------- replayer happy path against real eval traces ----------

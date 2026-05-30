@@ -1,6 +1,7 @@
-# Multi-Agent Exploration (Phase 6 RFC)
+# Multi-Agent Exploration (Phase 6)
 
-**Status:** Design / discussion. **Not approved for implementation.**
+**Status:** **Shipped (Phase 6.1).** Supervisor + bounded child sessions is the
+accepted product shape. Async / background fleets remain out of scope.
 
 This RFC frames how HarnessLab might eventually support multi-agent
 work without losing the single-process, single-trace, replayable

@@ -35,8 +35,10 @@ class SessionStorePort(Protocol):
         *,
         limit: int = 50,
         status: str | None = None,
+        parent_session_id: str | None = None,
     ) -> list[Session]:
-        """Return sessions newest-first, optionally filtered by ``status``.
+        """Return sessions newest-first, optionally filtered by ``status``
+        or ``parent_session_id``.
 
         Backends MAY load each row's messages eagerly or lazily; callers
         should not depend on messages being populated in list results.

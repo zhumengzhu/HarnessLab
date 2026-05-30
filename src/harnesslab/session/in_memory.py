@@ -21,6 +21,7 @@ class InMemorySessionStore:
         *,
         limit: int = 50,
         status: str | None = None,
+        parent_session_id: str | None = None,
     ) -> list[Session]:
         sessions = sorted(
             self._data.values(),
@@ -29,6 +30,10 @@ class InMemorySessionStore:
         )
         if status is not None:
             sessions = [s for s in sessions if s.status == status]
+        if parent_session_id is not None:
+            sessions = [
+                s for s in sessions if s.parent_session_id == parent_session_id
+            ]
         return sessions[:limit]
 
     def message_counts(self, session_ids: list[str]) -> dict[str, int]:

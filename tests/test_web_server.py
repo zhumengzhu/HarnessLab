@@ -194,6 +194,12 @@ def test_web_api_create_session_and_list(tmp_path: Path) -> None:
     )
     assert continued["session"]["turn_count"] >= 1
 
+    usage = _get(f"{base}/api/usage?range=all")
+    assert usage["totals"]["llm_calls"] >= 1
+    assert isinstance(usage["daily"], list)
+    assert isinstance(usage["by_model"], list)
+    assert isinstance(usage["sessions"], list)
+
 
 def test_web_sessions_list_pins_include_id(tmp_path: Path) -> None:
     port = _free_port()
@@ -211,6 +217,21 @@ def test_web_sessions_list_pins_include_id(tmp_path: Path) -> None:
 
     pinned = _get(f"{base}/api/sessions?limit=1&include_id={older_id}")
     assert [s["id"] for s in pinned["sessions"]] == [older_id]
+
+
+def test_web_usage_api(tmp_path: Path) -> None:
+    port = _free_port()
+    runtime = _web_runtime(tmp_path)
+    _start_server(runtime, port)
+    base = f"http://127.0.0.1:{port}"
+
+    _post(f"{base}/api/sessions", {"message": "hello usage"})
+    usage = _get(f"{base}/api/usage?range=all")
+    assert usage["range"] == "all"
+    assert usage["totals"]["llm_calls"] >= 1
+    assert isinstance(usage["daily"], list)
+    assert isinstance(usage["by_model"], list)
+    assert isinstance(usage["sessions"], list)
 
 
 def test_web_sessions_list_reports_persisted_message_count(tmp_path: Path) -> None:
@@ -456,6 +477,33 @@ def test_web_trace_endpoint(tmp_path: Path) -> None:
     trace = _get(f"{base}/api/sessions/{session_id}/trace")
     assert trace["session_id"] == session_id
     assert any(e["event_type"] == "decision_made" for e in trace["events"])
+
+
+def test_web_trace_jsonl_endpoint(tmp_path: Path) -> None:
+    port = _free_port()
+    runtime = _web_runtime(tmp_path, max_steps=1)
+    _start_server(runtime, port)
+    base = f"http://127.0.0.1:{port}"
+
+    created = _post(f"{base}/api/sessions", {"message": "jsonl probe"})
+    session_id = created["session"]["id"]
+    payload = _get(f"{base}/api/sessions/{session_id}/trace/jsonl")
+    assert payload["session_id"] == session_id
+    assert payload["line_count"] >= 1
+    assert payload["jsonl"].strip()
+    first = json.loads(payload["jsonl"].strip().split("\n")[0])
+    assert first["session_id"] == session_id
+    assert first["event_type"]
+
+
+def test_web_health_includes_pricing_fingerprint(tmp_path: Path) -> None:
+    port = _free_port()
+    runtime = _web_runtime(tmp_path)
+    _start_server(runtime, port)
+    health = _get(f"http://127.0.0.1:{port}/api/health")
+    assert health["ok"] is True
+    assert health.get("pricing_fingerprint")
+    assert health.get("trace_path")
 
 
 def test_web_settings_api(tmp_path: Path) -> None:
@@ -737,6 +785,34 @@ def test_web_skills_list_api(tmp_path: Path) -> None:
         payload = json.loads(resp.read().decode("utf-8"))
     names = {item["name"] for item in payload["skills"]}
     assert "research" in names
+    assert "compact" in names
+    compact = next(item for item in payload["skills"] if item["name"] == "compact")
+    assert compact["scope"] == "catalog"
+    assert compact["catalog_id"] == "compact"
+
+
+def test_web_skills_preview_and_install_catalog(tmp_path: Path) -> None:
+    port = _free_port()
+    runtime = _web_runtime(tmp_path)
+    _start_server(runtime, port)
+    base = f"http://127.0.0.1:{port}"
+    with urllib.request.urlopen(  # noqa: S310
+        f"{base}/api/skills/preview?catalog_id=compact",
+        timeout=5,
+    ) as resp:
+        preview = json.loads(resp.read().decode("utf-8"))
+    assert "/compact" in preview["markdown"]
+
+    req = urllib.request.Request(
+        f"{base}/api/skills/install",
+        data=json.dumps({"catalog_id": "compact", "scope": "workspace"}).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=5) as resp:  # noqa: S310
+        installed = json.loads(resp.read().decode("utf-8"))
+    assert installed["ok"] is True
+    assert (tmp_path / "skills" / "compact.md").is_file()
 
 
 def test_web_patch_multi_agent_setting(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

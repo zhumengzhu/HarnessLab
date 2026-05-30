@@ -72,6 +72,7 @@ class OperatorConfig:
     web_search_api_key_env: str | None = None
     web_search_api_base_url: str | None = None
     skill_selection_mode: Literal["heuristic", "model"] = "heuristic"
+    skill_catalog_sources: tuple[str, ...] = ()
     planning_mode: Literal["off", "hint", "required"] = "off"
     replan_after_steps: int | None = None
     budget_enabled: bool = False
@@ -84,6 +85,7 @@ class OperatorConfig:
     budget_max_session_tool_calls_total: int | None = None
     budget_max_session_wall_time_ms_total: int | None = None
     budget_max_session_cost_usd_total: float | None = None
+    budget_display_currency: str | None = None
     mcp_servers: tuple[dict[str, Any], ...] = ()
     mcp_allowed_tools: tuple[str, ...] = ()
     python_sandbox_profile: Literal["disabled", "local", "strict"] = "disabled"
@@ -352,6 +354,7 @@ def config_settings_snapshot(
             "max_session_tool_calls_total": config.budget_max_session_tool_calls_total,
             "max_session_wall_time_ms_total": config.budget_max_session_wall_time_ms_total,
             "max_session_cost_usd_total": config.budget_max_session_cost_usd_total,
+            "display_currency": config.budget_display_currency,
         },
         "mcp_servers": list(config.mcp_servers),
         "mcp_allowed_tools": list(config.mcp_allowed_tools),
@@ -476,6 +479,7 @@ def _parse_config(data: dict[str, Any]) -> OperatorConfig:
         web_search_api_key_env=_optional_str(web_search.get("api_key_env")),
         web_search_api_base_url=_optional_str(web_search.get("api_base_url")),
         skill_selection_mode=_skill_selection_mode(skills),
+        skill_catalog_sources=_skill_catalog_sources(skills),
         planning_mode=_planning_mode(loop),
         replan_after_steps=_optional_int(loop.get("replan_after_steps")),
         budget_enabled=bool(budget.get("enabled", False)),
@@ -500,6 +504,7 @@ def _parse_config(data: dict[str, Any]) -> OperatorConfig:
         budget_max_session_cost_usd_total=_optional_float(
             budget.get("max_session_cost_usd_total")
         ),
+        budget_display_currency=_optional_currency(budget.get("display_currency")),
         mcp_servers=_parse_mcp_servers(tools.get("mcp_servers")),
         mcp_allowed_tools=_parse_str_list(tools.get("mcp_allowed_tools")),
         python_sandbox_profile=_python_sandbox_profile(policy),
@@ -601,6 +606,20 @@ def _skill_selection_mode(skills: dict[str, Any]) -> Literal["heuristic", "model
     return mode  # type: ignore[return-value]
 
 
+def _skill_catalog_sources(skills: dict[str, Any]) -> tuple[str, ...]:
+    raw = skills.get("catalog_sources")
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise ValueError("tools.skills.catalog_sources must be an array")
+    sources: list[str] = []
+    for item in raw:
+        text = str(item).strip()
+        if text:
+            sources.append(text)
+    return tuple(sources)
+
+
 def _planning_mode(loop: dict[str, Any]) -> Literal["off", "hint", "required"]:
     mode = str(loop.get("planning_mode", "off")).strip().lower()
     if mode not in {"off", "hint", "required"}:
@@ -646,6 +665,16 @@ def _parse_hook_list(value: Any) -> tuple[dict[str, Any], ...]:
             config = {}
         out.append({"name": name, "type": hook_type, "config": config})
     return tuple(out)
+
+
+def _optional_currency(value: Any) -> str | None:
+    text = _optional_str(value)
+    if text is None:
+        return None
+    code = text.upper()
+    if len(code) != 3 or not code.isalpha():
+        raise ValueError(f"invalid currency code: {value!r}")
+    return code
 
 
 def _optional_float(value: Any) -> float | None:

@@ -190,6 +190,16 @@
         "denials": 0,
         "invalid_args": 0
       }
+    },
+    "budget_cost_soft_threshold": {
+      "passed": true,
+      "metrics": {
+        "turns": 1,
+        "tool_calls": 0,
+        "tool_failures": 0,
+        "denials": 0,
+        "invalid_args": 0
+      }
     }
   }
 }

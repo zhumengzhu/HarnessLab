@@ -1,0 +1,26 @@
+{
+  "version": 1,
+  "skills": [
+    {
+      "id": "compact",
+      "name": "compact",
+      "description": "Force context compaction with /compact without waiting for auto threshold",
+      "tags": ["context", "compaction"],
+      "source": "samples/compact.md"
+    },
+    {
+      "id": "humanizer",
+      "name": "humanizer",
+      "description": "Remove AI writing patterns and restore natural human voice",
+      "tags": ["writing", "tone"],
+      "source": "samples/humanizer.md"
+    },
+    {
+      "id": "deep-research",
+      "name": "deep-research",
+      "description": "Multi-source depth-first research producing a cited Markdown report",
+      "tags": ["research", "web"],
+      "source": "samples/deep-research.md"
+    }
+  ]
+}

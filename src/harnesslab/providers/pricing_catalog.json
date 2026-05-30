@@ -1,0 +1,195 @@
+{
+  "schema_version": 1,
+  "pricing_version": "2026-05-30",
+  "default_currency": "USD",
+  "currencies": {
+    "USD": { "symbol": "$", "label": "US Dollar", "usd_per_unit": 1.0 },
+    "CNY": {
+      "symbol": "¥",
+      "label": "Chinese Yuan",
+      "usd_per_unit": 0.14,
+      "notes": "Derived from DeepSeek/MiMo official USD↔CNY list prices (May 2026)."
+    }
+  },
+  "schedules": [
+    {
+      "id": "deepseek-v4-flash-usd",
+      "model_id": "deepseek-v4-flash",
+      "provider": "deepseek",
+      "currency": "USD",
+      "dimensions": ["input", "output", "cache_read"],
+      "rates_per_million": {
+        "input": 0.14,
+        "output": 0.28,
+        "cache_read": 0.0028
+      },
+      "source": "official_docs_snapshot",
+      "source_url": "https://api-docs.deepseek.com/quick_start/pricing",
+      "notes": "75%-off Pro promo rates for Flash are list price; snapshot 2026-05-30."
+    },
+    {
+      "id": "deepseek-v4-flash-cny",
+      "model_id": "deepseek-v4-flash",
+      "provider": "deepseek",
+      "currency": "CNY",
+      "dimensions": ["input", "output", "cache_read"],
+      "rates_per_million": {
+        "input": 1.0,
+        "output": 2.0,
+        "cache_read": 0.02
+      },
+      "source": "official_docs_snapshot",
+      "source_url": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing"
+    },
+    {
+      "id": "deepseek-v4-pro-usd",
+      "model_id": "deepseek-v4-pro",
+      "provider": "deepseek",
+      "currency": "USD",
+      "dimensions": ["input", "output", "cache_read"],
+      "rates_per_million": {
+        "input": 0.435,
+        "output": 0.87,
+        "cache_read": 0.003625
+      },
+      "source": "official_docs_snapshot",
+      "source_url": "https://api-docs.deepseek.com/quick_start/pricing",
+      "notes": "Effective 2026-05-31 15:59 UTC promo becomes permanent 1/4 list price."
+    },
+    {
+      "id": "deepseek-v4-pro-cny",
+      "model_id": "deepseek-v4-pro",
+      "provider": "deepseek",
+      "currency": "CNY",
+      "dimensions": ["input", "output", "cache_read"],
+      "rates_per_million": {
+        "input": 3.0,
+        "output": 6.0,
+        "cache_read": 0.025
+      },
+      "source": "official_docs_snapshot",
+      "source_url": "https://api-docs.deepseek.com/zh-cn/quick_start/pricing"
+    },
+    {
+      "id": "mimo-v2-5-usd",
+      "model_id": "mimo-v2.5",
+      "provider": "xiaomi",
+      "currency": "USD",
+      "dimensions": ["input", "output", "cache_read"],
+      "rates_per_million": {
+        "input": 0.14,
+        "output": 0.28,
+        "cache_read": 0.0028
+      },
+      "source": "official_docs_snapshot",
+      "source_url": "https://platform.xiaomimimo.com/docs/zh-CN/price/pay-as-you-go",
+      "notes": "MiMo-V2.5 domestic pay-as-you-go; effective 2026-05-27."
+    },
+    {
+      "id": "mimo-v2-5-cny",
+      "model_id": "mimo-v2.5",
+      "provider": "xiaomi",
+      "currency": "CNY",
+      "dimensions": ["input", "output", "cache_read"],
+      "rates_per_million": {
+        "input": 1.0,
+        "output": 2.0,
+        "cache_read": 0.02
+      },
+      "source": "official_docs_snapshot",
+      "source_url": "https://platform.xiaomimimo.com/docs/zh-CN/price/pay-as-you-go"
+    },
+    {
+      "id": "mimo-v2-5-pro-usd",
+      "model_id": "mimo-v2.5-pro",
+      "provider": "xiaomi",
+      "currency": "USD",
+      "dimensions": ["input", "output", "cache_read"],
+      "rates_per_million": {
+        "input": 0.435,
+        "output": 0.87,
+        "cache_read": 0.0036
+      },
+      "source": "official_docs_snapshot",
+      "source_url": "https://platform.xiaomimimo.com/docs/zh-CN/price/pay-as-you-go"
+    },
+    {
+      "id": "mimo-v2-5-pro-cny",
+      "model_id": "mimo-v2.5-pro",
+      "provider": "xiaomi",
+      "currency": "CNY",
+      "dimensions": ["input", "output", "cache_read"],
+      "rates_per_million": {
+        "input": 3.0,
+        "output": 6.0,
+        "cache_read": 0.025
+      },
+      "source": "official_docs_snapshot",
+      "source_url": "https://platform.xiaomimimo.com/docs/zh-CN/price/pay-as-you-go"
+    },
+    {
+      "id": "claude-sonnet-4-6-usd",
+      "model_id": "claude-sonnet-4-6",
+      "provider": "anthropic",
+      "currency": "USD",
+      "dimensions": ["input", "output", "cache_read", "cache_write_5m", "cache_write_1h"],
+      "rates_per_million": {
+        "input": 3.0,
+        "output": 15.0,
+        "cache_read": 0.3,
+        "cache_write_5m": 3.75,
+        "cache_write_1h": 6.0
+      },
+      "source": "official_docs_snapshot"
+    },
+    {
+      "id": "gpt-5-mini-usd",
+      "model_id": "gpt-5-mini",
+      "provider": "openai",
+      "currency": "USD",
+      "dimensions": ["input", "output", "cache_read", "reasoning"],
+      "rates_per_million": {
+        "input": 0.25,
+        "output": 2.0,
+        "cache_read": 0.025,
+        "reasoning": 2.0
+      },
+      "source": "official_docs_snapshot"
+    },
+    {
+      "id": "gemini-2-5-flash-usd",
+      "model_id": "gemini-2.5-flash",
+      "provider": "google",
+      "currency": "USD",
+      "dimensions": ["input", "output", "cache_read"],
+      "rates_per_million": {
+        "input": 0.15,
+        "output": 0.6,
+        "cache_read": 0.0375
+      },
+      "source": "official_docs_snapshot"
+    },
+    {
+      "id": "gemini-3-flash-preview-usd",
+      "model_id": "gemini-3-flash-preview",
+      "provider": "google",
+      "currency": "USD",
+      "dimensions": ["input", "output", "cache_read"],
+      "rates_per_million": {
+        "input": 0.15,
+        "output": 0.6,
+        "cache_read": 0.0375
+      },
+      "source": "official_docs_snapshot"
+    },
+    {
+      "id": "simple-usd",
+      "model_id": "simple",
+      "provider": "harnesslab",
+      "currency": "USD",
+      "dimensions": ["input", "output"],
+      "rates_per_million": { "input": 0.0, "output": 0.0 },
+      "source": "internal"
+    }
+  ]
+}

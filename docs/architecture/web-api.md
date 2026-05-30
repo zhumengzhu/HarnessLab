@@ -100,6 +100,43 @@ Slash palette: built-ins + workspace skills.
 Skills are discovered from `skills/*.md`. Workspace skills appear as
 `/skillname` direct invoke (Cursor-style).
 
+### `GET /api/skills`
+
+List installed skills plus catalog-only entries (when configured).
+
+Query: optional `q` for case-insensitive search.
+
+```json
+{
+  "skills": [
+    {
+      "name": "compact",
+      "description": "...",
+      "tags": ["context"],
+      "scope": "catalog",
+      "path": null,
+      "catalog_id": "compact"
+    }
+  ]
+}
+```
+
+### `GET /api/skills/preview`
+
+Markdown preview for an installed skill or catalog entry.
+
+Query: `name=<skill>` or `catalog_id=<id>` (one required).
+
+### `POST /api/skills/install`
+
+Operator-initiated install. Body:
+
+```json
+{ "catalog_id": "compact", "scope": "workspace" }
+```
+
+or `{ "source": "/path/to/skill.md", "scope": "user" }`.
+
 ### `GET /api/sessions`
 
 List sessions (newest first).

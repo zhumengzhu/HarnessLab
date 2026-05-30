@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import parse_qs, urlparse
 
+import harnesslab
 from harnesslab.checkpoint.store import preview_restore, restore_snapshots
 from harnesslab.core.loop import DEFAULT_MAX_STEPS, HarnessLoop
 from harnesslab.core.memory_policy import session_memory_key
@@ -40,6 +41,12 @@ from harnesslab.web.session_model import (
     resolve_target_backend,
 )
 from harnesslab.web.trace_hub import TraceHub
+from harnesslab.web.usage_aggregate import (
+    UsageRange,
+    aggregate_usage_from_events,
+    apply_usage_display_currency,
+    merge_session_metadata,
+)
 
 _TS_STATIC_DIR = Path(__file__).resolve().parent / "static_ts"
 _log = get_logger("web.server")
@@ -65,6 +72,7 @@ TOOL_PANEL_EVENT_TYPES = frozenset(
         "session_titled",
         "user_steer_received",
         "sub_agent_spawned",
+        "sub_agent_completed",
         "hook_invoked",
         "hook_blocked",
         "hook_failed",
@@ -383,6 +391,20 @@ def _session_json(
     return payload
 
 
+def _usage_payload(runtime: WebRuntime, range_key: UsageRange) -> dict[str, Any]:
+    events: list[TraceEvent] = []
+    path = runtime.trace_path
+    if path is not None and path.is_file():
+        events = read_trace(path)
+    usage = aggregate_usage_from_events(events, range_key=range_key)
+    sessions = _list_sessions(runtime, limit=500, status=None, include_id=None)
+    usage = merge_session_metadata(usage, sessions)
+    display_currency = None
+    if runtime.operator_config is not None:
+        display_currency = runtime.operator_config.budget_display_currency
+    return apply_usage_display_currency(usage, display_currency=display_currency)
+
+
 def _list_sessions(
     runtime: WebRuntime,
     *,
@@ -694,6 +716,26 @@ def _run_gate_command(
     }
 
 
+def _skill_catalog_sources(runtime: WebRuntime) -> tuple[str, ...]:
+    from harnesslab.skills.index_loader import default_catalog_sources  # noqa: PLC0415
+
+    configured: tuple[str, ...] = ()
+    if runtime.operator_config is not None:
+        configured = runtime.operator_config.skill_catalog_sources
+    return default_catalog_sources(configured)
+
+
+def _skill_record_json(record: Any) -> dict[str, Any]:
+    return {
+        "name": record.name,
+        "description": record.description,
+        "tags": list(record.tags),
+        "scope": record.scope,
+        "path": str(record.path) if record.path else None,
+        "catalog_id": record.catalog_id,
+    }
+
+
 class _Handler(BaseHTTPRequestHandler):
     runtime: WebRuntime
 
@@ -770,6 +812,10 @@ class _Handler(BaseHTTPRequestHandler):
                 resolve_gemini_model_name,
                 resolve_openai_model_name,
             )
+            from harnesslab.providers.pricing.catalog import (  # noqa: PLC0415
+                catalog_fingerprint,
+                load_pricing_catalog,
+            )
 
             backend = self.runtime.model_backend
             cfg = self.runtime.operator_config
@@ -782,14 +828,20 @@ class _Handler(BaseHTTPRequestHandler):
                 model_id = resolve_openai_model_name(config=cfg)
             elif backend == "gemini":
                 model_id = resolve_gemini_model_name(config=cfg)
+            trace_path = self.runtime.trace_path
+            pricing = load_pricing_catalog()
             return self._json_ok(
                 {
                     "ok": True,
+                    "version": harnesslab.__version__,
                     "model": backend,
                     "model_id": model_id,
                     "model_label": _MODEL_LABELS.get(model_id or "", model_id or backend),
                     "workspace": str(self.runtime.workspace_root),
                     "runtime_context_tokens": self.runtime.loop._limits.context_window_tokens,  # noqa: SLF001
+                    "trace_path": str(trace_path) if trace_path else None,
+                    "pricing_version": pricing.pricing_version,
+                    "pricing_fingerprint": catalog_fingerprint(),
                 }
             )
 
@@ -808,25 +860,36 @@ class _Handler(BaseHTTPRequestHandler):
 
             qs = parse_qs(parsed.query)
             query = qs.get("q", [""])[0]
+            catalog_sources = _skill_catalog_sources(self.runtime)
             records = (
-                search_skills(self.runtime.workspace_root, query)
+                search_skills(
+                    self.runtime.workspace_root,
+                    query,
+                    catalog_sources=catalog_sources,
+                )
                 if query.strip()
-                else list_skill_records(self.runtime.workspace_root)
+                else list_skill_records(
+                    self.runtime.workspace_root,
+                    catalog_sources=catalog_sources,
+                    include_catalog=True,
+                )
             )
-            return self._json_ok(
-                {
-                    "skills": [
-                        {
-                            "name": record.name,
-                            "description": record.description,
-                            "tags": list(record.tags),
-                            "scope": record.scope,
-                            "path": str(record.path),
-                        }
-                        for record in records
-                    ]
-                }
+            return self._json_ok({"skills": [_skill_record_json(record) for record in records]})
+
+        if path == "/api/skills/preview":
+            from harnesslab.skills.catalog import preview_skill  # noqa: PLC0415
+
+            qs = parse_qs(parsed.query)
+            name = qs.get("name", [""])[0].strip() or None
+            catalog_id = qs.get("catalog_id", [""])[0].strip() or None
+            catalog_sources = _skill_catalog_sources(self.runtime)
+            markdown = preview_skill(
+                self.runtime.workspace_root,
+                name=name,
+                catalog_id=catalog_id,
+                catalog_sources=catalog_sources,
             )
+            return self._json_ok({"markdown": markdown})
 
         if path.startswith("/api/sessions/") and path.endswith("/context"):
             remainder = path[len("/api/sessions/") :]
@@ -835,6 +898,14 @@ class _Handler(BaseHTTPRequestHandler):
                 raise ValueError("session id required")
             snapshot = _last_context_snapshot(self.runtime, session_id)
             return self._json_ok({"context": snapshot})
+
+        if path == "/api/usage":
+            qs = parse_qs(parsed.query)
+            raw_range = qs.get("range", ["all"])[0] or "all"
+            range_key: UsageRange = (
+                raw_range if raw_range in {"today", "7d", "30d", "all"} else "all"
+            )
+            return self._json_ok(_usage_payload(self.runtime, range_key))
 
         if path == "/api/sessions":
             qs = parse_qs(parsed.query)
@@ -880,6 +951,24 @@ class _Handler(BaseHTTPRequestHandler):
                     if e.event_type in TOOL_PANEL_EVENT_TYPES
                 ]
                 return self._json_ok({"session_id": session_id, "events": filtered})
+            if action == "trace/jsonl":
+                events = self._trace_events_for(session_id)
+                lines = [
+                    json.dumps(_trace_event_json(e), ensure_ascii=True)
+                    for e in events
+                ]
+                return self._json_ok(
+                    {
+                        "session_id": session_id,
+                        "trace_path": (
+                            str(self.runtime.trace_path)
+                            if self.runtime.trace_path
+                            else None
+                        ),
+                        "line_count": len(lines),
+                        "jsonl": "\n".join(lines) + ("\n" if lines else ""),
+                    }
+                )
             if action == "checkpoints":
                 return self._json_ok(_checkpoints_payload(self.runtime, session_id))
             if action.startswith("checkpoints/"):
@@ -1068,12 +1157,32 @@ class _Handler(BaseHTTPRequestHandler):
             )
 
         if path == "/api/skills/install":
-            from harnesslab.skills.catalog import install_skill  # noqa: PLC0415
+            from harnesslab.skills.catalog import (  # noqa: PLC0415
+                install_skill,
+                install_skill_from_catalog,
+            )
 
+            catalog_id = str(body.get("catalog_id", "")).strip()
+            scope = str(body.get("scope", "workspace")).strip() or "workspace"
+            catalog_sources = _skill_catalog_sources(self.runtime)
+            if catalog_id:
+                dest = install_skill_from_catalog(
+                    self.runtime.workspace_root,
+                    catalog_id,
+                    scope=scope,
+                    catalog_sources=catalog_sources,
+                )
+                return self._json_ok(
+                    {
+                        "ok": True,
+                        "path": str(dest),
+                        "scope": scope,
+                        "catalog_id": catalog_id,
+                    }
+                )
             source = str(body.get("source", "")).strip()
             if not source:
-                raise ValueError("source is required")
-            scope = str(body.get("scope", "workspace")).strip() or "workspace"
+                raise ValueError("source or catalog_id is required")
             dest = install_skill(
                 self.runtime.workspace_root,
                 Path(source),

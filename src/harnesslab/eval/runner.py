@@ -201,6 +201,7 @@ class TaskRunner:
         if task.budget is not None:
             budget_limits = BudgetLimits(
                 enabled=task.budget.enabled,
+                soft_ratio=task.budget.soft_ratio,
                 max_session_cost_usd_total=task.budget.max_session_cost_usd_total,
                 action_on_hard=task.budget.action_on_hard,  # type: ignore[arg-type]
             )

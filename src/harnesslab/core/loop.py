@@ -73,7 +73,7 @@ from harnesslab.core.stream_context import (
 )
 from harnesslab.core.title import TitleNamer, derive_title_from_text
 from harnesslab.core.tool_hooks import ToolHookRunner
-from harnesslab.providers.pricing import estimate_call_cost_usd
+from harnesslab.providers.pricing import CanonicalUsage, estimate_call_cost
 from harnesslab.telemetry.log import get_logger
 from harnesslab.tools.registry import ToolRegistry
 
@@ -1004,6 +1004,13 @@ class HarnessLoop:
         if reasoning:
             payload["reasoning_text"] = reasoning
         payload.update(self._model_prompt_payload())
+        if isinstance(raw_meta, dict):
+            breakdown = raw_meta.get("usage_breakdown")
+            if isinstance(breakdown, dict):
+                payload["usage_breakdown"] = breakdown
+            cost_estimate = raw_meta.get("cost_estimate")
+            if isinstance(cost_estimate, dict):
+                payload["cost_estimate"] = cost_estimate
 
         snapshot = make_conversation_snapshot(session.messages, self._limits)
         snapshot = merge_adapter_breakdown(snapshot, raw_meta)
@@ -1037,6 +1044,10 @@ class HarnessLoop:
             "total_tokens",
             "provider",
             "reasoning_text",
+            "failover_index",
+            "failover_backend",
+            "failover_attempts",
+            "failover_exhausted",
         }
         return {k: raw[k] for k in allowed if k in raw}
 
@@ -1102,15 +1113,22 @@ class HarnessLoop:
         raw = self._model_raw_meta()
         if not raw:
             return
-        req_tokens = raw.get("request_tokens")
-        resp_tokens = raw.get("response_tokens")
-        cost = estimate_call_cost_usd(
+        breakdown = raw.get("usage_breakdown")
+        if isinstance(breakdown, dict):
+            usage = CanonicalUsage.from_breakdown(breakdown)
+        else:
+            req_tokens = raw.get("request_tokens")
+            resp_tokens = raw.get("response_tokens")
+            usage = CanonicalUsage(
+                input=max(int(req_tokens), 0) if isinstance(req_tokens, int) else 0,
+                output=max(int(resp_tokens), 0) if isinstance(resp_tokens, int) else 0,
+            )
+        result = estimate_call_cost(
             model_name=str(raw.get("model_name", "")) or None,
-            request_tokens=req_tokens if isinstance(req_tokens, int) else None,
-            response_tokens=resp_tokens if isinstance(resp_tokens, int) else None,
+            usage=usage,
         )
-        if cost > 0:
-            session.budget_usage.cost_usd_total += cost
+        if result.amount_usd and result.amount_usd > 0:
+            session.budget_usage.cost_usd_total += result.amount_usd
 
     def _maybe_create_checkpoint(self, session: Session, call: ToolCall) -> None:
         store = self._checkpoint_store

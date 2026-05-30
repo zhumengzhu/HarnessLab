@@ -3,6 +3,7 @@ import { MarkdownView } from "../../lib/MarkdownView";
 import { useChatDisplay } from "../chat/chatDisplayPreferences";
 import { ToolCardRow } from "../chat/ToolCardRow";
 import { ThinkingBlock } from "./ThinkingBlock";
+import { ChildAgentRunCard } from "./ChildAgentRunCard";
 
 type AssistantTurnCardProps = {
   turn: LiveTurnState;
@@ -58,6 +59,14 @@ export function AssistantTurnCard({ turn }: AssistantTurnCardProps) {
                 displayMode={activityDisplay}
                 defaultOpen={activityDisplay === "detailed" && idx === turn.tools.length - 1}
               />
+            ))}
+          </div>
+        ) : null}
+
+        {turn.childRuns.length > 0 ? (
+          <div className="child-agent-runs">
+            {turn.childRuns.map((run) => (
+              <ChildAgentRunCard key={run.childSessionId} run={run} />
             ))}
           </div>
         ) : null}

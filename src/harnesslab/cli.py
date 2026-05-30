@@ -65,6 +65,7 @@ from harnesslab.providers.deepseek import tool_specs_from_registry
 from harnesslab.providers.registry import create_model, normalize_backend
 from harnesslab.replay import (
     UnreplayableTraceError,
+    child_session_ids_for_parent,
     detect_divergence,
     group_by_session,
     read_trace,
@@ -72,7 +73,14 @@ from harnesslab.replay import (
 )
 from harnesslab.session.in_memory import InMemorySessionStore
 from harnesslab.session.sqlite_store import SqliteSessionStore
-from harnesslab.skills.catalog import install_skill, list_skill_records, search_skills
+from harnesslab.skills.catalog import (
+    install_skill,
+    install_skill_from_catalog,
+    list_skill_records,
+    remove_skill,
+    search_skills,
+)
+from harnesslab.skills.index_loader import default_catalog_sources
 from harnesslab.telemetry.aggregate import aggregate, render_metrics
 from harnesslab.telemetry.jsonl_recorder import JsonlTraceRecorder
 from harnesslab.telemetry.log import configure_logging, get_logger
@@ -123,6 +131,7 @@ SUBCOMMANDS = (
     "serve",
     "skill",
     "check",
+    "pricing",
     "tui",
 )
 
@@ -794,6 +803,14 @@ def _build_parser() -> argparse.ArgumentParser:
             "(ignore timestamps, normalize ids, ignore tool output text)."
         ),
     )
+    rp.add_argument(
+        "--include-children",
+        action="store_true",
+        help=(
+            "With --session-id, also replay child sessions spawned from "
+            "that parent (in trace order after the parent)."
+        ),
+    )
 
     # ----- metrics -----
     mt = sub.add_parser(
@@ -899,6 +916,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "--no-messages",
         action="store_true",
         help="Print metadata only (skip the conversation transcript).",
+    )
+    sh.add_argument(
+        "--include-children",
+        action="store_true",
+        help="List child sessions spawned from this session (metadata only).",
     )
 
     rs = se_sub.add_parser("resume", help="Run another turn on an existing session.")
@@ -1065,12 +1087,30 @@ def _build_parser() -> argparse.ArgumentParser:
     sk_search = sk_sub.add_parser("search", help="Search skills by name/description/tags.")
     sk_search.add_argument("query", help="Case-insensitive substring query.")
     sk_install = sk_sub.add_parser("install", help="Install a skill markdown file.")
-    sk_install.add_argument("source", help="Path to a .md skill file.")
+    sk_install.add_argument(
+        "source",
+        nargs="?",
+        default=None,
+        help="Path to a .md skill file (omit when using --catalog-id).",
+    )
+    sk_install.add_argument(
+        "--catalog-id",
+        default=None,
+        help="Install from a configured catalog index by skill id.",
+    )
     sk_install.add_argument(
         "--scope",
         choices=["workspace", "user"],
         default="workspace",
         help="Install target directory (default: workspace/skills).",
+    )
+    sk_remove = sk_sub.add_parser("remove", help="Remove an installed skill.")
+    sk_remove.add_argument("name", help="Skill name (markdown stem).")
+    sk_remove.add_argument(
+        "--scope",
+        choices=["workspace", "user"],
+        default="workspace",
+        help="Remove from workspace or user skills directory.",
     )
 
     # ----- check (diagnostics) -----
@@ -1093,6 +1133,26 @@ def _build_parser() -> argparse.ArgumentParser:
         type=float,
         default=20.0,
         help="HTTP timeout in seconds (default: 20).",
+    )
+
+    # ----- pricing (catalog audit) -----
+    pr = sub.add_parser(
+        "pricing",
+        help="Inspect pricing catalog coverage and fingerprint.",
+    )
+    pr_sub = pr.add_subparsers(dest="pricing_action", required=True, metavar="ACTION")
+    pr_audit = pr_sub.add_parser(
+        "audit",
+        help="Compare model catalog entries to pricing schedules.",
+    )
+    pr_audit.add_argument(
+        "--currency",
+        default="USD",
+        help="Currency to audit (default: USD).",
+    )
+    pr_sub.add_parser(
+        "fingerprint",
+        help="Print pricing catalog fingerprint and version.",
     )
 
     return parser
@@ -1149,6 +1209,8 @@ def main() -> None:
         sys.exit(_cmd_skill(args))
     if args.command == "check":
         sys.exit(_cmd_check(args))
+    if args.command == "pricing":
+        sys.exit(_cmd_pricing(args))
     if args.command == "tui":
         sys.exit(_cmd_tui(args))
 
@@ -1176,10 +1238,37 @@ def _cmd_check(args: argparse.Namespace) -> int:
     return EXIT_USAGE
 
 
+def _cmd_pricing(args: argparse.Namespace) -> int:
+    from harnesslab.providers.pricing import (
+        audit_pricing_catalog,
+        catalog_fingerprint,
+        format_audit_report,
+        load_pricing_catalog,
+    )
+
+    if args.pricing_action == "fingerprint":
+        catalog = load_pricing_catalog()
+        print(f"pricing_version: {catalog.pricing_version}")
+        print(f"fingerprint: {catalog_fingerprint()}")
+        return EXIT_OK
+    if args.pricing_action == "audit":
+        report = audit_pricing_catalog(currency=args.currency)
+        print(format_audit_report(report))
+        return EXIT_OK if not report.get("missing_model_ids") else EXIT_TASK_FAILED
+    print("Unknown pricing action.", file=sys.stderr)
+    return EXIT_USAGE
+
+
 def _cmd_skill(args: argparse.Namespace) -> int:
     workspace_root = Path(args.workspace_root).resolve()
+    config = _load_operator_config()
+    catalog_sources = default_catalog_sources(config.skill_catalog_sources)
     if args.skill_action == "list":
-        records = list_skill_records(workspace_root)
+        records = list_skill_records(
+            workspace_root,
+            catalog_sources=catalog_sources,
+            include_catalog=True,
+        )
         if not records:
             print("(no skills)")
             return EXIT_OK
@@ -1188,7 +1277,7 @@ def _cmd_skill(args: argparse.Namespace) -> int:
             print(f"{record.name}\t{record.scope}{tags}\t{record.description}")
         return EXIT_OK
     if args.skill_action == "search":
-        records = search_skills(workspace_root, args.query)
+        records = search_skills(workspace_root, args.query, catalog_sources=catalog_sources)
         if not records:
             print("(no matches)")
             return EXIT_OK
@@ -1196,6 +1285,31 @@ def _cmd_skill(args: argparse.Namespace) -> int:
             tags = f" [{', '.join(record.tags)}]" if record.tags else ""
             print(f"{record.name}\t{record.scope}{tags}\t{record.description}")
         return EXIT_OK
+    if args.skill_action == "remove":
+        try:
+            removed = remove_skill(workspace_root, args.name, scope=args.scope)
+        except (FileNotFoundError, ValueError) as exc:
+            print(str(exc), file=sys.stderr)
+            return EXIT_USAGE
+        print(f"removed: {removed}")
+        return EXIT_OK
+    catalog_id = getattr(args, "catalog_id", None)
+    if catalog_id:
+        try:
+            dest = install_skill_from_catalog(
+                workspace_root,
+                catalog_id,
+                scope=args.scope,
+                catalog_sources=catalog_sources,
+            )
+        except (FileNotFoundError, ValueError) as exc:
+            print(str(exc), file=sys.stderr)
+            return EXIT_USAGE
+        print(f"installed: {dest}")
+        return EXIT_OK
+    if not args.source:
+        print("install requires source path or --catalog-id", file=sys.stderr)
+        return EXIT_USAGE
     try:
         dest = install_skill(workspace_root, Path(args.source), scope=args.scope)
     except (FileNotFoundError, ValueError) as exc:
@@ -1348,18 +1462,36 @@ def _cmd_replay(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
             return EXIT_UNREPLAYABLE
-        grouped = {args.session_id: grouped[args.session_id]}
+        session_ids = [args.session_id]
+        if args.include_children:
+            session_ids.extend(
+                sid
+                for sid in child_session_ids_for_parent(events, args.session_id)
+                if sid in grouped
+            )
+        grouped = {sid: grouped[sid] for sid in session_ids}
 
     workspace_root = Path(args.workspace).resolve() if args.workspace else None
 
     any_divergence = False
+    spawn_fan_in = frozenset({"sub_agent_spawned", "sub_agent_completed"})
     for sid, session_events in grouped.items():
         try:
             replayed = replay_session(session_events, workspace_root=workspace_root)
         except UnreplayableTraceError as exc:
             print(f"[{sid}] unreplayable: {exc}", file=sys.stderr)
             return EXIT_UNREPLAYABLE
-        report = detect_divergence(session_events, replayed, strict=args.strict)
+        ignore = (
+            spawn_fan_in
+            if any(e.event_type in spawn_fan_in for e in session_events)
+            else frozenset()
+        )
+        report = detect_divergence(
+            session_events,
+            replayed,
+            strict=args.strict,
+            ignore_event_types=ignore,
+        )
         print(f"[{sid}] {report.render()}")
         if not report.matched:
             any_divergence = True
@@ -1501,6 +1633,21 @@ def _cmd_session_show(args: argparse.Namespace) -> int:
         print(f"session not found: {args.session_id}", file=sys.stderr)
         return EXIT_USAGE
     print(_format_session_detail(session, include_messages=not args.no_messages))
+    if args.include_children:
+        children = sessions.list(parent_session_id=args.session_id, limit=50)
+        print("")
+        print(f"Children ({len(children)}):")
+        if not children:
+            print("  (none)")
+        else:
+            for child in children:
+                title = child.title or child.goal
+                print(
+                    f"  {child.id}  status={child.status}  steps={child.step_count}  "
+                    f"tokens={child.budget_usage.tokens_total}  "
+                    f"cost_usd={child.budget_usage.cost_usd_total:.6f}  "
+                    f"{title[:48]}"
+                )
     return EXIT_OK
 
 
@@ -1645,11 +1792,13 @@ def _format_session_table(sessions) -> str:
         "TURNS",
         "TOKENS",
         "BUDGET",
+        "PARENT",
         "CREATED",
         "TITLE",
     )
     rows = [header]
     for s in sessions:
+        parent = s.parent_session_id or "–"
         rows.append(
             (
                 s.id,
@@ -1658,6 +1807,7 @@ def _format_session_table(sessions) -> str:
                 str(s.turn_count),
                 str(s.budget_usage.tokens_total),
                 s.budget_usage.last_budget_status,
+                parent,
                 s.created_at.strftime("%Y-%m-%d %H:%M:%S"),
                 (s.title or s.goal)[:60],
             )

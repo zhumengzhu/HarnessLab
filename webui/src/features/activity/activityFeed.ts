@@ -18,6 +18,7 @@ const ACTIVITY_EVENT_TYPES = new Set([
   "compaction_completed",
   "user_steer_received",
   "sub_agent_spawned",
+  "sub_agent_completed",
 ]);
 
 export function isActivityTraceEvent(eventType: string): boolean {
@@ -121,6 +122,17 @@ export function activityEntryFromTrace(evt: TraceEventItem): ActivityEntry | nul
       kind: "spawn",
       label: "sub-agent spawned",
       detail: previewText(payload.goal) || childId,
+      at: evt.created_at,
+    };
+  }
+
+  if (evt.event_type === "sub_agent_completed") {
+    const childId = String(payload.child_session_id || "");
+    return {
+      id,
+      kind: "spawn",
+      label: "sub-agent finished",
+      detail: previewText(payload.final_response_preview) || childId,
       at: evt.created_at,
     };
   }

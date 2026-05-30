@@ -22,6 +22,7 @@ from harnesslab.providers.model_resolve import (
 )
 from harnesslab.providers.transforms.openai_chat import parse_response, serialize_messages
 from harnesslab.providers.transports.openai_chat import OpenAIChatTransport
+from harnesslab.providers.usage_meta import usage_meta_from_response
 from harnesslab.telemetry.log import get_logger
 
 DEFAULT_BASE_URL = "https://api.deepseek.com/v1"
@@ -154,7 +155,12 @@ class DeepSeekModel:
 
         self._last_call_meta = {
             **base_meta,
-            **_usage_meta(payload.get("usage")),
+            **usage_meta_from_response(
+                payload.get("usage"),
+                provider="deepseek",
+                api_mode="openai_chat",
+                model_name=self._model_name,
+            ),
         }
         turn = parse_response(payload)
         if turn.reasoning_text:
@@ -225,21 +231,6 @@ def _decision_from_payload(payload: dict[str, Any]) -> Decision:
     """Backward-compatible wrapper around :func:`parse_response`."""
 
     return parse_response(payload).decision
-
-
-def _usage_meta(raw_usage: Any) -> dict[str, int]:
-    if not isinstance(raw_usage, dict):
-        return {}
-    out: dict[str, int] = {}
-    for src, dst in (
-        ("prompt_tokens", "request_tokens"),
-        ("completion_tokens", "response_tokens"),
-        ("total_tokens", "total_tokens"),
-    ):
-        value = raw_usage.get(src)
-        if isinstance(value, int):
-            out[dst] = value
-    return out
 
 
 def tool_specs_from_registry(registry_tools: list[Any]) -> list[dict[str, Any]]:

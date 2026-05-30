@@ -38,6 +38,7 @@ payload shape, update the relevant file and tests in the same PR.
 | --- | --- |
 | [`research/harness-landscape.md`](research/harness-landscape.md) | 2026 agent harness capability map vs HarnessLab |
 | [`research/claude-code-monitor.md`](research/claude-code-monitor.md) | External agent observation notes |
+| [`guides/multi-agent.md`](guides/multi-agent.md) | Enable spawn_sub_agent, limits, CLI/Web visibility |
 | [`guides/deep-research-landscape.md`](guides/deep-research-landscape.md) | Deep research skills vs tools (DeerFlow, OpenCode, HarnessLab design) |
 | [`guides/web-research-providers.md`](guides/web-research-providers.md) | Search/fetch providers, pricing, proxy |
 | [`guides/deepseek-thinking-troubleshooting.md`](guides/deepseek-thinking-troubleshooting.md) | DeepSeek thinking 400s, `reasoning_content` replay, session recovery |

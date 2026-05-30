@@ -15,11 +15,13 @@ from harnesslab.core.runtime import DEFAULT_REPLAY_CLOCK_START, FrozenClock, Seq
 from harnesslab.core.simple_model import SimpleModel
 from harnesslab.eval.loader import load_suite
 from harnesslab.policy.default_policy import DefaultPolicy
+from harnesslab.replay.trace_reader import read_trace
 from harnesslab.session.in_memory import InMemorySessionStore
 from harnesslab.telemetry.jsonl_recorder import JsonlTraceRecorder
 from harnesslab.tools.file_tools import ReadFileTool, WriteFileTool
 from harnesslab.tools.registry import ToolRegistry
 from harnesslab.tools.shell_tool import RunShellSafeTool
+from harnesslab.tools.spawn_sub_agent import SpawnSubAgentTool
 
 TASKS_DIR = Path(__file__).resolve().parents[1] / "eval" / "tasks"
 
@@ -55,6 +57,33 @@ def _write_real_trace(workspace: Path, trace_path: Path, task_name: str) -> None
     session = loop.start(goal=task.goal)
     for turn in task.turns:
         loop.run_turn(session.id, turn.input)
+
+
+def _write_spawn_trace(workspace: Path, trace_path: Path) -> str:
+    """Run spawn_sub_agent once; return parent session id."""
+
+    tools = ToolRegistry()
+    loop_holder: list[HarnessLoop] = []
+    recorder = JsonlTraceRecorder(trace_path)
+    loop = HarnessLoop(
+        model=SimpleModel(),
+        policy=DefaultPolicy(workspace, enable_spawn_sub_agent=True),
+        sessions=InMemorySessionStore(),
+        tools=tools,
+        trace=recorder,
+        clock=FrozenClock(start=DEFAULT_REPLAY_CLOCK_START),
+        ids=SeqIdProvider(),
+        workspace_root=workspace,
+    )
+    loop_holder.append(loop)
+    tools.register(SpawnSubAgentTool(lambda: loop_holder[0]))
+    parent = loop.start(goal="supervisor")
+    loop.run_session(
+        parent.id,
+        '/tool spawn_sub_agent {"goal": "/final child done", "max_steps": 1}',
+        max_steps=1,
+    )
+    return parent.id
 
 
 # ---------- harnesslab replay ----------
@@ -208,6 +237,39 @@ def test_replay_with_shared_workspace_round_trips_across_sessions(
 
     monkeypatch.setattr(
         "sys.argv", ["harnesslab", "replay", str(trace), "--workspace", str(workspace)]
+    )
+    with pytest.raises(SystemExit) as exc:
+        cli.main()
+    out = capsys.readouterr().out
+    assert exc.value.code == cli.EXIT_OK, out
+    assert out.count("OK: replay matches original") == 2
+
+
+def test_replay_include_children_replays_parent_and_child(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    workspace = tmp_path / "ws"
+    workspace.mkdir()
+    trace = tmp_path / "spawn.jsonl"
+    parent_id = _write_spawn_trace(workspace, trace)
+    events = read_trace(trace)
+    session_ids = {e.session_id for e in events if e.event_type == "session_started"}
+    assert len(session_ids) >= 2
+
+    monkeypatch.setattr(
+        "sys.argv",
+        [
+            "harnesslab",
+            "replay",
+            str(trace),
+            "--session-id",
+            parent_id,
+            "--include-children",
+            "--workspace",
+            str(workspace),
+        ],
     )
     with pytest.raises(SystemExit) as exc:
         cli.main()

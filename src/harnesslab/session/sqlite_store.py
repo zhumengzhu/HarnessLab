@@ -64,31 +64,31 @@ class SqliteSessionStore:
         *,
         limit: int = 50,
         status: str | None = None,
+        parent_session_id: str | None = None,
     ) -> list[Session]:
         # Sessions returned by ``list`` carry an empty messages list;
         # callers that need the conversation should call ``get`` for
         # the rows they actually want to display.
-        if status is None:
-            rows = self._conn.execute(
-                f"""
-                SELECT {_SESSION_COLUMNS}
-                FROM sessions
-                ORDER BY COALESCE(last_step_at, created_at) DESC
-                LIMIT ?;
-                """,
-                (limit,),
-            ).fetchall()
-        else:
-            rows = self._conn.execute(
-                f"""
-                SELECT {_SESSION_COLUMNS}
-                FROM sessions
-                WHERE status = ?
-                ORDER BY COALESCE(last_step_at, created_at) DESC
-                LIMIT ?;
-                """,
-                (status, limit),
-            ).fetchall()
+        clauses: list[str] = []
+        params: list[object] = []
+        if status is not None:
+            clauses.append("status = ?")
+            params.append(status)
+        if parent_session_id is not None:
+            clauses.append("parent_session_id = ?")
+            params.append(parent_session_id)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        params.append(limit)
+        rows = self._conn.execute(
+            f"""
+            SELECT {_SESSION_COLUMNS}
+            FROM sessions
+            {where}
+            ORDER BY COALESCE(last_step_at, created_at) DESC
+            LIMIT ?;
+            """,
+            tuple(params),
+        ).fetchall()
         return [_session_from_row(r, messages=[]) for r in rows]
 
     def message_counts(self, session_ids: list[str]) -> dict[str, int]:

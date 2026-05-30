@@ -147,6 +147,7 @@ def test_load_operator_config_parses_tools_block(tmp_path: Path) -> None:
                         "max_session_tokens_total": 200000,
                         "max_session_tool_calls_total": 100,
                         "max_session_wall_time_ms_total": 600000,
+                        "max_session_cost_usd_total": 5.0,
                     },
                 },
                 "tools": {
@@ -208,6 +209,7 @@ def test_load_operator_config_parses_tools_block(tmp_path: Path) -> None:
     assert config.budget_max_session_tokens_total == 200000
     assert config.budget_max_session_tool_calls_total == 100
     assert config.budget_max_session_wall_time_ms_total == 600000
+    assert config.budget_max_session_cost_usd_total == 5.0
     assert len(config.pre_tool_hooks) == 1
     assert config.pre_tool_hooks[0]["name"] == "pre-block-shell"
     assert config.pre_tool_hooks[0]["type"] == "prompt"

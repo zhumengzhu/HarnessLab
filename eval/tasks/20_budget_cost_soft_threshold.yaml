@@ -1,0 +1,27 @@
+name: budget_cost_soft_threshold
+goal: warn when session cost crosses soft ratio
+description: |
+  Phase 5.10: one model call at 50% of ``max_session_cost_usd_total``
+  emits ``budget_soft_threshold`` without hard stop.
+budget:
+  enabled: true
+  soft_ratio: 0.5
+  max_session_cost_usd_total: 0.00084
+  action_on_hard: final
+replay_call_meta:
+  model_name: deepseek-v4-flash
+  request_tokens: 1000
+  response_tokens: 1000
+decisions:
+  - kind: final
+    assistant_message: done
+turns:
+  - input: one call
+    max_steps: 1
+expected:
+  final_reply_contains:
+    - done
+  events_include:
+    - event_type: budget_soft_threshold
+      payload_contains:
+        dimension: max_session_cost_usd_total

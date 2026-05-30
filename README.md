@@ -90,8 +90,9 @@ missing, it falls back to the legacy static UI.
 - **Advanced** — trace panel, proposals, session metadata, budget events.
 - **Slash commands** — `/remember`, `/remember-global`, `/compact`, `/skill list`,
   and workspace skills as `/skillname <task>` (Cursor-style; see `skills/*.md`).
-- **Sub-agent (PoC)** — set `loop.multi_agent.enabled: true` in config; model may
-  call `spawn_sub_agent` (see [multi-agent exploration](docs/architecture/multi-agent-exploration.md)).
+- **Sub-agent (Phase 6)** — enable `loop.multi_agent.enabled` in config or Web
+  Settings; model may call `spawn_sub_agent`. See
+  [`docs/guides/multi-agent.md`](docs/guides/multi-agent.md).
 - **Composer** — type `/` for the command palette; SSE streaming for tool steps
   and (with thinking models) token-level reasoning/answer deltas.
 

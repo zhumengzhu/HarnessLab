@@ -56,6 +56,7 @@ class TaskBudget(BaseModel):
     """Optional budget overrides for a single eval task."""
 
     enabled: bool = False
+    soft_ratio: float = 0.8
     max_session_cost_usd_total: float | None = None
     action_on_hard: str = "final"
 

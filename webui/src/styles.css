@@ -1006,6 +1006,32 @@ body {
   margin-top: 0;
 }
 
+.budget-summary-simple {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  border: 1px solid #30363d;
+  border-radius: 8px;
+  background: #0f1117;
+  font-size: 12px;
+  color: #c9d1d9;
+}
+
+.budget-status-ok {
+  color: #3fb950;
+}
+
+.budget-status-soft_exceeded {
+  color: #d29922;
+}
+
+.budget-status-hard_exceeded {
+  color: #f85149;
+}
+
 .budget-box {
   border: 1px solid #30363d;
   border-radius: 8px;
@@ -1952,6 +1978,52 @@ pre {
 
 .assistant-turn-header {
   border-bottom-color: var(--hl-border);
+}
+
+.child-agent-runs {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  margin-top: 10px;
+  padding-left: 12px;
+  border-left: 2px solid var(--hl-border);
+}
+
+.child-agent-run {
+  border: 1px solid var(--hl-border);
+  border-radius: 8px;
+  background: var(--hl-bg-elevated);
+  padding: 10px 12px;
+}
+
+.child-agent-run-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 12px;
+}
+
+.child-agent-run-label {
+  color: var(--hl-accent, #58a6ff);
+  font-weight: 600;
+}
+
+.child-agent-run-goal {
+  color: var(--hl-text-secondary);
+  flex: 1;
+  min-width: 0;
+}
+
+.child-agent-run-status {
+  color: var(--hl-text-muted);
+}
+
+.child-agent-run-activity {
+  margin: 0;
+  font-size: 12px;
+  color: var(--hl-text-muted);
 }
 
 .chat-msg-tool,

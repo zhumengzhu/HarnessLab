@@ -22,6 +22,7 @@ from harnesslab.providers.transforms.google_generate_content import (
     serialize_request,
 )
 from harnesslab.providers.transports.google_genai import GoogleGenAITransport
+from harnesslab.providers.usage_meta import usage_meta_from_response
 from harnesslab.telemetry.log import get_logger
 
 DEFAULT_TIMEOUT_SECONDS = 30.0
@@ -109,7 +110,12 @@ class GeminiModel:
 
         self._last_call_meta = {
             **base_meta,
-            **_usage_meta(payload.get("usageMetadata") or payload.get("usage_metadata")),
+            **usage_meta_from_response(
+                payload.get("usageMetadata") or payload.get("usage_metadata"),
+                provider="google",
+                api_mode="gemini",
+                model_name=self._model_name,
+            ),
         }
         turn = parse_response(payload, entry)
         if turn.reasoning_text:
@@ -210,27 +216,6 @@ def _gemini_tools_from_openai(specs: list[dict[str, Any]]) -> list[dict[str, Any
     if not declarations:
         return None
     return [{"function_declarations": declarations}]
-
-
-def _usage_meta(usage: object) -> dict[str, Any]:
-    if not isinstance(usage, dict):
-        return {}
-    prompt = usage.get("promptTokenCount") or usage.get("prompt_token_count")
-    candidates = usage.get("candidatesTokenCount") or usage.get("candidates_token_count")
-    total = usage.get("totalTokenCount") or usage.get("total_token_count")
-    thoughts = usage.get("thoughtsTokenCount") or usage.get("thoughts_token_count")
-    meta: dict[str, Any] = {}
-    if isinstance(prompt, int):
-        meta["request_tokens"] = prompt
-    if isinstance(candidates, int):
-        meta["response_tokens"] = candidates
-    if isinstance(total, int):
-        meta["total_tokens"] = total
-    elif isinstance(prompt, int) and isinstance(candidates, int):
-        meta["total_tokens"] = prompt + candidates
-    if isinstance(thoughts, int):
-        meta["reasoning_tokens"] = thoughts
-    return meta
 
 
 def _maybe_warn_context_size(composed: ComposedPrompt, entry: CatalogEntry) -> None:
