@@ -989,16 +989,15 @@ This section is the **living backlog** after Phase 5 substantial completion.
 Items are ordered by impact on daily use and learning clarity. Each should
 ship with tests + doc updates per `AGENTS.md`.
 
-**Priority note (2026-05):** Phase 6 sub-agent production and Phase 7 skills
-discovery/install are **complete**. Next: provider parity audits (P0) and
-Phase E legacy Web cleanup.
+**Priority note (2026-05):** Phase 6–7 and Phase E Web cleanup are **complete**.
+Next: token streaming beyond DeepSeek (P0) and provider failover UX (P2).
 
 ### P0 — Correctness & provider parity
 
 | Item | Why | Entry signal |
 | --- | --- | --- |
 | **Multi-turn thinking replay (OpenAI-chat / DeepSeek)** | API 400 without historical `reasoning_content` on tool assistants | **DONE** |
-| **Anthropic / Gemini multi-turn tool+thinking replay audit** | Same class of bug on other transforms | Extend **fixture tests** in `tests/test_anthropic_messages_transform.py` / `tests/test_google_generate_content_transform.py` — **live API keys not required** for transform/replay coverage; live smoke optional via OpenRouter or native keys |
+| **Anthropic / Gemini multi-turn tool+thinking replay audit** | Same class of bug on other transforms | **Done** — fixture tests in `test_anthropic_messages_transform.py` / `test_google_generate_content_transform.py` |
 | **Token streaming beyond DeepSeek** | Web UI renders deltas; other backends step-only | After P0 replay audit green |
 
 ### P1 — Multi-agent & skills (elevated)
@@ -1038,8 +1037,8 @@ Phase E legacy Web cleanup.
 | **5.9 Web UI rewind** | CLI only today | **Done** — Advanced trace column + diff modal |
 | **`research_summary` eval** | Phase 5.1 deliverable | **DONE** — `16_research_summary.yaml` |
 | **TS migration Phase D** | Advanced controls in TS only | MCP health **DONE**; rewind UI **DONE** |
-| **TS migration Phase E** | Remove legacy `web/static/` | Deprecated; delete after stable window |
-| **SSE stream integration tests** | Guard event ordering | **Started** — `sse-client.test.ts`; optional Python SSE test next |
+| **TS migration Phase E** | Remove legacy `web/static/` | **Done** — TS-only; build required |
+| **SSE stream integration tests** | Guard event ordering | **Done** — TS `sse-client.test.ts` + Python ordering test |
 | **Optional Playwright smoke** | E2E chat workflow | Non-blocking |
 | **Provider failover UX** | P6 backend exists | Web surfacing TBD |
 | **Chat long-reply expand UX** | **DONE** — Cursor-like full replies |

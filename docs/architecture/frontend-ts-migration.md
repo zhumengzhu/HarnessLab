@@ -1,12 +1,12 @@
 # Frontend TS Migration RFC (OpenClaw-style)
 
-Status: In progress (Phase A–C **complete**; Phase D **in progress**; Phase E **partial** —
-TS bundle is default when built)
+Status: **Complete** (Phases A–E). TS Web UI is the only shipped frontend;
+legacy `web/static/` removed.
 
 ## Why this exists
 
-HarnessLab's legacy Web UI lives under `web/static/` (`index.html` + `app.js`).
-Phase 5+ features (proposal review, budgets, hooks, checkpoints, streaming UX)
+HarnessLab previously shipped a legacy static Web UI (`web/static/`). Phase 5+
+features (proposal review, budgets, hooks, checkpoints, streaming UX)
 benefit from:
 
 - stronger type safety
@@ -24,8 +24,8 @@ documented in [`webui-design.md`](webui-design.md).
 
 - `webui/` scaffold exists (Vite + React + TS + typed API/SSE helpers).
 - Build target is `src/harnesslab/web/static_ts/` (`bun run build` or `./hl-serve build`).
-- `harnesslab serve` prefers the TS bundle when `static_ts/` exists
-  (`HARNESSLAB_WEB_UI_VERSION` defaults to `ts`; legacy fallback otherwise).
+- `harnesslab serve` serves the TS bundle from `static_ts/` after
+  `./hl-serve build` (503 when missing).
 - Phase B read surfaces are live in TS UI (sessions / trace / proposals / settings).
 - Phase C interactive parity shipped:
   - composer send + SSE `trace` / `reasoning_delta` / `assistant_delta` / `done` / `error`
@@ -34,14 +34,8 @@ documented in [`webui-design.md`](webui-design.md).
   - session fork; tool cards; stream error rendering
   - IME-safe composer; localStorage session/mode restore; model picker → `config.json`
   - **Main assistant replies always full** (Cursor-like); Thinking / Tool rows use left-side disclosure
-- Phase D started:
-  - proposal status transitions + gate-run UI
-  - budget usage + budget trace events in Advanced mode
-  - **MCP health** panel in Settings (startup probe from `mcp_health` in `/api/settings`)
-  - session checkpoints / rewind UI — **not yet** (CLI only today)
-- Phase E partial:
-  - TS bundle is default when built; legacy remains as fallback
-  - **Exit remaining:** delete `web/static/` after one stable release window
+- Phase D **complete** (proposal gates, budgets, MCP health, checkpoint rewind UI).
+- Phase E **complete**: legacy `web/static/` deleted; TS-only serve path.
 - **UI-1** (visual shell): design tokens; `app-shell` layout (sidebar + main + trace); composer dock — **shipped** — see [`webui-design.md`](webui-design.md) Visual evolution
 - **UI-2** (sidebar): session search/filter; removed legacy `SessionPicker` / `ChatTopBar` — **shipped**
 - **UI-3** (tool/thought): compact/detailed activity toggle + chat text size — **shipped**
@@ -107,12 +101,11 @@ Composer, SSE streaming, fork, slash commands, tool cards, model picker persiste
 
 **Exit:** Phase 5 Web surfaces fully hosted in TS frontend.
 
-### Phase E: default switch & legacy removal — PARTIAL
+### Phase E: default switch & legacy removal — **Done**
 
-- TS build output is **default** when `static_ts/` exists.
-- Legacy static UI: `HARNESSLAB_WEB_UI_VERSION=legacy` or missing bundle fallback.
-- **Deprecation:** `web/static/` is frozen; no new features land there.
-- **Exit (remaining):** remove legacy JS after one stable release window; drop env fallback.
+- TS build output is **required** for Web UI (`static_ts/` after `./hl-serve build`).
+- Legacy `web/static/` removed; `HARNESSLAB_WEB_UI_VERSION=legacy` raises at serve time.
+- Missing bundle → HTTP 503 with build instructions (no HTML fallback).
 
 ## Frontend testing coverage strategy
 
@@ -122,15 +115,15 @@ Layered tests so migration does not block feature delivery:
 | --- | --- | --- |
 | Utility | Pure helpers (`gate-utils`, `thoughtUtils`, …) | Active |
 | Component | RTL + Vitest on feature slices | Active |
-| **Stream integration** | SSE ordering: `trace` → deltas → `done`; error events | **Started** — `webui/src/lib/sse-client.test.ts` mocks `fetch` ReadableStream |
+| **Stream integration** | SSE ordering: `trace` → deltas → `done`; error events | **Done** — `sse-client.test.ts` + `test_web_sse_stream_event_ordering` |
 | E2E smoke (optional) | Playwright core chat workflow | Planned, non-blocking |
 
-**Stream integration plan (concrete):**
+**Stream integration:**
 
 1. **Unit (done):** `sse-client.test.ts` feeds synthetic SSE chunks; asserts handler call order and `stream:true` on POST body.
 2. **Reducer (done):** `liveTurnStream.test.ts` for delta → LiveTurn state.
-3. **Next (optional):** `useComposerController` integration test with mocked `postSse` returning a full turn script (tool trace + done).
-4. **Python side (future):** `tests/test_web_server.py` POST `/api/sessions/{id}/messages` with `stream:true` against `ReplayModel` / `simple` backend; assert event sequence in response body (complements TS tests).
+3. **Python (done):** `tests/test_web_server.py` asserts `trace` precedes `done` on live SSE turn.
+4. **Next (optional):** `useComposerController` integration test with mocked `postSse` returning a full turn script.
 
 ## Compatibility and rollout controls
 

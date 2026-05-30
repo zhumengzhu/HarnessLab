@@ -19,11 +19,12 @@ reference** for integrators and TS WebUI maintainers.
 
 | Method | Path | Description |
 | --- | --- | --- |
-| `GET` | `/` | Chat SPA (`web/static_ts/` when built, else `web/static/`) |
-| `GET` | `/static/*` | Legacy static files |
+| `GET` | `/` | Chat SPA (Vite bundle under `web/static_ts/` after `./hl-serve build`) |
 | `GET` | `/assets/*` | Vite hashed bundles (TS UI) |
 
-UI version: `HARNESSLAB_WEB_UI_VERSION=ts|legacy` (default `ts` when bundle exists).
+If the TS bundle is missing, `GET /` returns **503** with build instructions.
+Legacy `web/static/` was removed in Phase E; `HARNESSLAB_WEB_UI_VERSION=legacy`
+is rejected at startup.
 
 ## Read endpoints
 

@@ -287,3 +287,105 @@ def test_parse_response_tool_use() -> None:
     assert turn.decision.tool_name == "grep"
     assert turn.decision.tool_args == {"pattern": "foo"}
     assert turn.reasoning_text == "need grep"
+
+
+def test_replay_policy_none_for_reasoning_support_none() -> None:
+    entry = CatalogEntry(
+        model_id="claude-sonnet-4-6",
+        provider="anthropic",
+        api_family="anthropic_messages",
+        context_window=200_000,
+        thinking_default="disabled",
+        reasoning_support="none",
+    )
+    session = _session(
+        Message(
+            id="msg_t",
+            role="tool",
+            content="ok",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+            tool_call_id="toolu_01",
+        )
+    )
+    assert replay_policy(session, entry).include_reasoning_in_tool_loop is False
+
+
+def test_serialize_replays_thinking_from_reasoning_text_fallback() -> None:
+    """When thinking_blocks are absent, reasoning_text still replays on the wire."""
+
+    session = _session(
+        Message(
+            id="msg_u",
+            role="user",
+            content="grep",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+        ),
+        Message(
+            id="msg_a",
+            role="assistant",
+            content="",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+            reasoning_text="fallback thought",
+            tool_calls=[
+                {
+                    "id": "toolu_01",
+                    "type": "function",
+                    "function": {"name": "grep", "arguments": "{}"},
+                }
+            ],
+        ),
+        Message(
+            id="msg_t",
+            role="tool",
+            content="ok",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+            tool_call_id="toolu_01",
+        ),
+    )
+    composed = PromptComposer().build(session)
+    wire = serialize_messages(composed, session, _entry())
+    assistant = [m for m in wire["messages"] if m["role"] == "assistant"][-1]
+    assert assistant["content"][0]["type"] == "thinking"
+    assert assistant["content"][0]["thinking"] == "fallback thought"
+
+
+def test_serialize_omits_thinking_when_tool_assistant_has_no_reasoning() -> None:
+    session = _session(
+        Message(
+            id="msg_u",
+            role="user",
+            content="grep",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+        ),
+        Message(
+            id="msg_a",
+            role="assistant",
+            content="",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+            tool_calls=[
+                {
+                    "id": "toolu_01",
+                    "type": "function",
+                    "function": {"name": "grep", "arguments": "{}"},
+                }
+            ],
+        ),
+        Message(
+            id="msg_t",
+            role="tool",
+            content="ok",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+            tool_call_id="toolu_01",
+        ),
+    )
+    composed = PromptComposer().build(session)
+    wire = serialize_messages(composed, session, _entry())
+    assistant = [m for m in wire["messages"] if m["role"] == "assistant"][-1]
+    assert assistant["content"][0]["type"] == "tool_use"

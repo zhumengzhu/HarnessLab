@@ -548,11 +548,10 @@ list shows **user** and non-empty **assistant** replies; optional
 `reasoning_text` renders as collapsible **Thought** blocks. Internal
 `tool` / `system` rows remain in SQLite for the model loop.
 
-By default `serve` prefers the **TypeScript** bundle under
-`web/static_ts/` when it exists (`HARNESSLAB_WEB_UI_VERSION` defaults to
-`ts`). Set `HARNESSLAB_WEB_UI_VERSION=legacy` to force the static assets
-under `web/static/`. If the TS bundle is missing, the server falls back to
-legacy automatically.
+By default `serve` serves the **TypeScript** bundle under
+`web/static_ts/` (build with `./hl-serve build`). If the bundle is
+missing, static routes return **503** with build instructions — there is
+no legacy HTML fallback.
 
 ## Session auto-titles (Phase 3.2)
 

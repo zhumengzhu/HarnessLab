@@ -434,6 +434,31 @@ def test_web_sse_stream_returns_done_event(tmp_path: Path) -> None:
     assert body.index("event: trace") < body.index("event: done")
 
 
+def _sse_event_names(body: str) -> list[str]:
+    return [
+        line.removeprefix("event: ").strip()
+        for line in body.splitlines()
+        if line.startswith("event: ")
+    ]
+
+
+def test_web_sse_stream_event_ordering(tmp_path: Path) -> None:
+    """Trace fan-in events must precede the terminal done frame."""
+
+    port = _free_port()
+    runtime = _web_runtime(tmp_path)
+    _start_server(runtime, port)
+    base = f"http://127.0.0.1:{port}"
+
+    body = _post_sse(f"{base}/api/sessions", {"message": "ordering probe", "stream": True})
+    names = _sse_event_names(body)
+    assert names, "expected SSE events"
+    assert names[-1] == "done"
+    assert "trace" in names
+    assert names.index("trace") < names.index("done")
+    assert "event: error" not in body
+
+
 def test_web_checkpoints_list_preview_and_rewind(tmp_path: Path) -> None:
     port = _free_port()
     runtime = _web_runtime(tmp_path, max_steps=3)

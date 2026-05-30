@@ -258,3 +258,103 @@ def test_parse_response_thought_and_tool() -> None:
     assert turn.reasoning_text == "reason"
     assert turn.provider_extra is not None
     assert "thought_parts" in turn.provider_extra
+
+
+def test_replay_policy_none_for_reasoning_support_none() -> None:
+    entry = CatalogEntry(
+        model_id="gemini-2.5-flash",
+        provider="google",
+        api_family="google_generate_content",
+        context_window=1_048_576,
+        thinking_default="disabled",
+        reasoning_support="none",
+    )
+    session = _session(
+        Message(
+            id="msg_t",
+            role="tool",
+            content="ok",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+            tool_call_id="call_1",
+        )
+    )
+    assert replay_policy(session, entry).include_reasoning_in_tool_loop is False
+
+
+def test_serialize_replays_thought_from_reasoning_text_fallback() -> None:
+    session = _session(
+        Message(
+            id="msg_u",
+            role="user",
+            content="grep",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+        ),
+        Message(
+            id="msg_a",
+            role="assistant",
+            content="",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+            reasoning_text="fallback gemini thought",
+            tool_calls=[
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "grep", "arguments": "{}"},
+                }
+            ],
+        ),
+        Message(
+            id="msg_t",
+            role="tool",
+            content="ok",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+            tool_call_id="call_1",
+        ),
+    )
+    composed = PromptComposer().build(session)
+    wire = serialize_request(composed, session, _level_entry())
+    model_turn = next(m for m in wire["contents"] if m["role"] == "model")
+    assert model_turn["parts"][0]["thought"] is True
+    assert model_turn["parts"][0]["text"] == "fallback gemini thought"
+
+
+def test_replay_policy_after_closed_loop_includes_persisted_thoughts() -> None:
+    session = _session(
+        Message(
+            id="msg_a1",
+            role="assistant",
+            content="",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+            tool_calls=[
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "grep", "arguments": "{}"},
+                }
+            ],
+            provider_extra={
+                "thought_parts": [{"text": "earlier", "thought": True, "thought_signature": "s"}]
+            },
+        ),
+        Message(
+            id="msg_t1",
+            role="tool",
+            content="ok",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+            tool_call_id="call_1",
+        ),
+        Message(
+            id="msg_u2",
+            role="user",
+            content="continue",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+        ),
+    )
+    assert replay_policy(session, _level_entry()).include_reasoning_in_tool_loop is True
