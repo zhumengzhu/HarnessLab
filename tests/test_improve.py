@@ -1,4 +1,4 @@
-"""Unit tests for the improvement-proposal subsystem (Step 6)."""
+"""Unit tests for the improvement-proposal subsystem (Step 6, Observability v2)."""
 
 from __future__ import annotations
 
@@ -7,53 +7,108 @@ from pathlib import Path
 
 import pytest
 
-from harnesslab.core.models import TraceEvent
+from harnesslab.core.models import SpanEventRecord, SpanRecord
 from harnesslab.eval.task import TaskMetrics, TaskResult
 from harnesslab.improve import (
     Proposal,
     build_clusters,
     dedupe_against_existing,
     fingerprint_for_eval_failure,
-    fingerprint_for_event,
+    fingerprint_for_span,
     generate,
     to_markdown,
     write_proposal,
 )
-from harnesslab.replay import read_trace
+from harnesslab.telemetry.span_attributes import HARNESSLAB_TOOL_NAME
 
-FIXTURE = Path(__file__).resolve().parent / "fixtures" / "sample_failure_trace.jsonl"
+_TS = datetime(2026, 1, 1, tzinfo=UTC)
+
+
+def _span(
+    *,
+    name: str,
+    session_id: str = "ses_demo",
+    ok: bool | None = None,
+    events: list[SpanEventRecord] | None = None,
+    status_message: str | None = None,
+) -> SpanRecord:
+    attrs: dict = {HARNESSLAB_TOOL_NAME: name.split(".", 1)[-1]}
+    if ok is not None:
+        attrs["harnesslab.tool.ok"] = ok
+    return SpanRecord(
+        trace_id="t" * 32,
+        span_id=f"span_{name}_{session_id}"[:16].ljust(16, "0"),
+        name=name,
+        session_id=session_id,
+        turn_index=0,
+        start_time=_TS,
+        end_time=_TS,
+        duration_ms=1.0,
+        status="error" if ok is False else "ok",
+        status_message=status_message,
+        attributes=attrs,
+        events=events or [],
+    )
+
+
+def _denied_span(tool: str, reason: str, session_id: str = "ses_demo") -> SpanRecord:
+    return _span(
+        name=f"tool.{tool}",
+        session_id=session_id,
+        ok=False,
+        events=[
+            SpanEventRecord(
+                name="tool.policy_denied",
+                time=_TS,
+                attributes={"reason": reason},
+            )
+        ],
+    )
+
+
+def _invalid_args_span(tool: str, error: str, session_id: str = "ses_demo") -> SpanRecord:
+    return _span(
+        name=f"tool.{tool}",
+        session_id=session_id,
+        ok=False,
+        events=[
+            SpanEventRecord(
+                name="tool.args_invalid",
+                time=_TS,
+                attributes={"error": error},
+            )
+        ],
+    )
+
+
+def _sample_failure_spans() -> list[SpanRecord]:
+    """Span equivalents of ``fixtures/sample_failure_trace.jsonl``."""
+
+    return [
+        _denied_span("run_shell_safe", "command not in allowlist", "ses_demo_a"),
+        _denied_span("run_shell_safe", "command not in allowlist", "ses_demo_a"),
+        _invalid_args_span(
+            "write_file", "'path' is a required property", "ses_demo_b"
+        ),
+        _invalid_args_span(
+            "write_file", "'path' is a required property", "ses_demo_b"
+        ),
+    ]
 
 
 # ---------- fingerprint ----------
 
 
-def _evt(event_type: str, payload: dict | None = None) -> TraceEvent:
-    return TraceEvent(
-        run_id="r",
-        session_id="r",
-        event_type=event_type,
-        payload=payload or {},
-    )
-
-
 def test_fingerprint_tool_executed_ok_returns_none() -> None:
-    assert (
-        fingerprint_for_event(
-            _evt("tool_executed", {"tool": "read_file", "ok": True})
-        )
-        is None
-    )
+    assert fingerprint_for_span(_span(name="tool.read_file", ok=True)) is None
 
 
 def test_fingerprint_tool_executed_failure() -> None:
-    fp = fingerprint_for_event(
-        _evt(
-            "tool_executed",
-            {
-                "tool": "read_file",
-                "ok": False,
-                "error": "[Errno 2] No such file or directory: '/x'",
-            },
+    fp = fingerprint_for_span(
+        _span(
+            name="tool.read_file",
+            ok=False,
+            status_message="[Errno 2] No such file or directory: '/x'",
         )
     )
     assert fp == (
@@ -63,11 +118,8 @@ def test_fingerprint_tool_executed_failure() -> None:
 
 
 def test_fingerprint_tool_denied() -> None:
-    fp = fingerprint_for_event(
-        _evt(
-            "tool_denied",
-            {"tool": "run_shell_safe", "reason": "command not in allowlist"},
-        )
+    fp = fingerprint_for_span(
+        _denied_span("run_shell_safe", "command not in allowlist")
     )
     assert fp == (
         "policy_denial",
@@ -76,11 +128,8 @@ def test_fingerprint_tool_denied() -> None:
 
 
 def test_fingerprint_tool_invalid_args() -> None:
-    fp = fingerprint_for_event(
-        _evt(
-            "tool_invalid_args",
-            {"tool": "write_file", "error": "'path' is a required property"},
-        )
+    fp = fingerprint_for_span(
+        _invalid_args_span("write_file", "'path' is a required property")
     )
     assert fp == (
         "invalid_args",
@@ -88,16 +137,14 @@ def test_fingerprint_tool_invalid_args() -> None:
     )
 
 
-def test_fingerprint_non_failure_events_return_none() -> None:
-    for et in ("session_started", "user_input_received", "decision_made"):
-        assert fingerprint_for_event(_evt(et, {})) is None
+def test_fingerprint_non_failure_spans_return_none() -> None:
+    for name in ("harnesslab.turn", "llm.generate", "harnesslab.step"):
+        assert fingerprint_for_span(_span(name=name, ok=True)) is None
 
 
 def test_fingerprint_truncates_long_reason() -> None:
     long_reason = "x" * 200
-    fp = fingerprint_for_event(
-        _evt("tool_denied", {"tool": "run_shell_safe", "reason": long_reason})
-    )
+    fp = fingerprint_for_span(_denied_span("run_shell_safe", long_reason))
     assert fp is not None
     assert fp[1].endswith("…")
     assert len(fp[1].split(":", 2)[2]) <= 60
@@ -113,36 +160,29 @@ def test_fingerprint_for_eval_failure() -> None:
 
 
 def test_build_clusters_filters_below_min_occurrences() -> None:
-    events = [
-        _evt("tool_denied", {"tool": "run_shell_safe", "reason": "x"}),
-    ]
-    assert build_clusters(events, min_occurrences=2) == []
+    spans = [_denied_span("run_shell_safe", "x")]
+    assert build_clusters(spans, min_occurrences=2) == []
 
 
 def test_build_clusters_groups_identical_signatures() -> None:
-    events = [
-        _evt("tool_denied", {"tool": "run_shell_safe", "reason": "x"}),
-        _evt("tool_denied", {"tool": "run_shell_safe", "reason": "x"}),
-        _evt("tool_denied", {"tool": "run_shell_safe", "reason": "x"}),
-    ]
-    clusters = build_clusters(events, min_occurrences=2)
+    spans = [_denied_span("run_shell_safe", "x")] * 3
+    clusters = build_clusters(spans, min_occurrences=2)
     assert len(clusters) == 1
     assert clusters[0].occurrences == 3
     assert clusters[0].kind == "policy_denial"
-    assert len(clusters[0].sample_events) == 3  # cap is 3
+    assert len(clusters[0].sample_spans) == 3
 
 
 def test_build_clusters_sort_order_is_deterministic() -> None:
-    events = (
-        [_evt("tool_denied", {"tool": "a", "reason": "x"})] * 2
-        + [_evt("tool_denied", {"tool": "b", "reason": "y"})] * 5
+    spans = (
+        [_denied_span("a", "x")] * 2
+        + [_denied_span("b", "y")] * 5
     )
-    clusters = build_clusters(events, min_occurrences=2)
+    clusters = build_clusters(spans, min_occurrences=2)
     assert [c.occurrences for c in clusters] == [5, 2]
 
 
 def test_build_clusters_includes_eval_failures() -> None:
-    events = []
     eval_results = [
         TaskResult(
             task_name="t1",
@@ -154,7 +194,7 @@ def test_build_clusters_includes_eval_failures() -> None:
             final_reply="",
         )
     ]
-    clusters = build_clusters(events, eval_results=eval_results, min_occurrences=2)
+    clusters = build_clusters([], eval_results=eval_results, min_occurrences=2)
     assert len(clusters) == 1
     assert clusters[0].kind == "eval_regression"
     assert clusters[0].occurrences == 2
@@ -183,67 +223,63 @@ def _fixed_now() -> datetime:
 
 
 def test_generate_proposal_id_is_stable_for_signature() -> None:
-    events = [_evt("tool_denied", {"tool": "x", "reason": "y"})] * 2
-    p1 = generate(events, now=_fixed_now())[0]
-    p2 = generate(events, now=_fixed_now())[0]
+    spans = [_denied_span("x", "y")] * 2
+    p1 = generate(spans, now=_fixed_now())[0]
+    p2 = generate(spans, now=_fixed_now())[0]
     assert p1.id == p2.id
 
 
 def test_generate_against_shipped_fixture() -> None:
-    events = read_trace(FIXTURE)
-    proposals = generate(events, now=_fixed_now())
+    spans = _sample_failure_spans()
+    proposals = generate(spans, now=_fixed_now())
     kinds = {p.kind for p in proposals}
     assert kinds == {"policy_denial", "invalid_args"}
     assert all(p.occurrences == 2 for p in proposals)
     for p in proposals:
         assert p.status == "open"
-        assert p.suggested_actions  # templates returned non-empty
-        assert p.related_files  # template hints attached
+        assert p.suggested_actions
+        assert p.related_files
         assert p.id.startswith("prop_202605232247_")
 
 
 def test_generate_min_occurrences_threshold() -> None:
-    events = read_trace(FIXTURE)
-    assert generate(events, min_occurrences=3, now=_fixed_now()) == []
+    spans = _sample_failure_spans()
+    assert generate(spans, min_occurrences=3, now=_fixed_now()) == []
 
 
 # ---------- dedupe ----------
 
 
 def test_dedupe_returns_input_when_dir_missing(tmp_path: Path) -> None:
-    proposals = generate(read_trace(FIXTURE), now=_fixed_now())
+    proposals = generate(_sample_failure_spans(), now=_fixed_now())
     out = dedupe_against_existing(proposals, tmp_path / "does-not-exist")
     assert out == proposals
 
 
 def test_dedupe_drops_signature_when_open_proposal_exists(tmp_path: Path) -> None:
-    proposals = generate(read_trace(FIXTURE), now=_fixed_now())
-    # Persist all proposals to disk so signatures are "open".
+    proposals = generate(_sample_failure_spans(), now=_fixed_now())
     for p in proposals:
         write_proposal(p, tmp_path)
-    # Second run should yield zero new proposals.
     second = dedupe_against_existing(
-        generate(read_trace(FIXTURE), now=_fixed_now()),
+        generate(_sample_failure_spans(), now=_fixed_now()),
         tmp_path,
     )
     assert second == []
 
 
 def test_dedupe_ignores_accepted_proposals(tmp_path: Path) -> None:
-    proposals = generate(read_trace(FIXTURE), now=_fixed_now())
+    proposals = generate(_sample_failure_spans(), now=_fixed_now())
     for p in proposals:
         path = write_proposal(p, tmp_path)
-        # Flip status to accepted in the file.
         content = path.read_text(encoding="utf-8").replace(
             "status: open", "status: accepted", 1
         )
         path.write_text(content, encoding="utf-8")
 
     second = dedupe_against_existing(
-        generate(read_trace(FIXTURE), now=_fixed_now()),
+        generate(_sample_failure_spans(), now=_fixed_now()),
         tmp_path,
     )
-    # Accepted proposals don't block re-emission.
     assert {p.cluster_signature for p in second} == {
         p.cluster_signature for p in proposals
     }
@@ -251,16 +287,16 @@ def test_dedupe_ignores_accepted_proposals(tmp_path: Path) -> None:
 
 def test_dedupe_ignores_unrelated_files_in_dir(tmp_path: Path) -> None:
     (tmp_path / "README.md").write_text("hi\n", encoding="utf-8")
-    proposals = generate(read_trace(FIXTURE), now=_fixed_now())
+    proposals = generate(_sample_failure_spans(), now=_fixed_now())
     out = dedupe_against_existing(proposals, tmp_path)
-    assert out == proposals  # README.md is not a proposal
+    assert out == proposals
 
 
 # ---------- render ----------
 
 
 def _sample_proposal() -> Proposal:
-    return generate(read_trace(FIXTURE), now=_fixed_now())[0]
+    return generate(_sample_failure_spans(), now=_fixed_now())[0]
 
 
 def test_to_markdown_contains_front_matter_and_checklist() -> None:
@@ -277,7 +313,7 @@ def test_to_markdown_contains_front_matter_and_checklist() -> None:
 def test_to_markdown_includes_sample_events_section() -> None:
     md = to_markdown(_sample_proposal())
     assert "## Sample events" in md
-    assert "session=`ses_demo" in md  # sessions from the fixture appear
+    assert "session=`ses_demo" in md
 
 
 def test_write_proposal_persists_file(tmp_path: Path) -> None:
@@ -296,31 +332,25 @@ def test_generate_with_no_inputs_returns_empty() -> None:
     assert generate([], now=_fixed_now()) == []
 
 
-def test_generate_with_only_successful_events_returns_empty() -> None:
-    events = [
-        _evt("tool_executed", {"tool": "read_file", "ok": True}),
-        _evt("session_started", {"goal": "x"}),
-    ]
-    assert generate(events, now=_fixed_now()) == []
+def test_generate_with_only_successful_spans_returns_empty() -> None:
+    spans = [_span(name="tool.read_file", ok=True)]
+    assert generate(spans, now=_fixed_now()) == []
 
 
 # ---------- defensive: malformed payload ----------
 
 
 def test_fingerprint_handles_missing_payload_fields() -> None:
-    # No 'tool', no 'error': fingerprint still computes a stable key.
-    fp = fingerprint_for_event(_evt("tool_executed", {"ok": False}))
-    assert fp == ("tool_failure", "tool_executed:?:")
+    fp = fingerprint_for_span(_span(name="tool.unknown", ok=False))
+    assert fp == ("tool_failure", "tool_executed:unknown:")
 
 
 # ---------- defensive: proposals_dir with malformed file ----------
 
 
 def test_dedupe_skips_unreadable_proposal_files(tmp_path: Path) -> None:
-    # Create a prop_*.md without front-matter to make sure the parser
-    # is robust.
     (tmp_path / "prop_garbage.md").write_text("no front matter here\n", encoding="utf-8")
-    proposals = generate(read_trace(FIXTURE), now=_fixed_now())
+    proposals = generate(_sample_failure_spans(), now=_fixed_now())
     out = dedupe_against_existing(proposals, tmp_path)
     assert out == proposals
 

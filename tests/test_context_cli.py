@@ -9,8 +9,9 @@ from pathlib import Path
 
 from harnesslab.cli import build_runtime
 from harnesslab.core.models import TraceEvent
-from harnesslab.replay import read_trace
+from harnesslab.replay.span_reader import read_spans
 from harnesslab.telemetry.aggregate import aggregate, render_metrics
+from harnesslab.telemetry.recorder_factory import default_spans_path
 
 
 def _evt(
@@ -96,84 +97,16 @@ def test_render_metrics_mentions_context_line() -> None:
     assert "overflow_recoveries=0" in out
 
 
-# ---------- collect_context_snapshots helper ----------
-
-
-def test_collect_context_snapshots_filters_by_session_and_orders_by_time(
-    tmp_path: Path,
-) -> None:
-    from harnesslab.cli import _collect_context_snapshots
-
-    base = datetime(2026, 5, 23, 10, 0, tzinfo=UTC)
-    events = [
-        _evt(
-            "model_call",
-            {"context": {
-                "conversation_tokens": 50, "message_count": 2,
-                "limit_tokens": 1000, "compaction_threshold_tokens": 800,
-                "usage_ratio": 0.05, "threshold_ratio": 0.0625,
-            }},
-            session_id="s_a",
-            when=base,
-        ),
-        _evt(
-            "model_call",
-            {"context": {
-                "conversation_tokens": 99, "message_count": 3,
-                "limit_tokens": 1000, "compaction_threshold_tokens": 800,
-                "usage_ratio": 0.099, "threshold_ratio": 0.124,
-            }},
-            session_id="s_b",
-            when=base.replace(minute=1),
-        ),
-        _evt(
-            "model_call",
-            {"context": {
-                "conversation_tokens": 75, "message_count": 4,
-                "limit_tokens": 1000, "compaction_threshold_tokens": 800,
-                "usage_ratio": 0.075, "threshold_ratio": 0.09375,
-            }},
-            session_id="s_a",
-            when=base.replace(minute=2),
-        ),
-    ]
-    rows = _collect_context_snapshots(events, session_id="s_a")
-    assert [r["conversation_tokens"] for r in rows] == [50, 75]
-
-    all_rows = _collect_context_snapshots(events, session_id=None)
-    assert len(all_rows) == 3
-    assert all_rows == sorted(all_rows, key=lambda r: r["created_at"])
-
-
-def test_collect_context_snapshots_skips_model_calls_without_context() -> None:
-    from harnesslab.cli import _collect_context_snapshots
-
-    events = [
-        _evt("model_call", {"latency_ms": 1.0}),
-        _evt(
-            "model_call",
-            {"context": {
-                "conversation_tokens": 5, "message_count": 1,
-                "limit_tokens": 100, "compaction_threshold_tokens": 80,
-                "usage_ratio": 0.05, "threshold_ratio": 0.0625,
-            }},
-        ),
-    ]
-    rows = _collect_context_snapshots(events, session_id=None)
-    assert len(rows) == 1
-    assert rows[0]["conversation_tokens"] == 5
-
-
 # ---------- end-to-end CLI smoke ----------
 
 
-def _seed_trace_with_one_call(workspace: Path) -> Path:
+def _seed_spans_with_one_call(workspace: Path) -> Path:
     loop = build_runtime(workspace)
     session = loop.start(goal="cli context smoke")
     loop.run_turn(session.id, "hello")
-    trace_path = workspace / ".harnesslab" / "trace.jsonl"
-    assert trace_path.exists()
-    return trace_path
+    spans_path = default_spans_path(workspace)
+    assert spans_path.exists()
+    return spans_path
 
 
 def _run_cli(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -187,8 +120,8 @@ def _run_cli(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
 
 
 def test_context_show_prints_human_summary(tmp_path: Path) -> None:
-    trace_path = _seed_trace_with_one_call(tmp_path)
-    out = _run_cli("context", str(trace_path), "show", cwd=tmp_path)
+    spans_path = _seed_spans_with_one_call(tmp_path)
+    out = _run_cli("context", str(spans_path), "show", cwd=tmp_path)
     assert out.returncode == 0, out.stderr
     body = out.stdout
     assert "ContextSnapshot summary" in body
@@ -199,8 +132,8 @@ def test_context_show_prints_human_summary(tmp_path: Path) -> None:
 
 
 def test_context_show_json_mode_emits_machine_readable(tmp_path: Path) -> None:
-    trace_path = _seed_trace_with_one_call(tmp_path)
-    out = _run_cli("context", str(trace_path), "show", "--json", cwd=tmp_path)
+    spans_path = _seed_spans_with_one_call(tmp_path)
+    out = _run_cli("context", str(spans_path), "show", "--json", cwd=tmp_path)
     assert out.returncode == 0, out.stderr
     payload = json.loads(out.stdout)
     assert payload["model_calls_with_context"] == 1
@@ -209,8 +142,8 @@ def test_context_show_json_mode_emits_machine_readable(tmp_path: Path) -> None:
 
 
 def test_context_series_prints_one_row_per_call(tmp_path: Path) -> None:
-    trace_path = _seed_trace_with_one_call(tmp_path)
-    out = _run_cli("context", str(trace_path), "series", cwd=tmp_path)
+    spans_path = _seed_spans_with_one_call(tmp_path)
+    out = _run_cli("context", str(spans_path), "series", cwd=tmp_path)
     assert out.returncode == 0, out.stderr
     lines = out.stdout.strip().splitlines()
     # Header + separator + at least one data row.
@@ -219,17 +152,25 @@ def test_context_series_prints_one_row_per_call(tmp_path: Path) -> None:
     assert "conv_tok" in lines[0]
 
 
-def test_context_show_handles_trace_with_no_snapshots(tmp_path: Path) -> None:
-    # Hand-write a trace with model_call but no context block.
-    trace_path = tmp_path / "bare.jsonl"
+def test_context_show_handles_spans_with_no_snapshots(tmp_path: Path) -> None:
+    spans_path = tmp_path / "bare.jsonl"
+    end = datetime(2026, 5, 23, 22, 0, tzinfo=UTC)
     payload = {
-        "run_id": "r1", "session_id": "s1", "event_type": "model_call",
-        "payload": {"latency_ms": 1.2}, "created_at": "2026-05-23T22:00:00+00:00",
+        "resource": {},
+        "trace_id": "t1",
+        "span_id": "s1",
+        "name": "llm.generate",
+        "session_id": "s1",
+        "turn_index": 0,
+        "start_time": end.isoformat(),
+        "end_time": end.isoformat(),
+        "duration_ms": 1.2,
+        "metrics": {"latency_ms": 1.2},
     }
-    trace_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
-    out = _run_cli("context", str(trace_path), "show", cwd=tmp_path)
+    spans_path.write_text(json.dumps(payload) + "\n", encoding="utf-8")
+    out = _run_cli("context", str(spans_path), "show", cwd=tmp_path)
     assert out.returncode == 0, out.stderr
-    assert "(no model_call events with context found)" in out.stdout
+    assert "(no llm.generate spans with context found)" in out.stdout
 
 
 def test_context_show_session_filter_isolates_one_session(tmp_path: Path) -> None:
@@ -241,23 +182,20 @@ def test_context_show_session_filter_isolates_one_session(tmp_path: Path) -> Non
     s2 = loop.start(goal="beta")
     loop.run_turn(s2.id, "second")
 
-    trace_path = tmp_path / ".harnesslab" / "trace.jsonl"
-    events = read_trace(trace_path)
-    s1_calls = [
-        e for e in events
-        if e.event_type == "model_call" and e.session_id == s1.id
-    ]
+    spans_path = default_spans_path(tmp_path)
+    spans = read_spans(spans_path)
+    s1_calls = [s for s in spans if s.name == "llm.generate" and s.session_id == s1.id]
     assert s1_calls, "fixture sanity"
 
     out = _run_cli(
-        "context", str(trace_path), "show", "--session-id", s1.id, cwd=tmp_path
+        "context", str(spans_path), "show", "--session-id", s1.id, cwd=tmp_path
     )
     assert out.returncode == 0, out.stderr
     assert f"session_filter:           {s1.id}" in out.stdout
     assert "model_calls_with_context: 1" in out.stdout
 
 
-def test_context_show_errors_on_missing_trace_path(tmp_path: Path) -> None:
+def test_context_show_errors_on_missing_spans_path(tmp_path: Path) -> None:
     out = _run_cli("context", str(tmp_path / "nope.jsonl"), "show", cwd=tmp_path)
     assert out.returncode != 0
-    assert "trace file not found" in (out.stderr + out.stdout)
+    assert "spans file not found" in (out.stderr + out.stdout)

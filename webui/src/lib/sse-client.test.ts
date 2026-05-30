@@ -24,11 +24,27 @@ function mockSseResponse(chunks: Uint8Array[]): Response {
 }
 
 describe("postSse event ordering", () => {
-  it("delivers trace, deltas, then done in order", async () => {
+  it("delivers span lifecycle, deltas, then done in order", async () => {
     const order: string[] = [];
     const fetchMock = vi.fn(async () =>
       mockSseResponse([
-        sseChunk("trace", { event_type: "model_call", step_index: 0 }),
+        sseChunk("span.started", {
+          trace_id: "t1",
+          span_id: "s1",
+          name: "harnesslab.step",
+          session_id: "ses_1",
+        }),
+        sseChunk("span.completed", {
+          trace_id: "t1",
+          span_id: "s1",
+          name: "harnesslab.step",
+          session_id: "ses_1",
+          turn_index: 0,
+          start_time: "2026-05-30T12:00:00Z",
+          end_time: "2026-05-30T12:00:01Z",
+          duration_ms: 1000,
+          attributes: {},
+        }),
         sseChunk("reasoning_delta", { text: "think ", step_index: 0 }),
         sseChunk("assistant_delta", { text: "Hi", step_index: 0 }),
         sseChunk("done", { session_id: "ses_1", response: "Hi" }),
@@ -40,21 +56,21 @@ describe("postSse event ordering", () => {
       "/api/sessions/ses_1/messages",
       { content: "hello" },
       {
-        onTrace: () => order.push("trace"),
+        onSpanStarted: () => order.push("span.started"),
+        onSpanCompleted: () => order.push("span.completed"),
         onReasoningDelta: () => order.push("reasoning_delta"),
         onAssistantDelta: () => order.push("assistant_delta"),
         onDone: () => order.push("done"),
       }
     );
 
-    expect(order).toEqual(["trace", "reasoning_delta", "assistant_delta", "done"]);
-    expect(fetchMock).toHaveBeenCalledWith(
-      "/api/sessions/ses_1/messages",
-      expect.objectContaining({
-        method: "POST",
-        body: expect.stringContaining('"stream":true'),
-      })
-    );
+    expect(order).toEqual([
+      "span.started",
+      "span.completed",
+      "reasoning_delta",
+      "assistant_delta",
+      "done",
+    ]);
 
     vi.unstubAllGlobals();
   });

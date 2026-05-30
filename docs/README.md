@@ -21,16 +21,17 @@ payload shape, update the relevant file and tests in the same PR.
 | Doc | Topics |
 | --- | --- |
 | [`architecture/overview.md`](architecture/overview.md) | System map, loop, compaction, Web API, memory, skills |
-| [`architecture/data-model.md`](architecture/data-model.md) | Session, Message, TraceEvent, ContextSnapshot |
+| [`architecture/data-model.md`](architecture/data-model.md) | Session, Message, SpanRecord, ContextSnapshot |
 | [`architecture/tool-runtime.md`](architecture/tool-runtime.md) | Tool registry, policy, audit events |
 | [`architecture/compaction.md`](architecture/compaction.md) | Auto/manual compaction, thinking after compact |
 | [`architecture/web-api.md`](architecture/web-api.md) | Localhost HTTP + SSE contract |
-| [`architecture/webui-design.md`](architecture/webui-design.md) | Chat UX, SSE, Thinking/Thought, composer slash commands; OpenClaw layout reference & UI phases |
+| [`architecture/webui-design.md`](architecture/webui-design.md) | Chat UX, SSE span lifecycle, Trace Tab (Jaeger-inspired), Thinking/Thought, composer |
 | [`architecture/provider-expansion.md`](architecture/provider-expansion.md) | ModelPort adapters, catalog, transforms |
 | [`architecture/pricing.md`](architecture/pricing.md) | Usage normalization, pricing catalog, cost estimates |
 | [`architecture/model-parameters.md`](architecture/model-parameters.md) | Thinking / effort operator controls |
 | [`architecture/frontend-ts-migration.md`](architecture/frontend-ts-migration.md) | TS WebUI migration phases and status |
 | [`architecture/multi-agent-exploration.md`](architecture/multi-agent-exploration.md) | Supervisor PoC, spawn_sub_agent |
+| [`architecture/observability-v2.md`](architecture/observability-v2.md) | Span-first telemetry (**shipped**): per-turn traces, SSE span lifecycle, replay algorithm |
 | [`architecture/diagram-conventions.md`](architecture/diagram-conventions.md) | Mermaid style rules |
 
 ## Research (non-normative)
@@ -61,7 +62,7 @@ payload shape, update the relevant file and tests in the same PR.
 
 1. [`why-harnesslab.md`](why-harnesslab.md)
 2. Run `uv run harnesslab run "hello" --model simple` and open
-   `.harnesslab/trace.jsonl`
+   `.harnesslab/spans.jsonl`
 3. [`architecture/overview.md`](architecture/overview.md) — Agent loop section
 4. [`architecture/tool-runtime.md`](architecture/tool-runtime.md)
 5. `uv run harnesslab eval`

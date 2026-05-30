@@ -7,9 +7,10 @@ import { postSse } from "../../lib/sse-client";
 import type {
   ContextSnapshot,
   MessageItem,
+  SpanRecordItem,
+  SpanStartedPayload,
   ToolCard,
   TurnPayload,
-  TraceEventItem,
 } from "../../lib/schemas";
 import type { TurnEnrichment } from "../../lib/turnEnrichments";
 import {
@@ -20,9 +21,12 @@ import type { LiveTurnState } from "../live-turn/liveTurnReducer";
 import {
   createLiveTurn,
   finalizeLiveTurn,
-  reduceLiveTurn,
   stopLiveTurn,
 } from "../live-turn/liveTurnReducer";
+import {
+  reduceLiveTurnSpan,
+  type LiveSpanSignal,
+} from "../live-turn/liveTurnSpanReducer";
 import { applyLiveTurnDelta } from "../live-turn/liveTurnStream";
 import { isSlashPaletteOpen, useComposerSlashMenu } from "./useComposerSlashMenu";
 
@@ -31,7 +35,8 @@ type UseComposerControllerArgs = {
   queryClient: QueryClient;
   onBeforeSend: () => void;
   onAdoptSession: (id: string) => void;
-  onAppendTraceEvent: (evt: TraceEventItem) => void;
+  onAppendSpan: (span: SpanRecordItem) => void;
+  onSpanStarted?: (payload: SpanStartedPayload) => void;
   onSetStreamMessages: (messages: MessageItem[] | null) => void;
   onSetStreamToolCards: (cards: ToolCard[]) => void;
   onContextSnapshot?: (ctx: ContextSnapshot | null) => void;
@@ -70,7 +75,8 @@ export function useComposerController(
     queryClient,
     onBeforeSend,
     onAdoptSession,
-    onAppendTraceEvent,
+    onAppendSpan,
+    onSpanStarted,
     onSetStreamMessages,
     onSetStreamToolCards,
     onContextSnapshot,
@@ -119,9 +125,9 @@ export function useComposerController(
     return trimmed;
   }
 
-  function applyTraceToLiveTurn(evt: TraceEventItem) {
+  function applySpanToLiveTurn(signal: LiveSpanSignal) {
     if (!liveTurnRef.current) return;
-    liveTurnRef.current = reduceLiveTurn(liveTurnRef.current, evt);
+    liveTurnRef.current = reduceLiveTurnSpan(liveTurnRef.current, signal);
     if (liveTurnRef.current && onLiveTurnEvent) {
       onLiveTurnEvent({ ...liveTurnRef.current });
     }
@@ -145,10 +151,19 @@ export function useComposerController(
         path,
         { message: outgoing },
         {
-          onTrace: (payload) => {
-            const evt = payload as TraceEventItem;
-            onAppendTraceEvent(evt);
-            applyTraceToLiveTurn(evt);
+          onSpanStarted: (payload: SpanStartedPayload) => {
+            applySpanToLiveTurn({ kind: "started", payload });
+            onSpanStarted?.(payload);
+          },
+          onSpanEvent: (payload) => {
+            applySpanToLiveTurn({ kind: "event", payload });
+          },
+          onSpanCompleted: (record) => {
+            onAppendSpan(record);
+            applySpanToLiveTurn({ kind: "completed", record });
+          },
+          onSpanLink: (payload) => {
+            applySpanToLiveTurn({ kind: "link", payload });
           },
           onReasoningDelta: (payload) => {
             if (!liveTurnRef.current) return;

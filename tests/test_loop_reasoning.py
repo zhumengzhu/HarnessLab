@@ -7,7 +7,7 @@ from pathlib import Path
 from harnesslab.core.config import RuntimeLimits
 from harnesslab.core.loop import HarnessLoop
 from harnesslab.core.models import Decision, Session
-from harnesslab.core.replay import ReplayTraceRecorder
+from harnesslab.core.replay import ReplaySpanRecorder
 from harnesslab.policy.default_policy import DefaultPolicy
 from harnesslab.session.in_memory import InMemorySessionStore
 from harnesslab.tools.file_tools import WriteFileTool
@@ -46,7 +46,7 @@ def test_loop_persists_reasoning_on_tool_assistant_message(tmp_path: Path) -> No
         policy=DefaultPolicy(workspace_root=tmp_path),
         sessions=store,
         tools=tools,
-        trace=ReplayTraceRecorder(),
+        spans=ReplaySpanRecorder(),
     )
     session = loop.start(goal="reasoning tool turn")
     loop.run_session(session.id, "write out.txt")
@@ -89,7 +89,7 @@ def test_loop_persists_empty_reasoning_for_thinking_tool_without_capture(
         policy=DefaultPolicy(workspace_root=tmp_path),
         sessions=store,
         tools=tools,
-        trace=ReplayTraceRecorder(),
+        spans=ReplaySpanRecorder(),
     )
     session = loop.start(goal="thinking tool without reasoning")
     loop.run_turn(session.id, "write out.txt")

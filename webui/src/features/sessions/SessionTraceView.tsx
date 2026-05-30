@@ -4,7 +4,7 @@ import { CheckpointPanel } from "./CheckpointPanel";
 import { TracePanel } from "../trace/TracePanel";
 import { TraceSpanPanel } from "../trace/TraceSpanPanel";
 import { TraceRawJsonlPanel } from "../trace/TraceRawJsonlPanel";
-import type { TraceEventItem } from "../../lib/schemas";
+import type { SpanRecordItem } from "../../lib/schemas";
 
 export type TraceViewMode = "spans" | "events" | "jsonl";
 
@@ -12,9 +12,10 @@ type SessionTraceViewProps = {
   sessionId: string | null;
   loading: boolean;
   error: string | null;
-  rows: TraceEventItem[];
-  hasStreamTrace: boolean;
-  onClearStreamTrace: () => void;
+  spans: SpanRecordItem[];
+  hasStreamSpans: boolean;
+  isLive?: boolean;
+  onClearStreamSpans: () => void;
   onRewindSuccess: () => void;
 };
 
@@ -23,9 +24,10 @@ export function SessionTraceView(props: SessionTraceViewProps) {
     sessionId,
     loading,
     error,
-    rows,
-    hasStreamTrace,
-    onClearStreamTrace,
+    spans,
+    hasStreamSpans,
+    isLive = false,
+    onClearStreamSpans,
     onRewindSuccess,
   } = props;
 
@@ -33,10 +35,9 @@ export function SessionTraceView(props: SessionTraceViewProps) {
   const { t } = useI18n();
 
   return (
-    <div className="session-trace-view">
-      <CheckpointPanel sessionId={sessionId} onRewindSuccess={onRewindSuccess} />
-
-      <div className="trace-view-toggle" role="tablist" aria-label={t("trace.viewMode")}>
+    <div className="session-trace-view session-trace-view-jaeger">
+      <div className="trace-jaeger-chrome">
+        <div className="trace-view-toggle trace-jaeger-mode-tabs" role="tablist" aria-label={t("trace.viewMode")}>
         <button
           type="button"
           role="tab"
@@ -44,7 +45,7 @@ export function SessionTraceView(props: SessionTraceViewProps) {
           className={viewMode === "spans" ? "active" : undefined}
           onClick={() => setViewMode("spans")}
         >
-          {t("trace.tabSpans")}
+          {t("trace.tabTimeline")}
         </button>
         <button
           type="button"
@@ -64,6 +65,11 @@ export function SessionTraceView(props: SessionTraceViewProps) {
         >
           {t("trace.tabJsonl")}
         </button>
+        </div>
+        <details className="trace-checkpoint-fold trace-checkpoint-inline">
+          <summary>{t("trace.checkpointsFold")}</summary>
+          <CheckpointPanel sessionId={sessionId} onRewindSuccess={onRewindSuccess} />
+        </details>
       </div>
 
       {viewMode === "spans" ? (
@@ -71,24 +77,25 @@ export function SessionTraceView(props: SessionTraceViewProps) {
           selectedSessionId={sessionId}
           loading={loading}
           error={error}
-          rows={rows}
+          spans={spans}
+          isLive={isLive}
         />
       ) : viewMode === "events" ? (
         <TracePanel
           selectedSessionId={sessionId}
           loading={loading}
           error={error}
-          rows={rows}
-          hasStreamTrace={hasStreamTrace}
-          onClearStreamTrace={onClearStreamTrace}
+          spans={spans}
+          hasStreamSpans={hasStreamSpans}
+          onClearStreamSpans={onClearStreamSpans}
         />
       ) : (
         <TraceRawJsonlPanel
           sessionId={sessionId}
-          liveRows={rows}
+          liveSpans={spans}
           loading={loading}
           error={error}
-          hasStreamTrace={hasStreamTrace}
+          hasStreamSpans={hasStreamSpans}
         />
       )}
     </div>

@@ -28,7 +28,7 @@ documented in [`webui-design.md`](webui-design.md).
   `./hl-serve build` (503 when missing).
 - Phase B read surfaces are live in TS UI (sessions / trace / proposals / settings).
 - Phase C interactive parity shipped:
-  - composer send + SSE `trace` / `reasoning_delta` / `assistant_delta` / `done` / `error`
+  - composer send + SSE `span.started` / `span.event` / `span.completed` / `span.link` + `reasoning_delta` / `assistant_delta` / `done` / `error`
   - `/` slash palette via `GET /api/composer/commands`
   - Cursor-style `/skillname`; `/compact`, `/remember`, `/remember-global`
   - session fork; tool cards; stream error rendering
@@ -36,7 +36,7 @@ documented in [`webui-design.md`](webui-design.md).
   - **Main assistant replies always full** (Cursor-like); Thinking / Tool rows use left-side disclosure
 - Phase D **complete** (proposal gates, budgets, MCP health, checkpoint rewind UI).
 - Phase E **complete**: legacy `web/static/` deleted; TS-only serve path.
-- **UI-1** (visual shell): design tokens; `app-shell` layout (sidebar + main + trace); composer dock — **shipped** — see [`webui-design.md`](webui-design.md) Visual evolution
+- **UI-1** (visual shell): design tokens; `app-shell` layout (sidebar + main); composer dock — **shipped** — see [`webui-design.md`](webui-design.md) Visual evolution
 - **UI-2** (sidebar): session search/filter; removed legacy `SessionPicker` / `ChatTopBar` — **shipped**
 - **UI-3** (tool/thought): compact/detailed activity toggle + chat text size — **shipped**
 - **UI-4a** (compact button + sidebar rename) — **shipped**
@@ -62,9 +62,9 @@ Non-goals:
 
 1. **Typed boundary first**: maintain TS schemas aligned with documented JSON payloads.
 2. **Feature modules**: `sessions`, `trace`, `proposals`, `settings`, `composer` as slices.
-3. **Single stream abstraction**: one SSE client layer for trace/delta/done/error.
+3. **Single stream abstraction**: one SSE client layer for span lifecycle + delta/done/error.
 4. **State is explicit**: loading/error/empty states per feature module.
-5. **Progressive migration**: legacy static UI remains fallback until Phase E exit.
+5. **Progressive migration**: Phase E complete — TS bundle required; missing build → HTTP 503.
 
 ## Target stack
 
@@ -96,7 +96,7 @@ Composer, SSE streaming, fork, slash commands, tool cards, model picker persiste
 | Budget usage / budget events in session workspace | Done |
 | MCP health in Settings | Done (needs `tools.mcp_servers` in config) |
 | Hook event visualization in trace | Partial (trace labels exist) |
-| Session checkpoints list + rewind confirm + file diff preview | **Done** — Advanced trace column |
+| Session checkpoints list + rewind confirm + file diff preview | **Done** — Trace Tab Checkpoints fold |
 | Provider failover surfacing | Planned |
 
 **Exit:** Phase 5 Web surfaces fully hosted in TS frontend.
@@ -145,7 +145,7 @@ flowchart TB
 | --- | --- | --- |
 | Utility | Pure helpers (`gate-utils`, `thoughtUtils`, …) | Active |
 | Component | RTL + Vitest on feature slices | Active |
-| **Stream integration** | SSE ordering: `trace` → deltas → `done`; error events | **Done** — `sse-client.test.ts` + `test_web_sse_stream_event_ordering` |
+| **Stream integration** | SSE ordering: span lifecycle → deltas → `done`; error events | **Done** — `sse-client.test.ts` + `test_web_sse_stream_event_ordering` |
 | E2E smoke | Playwright UI shell smoke | **Done** — `webui/e2e/smoke.spec.ts` |
 | E2E chat workflow | Composer 发消息 + SSE 流式回复 | **未做**（可选后续） |
 
@@ -153,7 +153,7 @@ flowchart TB
 
 1. **Unit (done):** `sse-client.test.ts` feeds synthetic SSE chunks; asserts handler call order and `stream:true` on POST body.
 2. **Reducer (done):** `liveTurnStream.test.ts` for delta → LiveTurn state.
-3. **Python (done):** `tests/test_web_server.py` asserts `trace` precedes `done` on live SSE turn.
+3. **Python (done):** `tests/test_web_server.py` asserts span lifecycle precedes `done` on live SSE turn.
 4. **Next (optional):** `useComposerController` integration test with mocked `postSse` returning a full turn script.
 5. **Next (optional E2E):** Playwright 点击 Composer、`waitForResponse` / 等待 DOM，**仍走真实 API**，不用 mock fetch。
 
@@ -161,7 +161,7 @@ Agent 浏览器（MCP Playwright）与 Web UI E2E 是两种 Playwright 用途，
 
 ## Compatibility and rollout controls
 
-- Env: `HARNESSLAB_WEB_UI_VERSION=legacy|ts`
+- Env: `HARNESSLAB_WEB_UI_VERSION=ts` (default; `legacy` rejected at serve time)
 - Config: `web_ui_version` in operator config
 - CI: Python tests + `cd webui && bun run check && bun test && bun run build && bun run test:e2e`
 - `./hl-serve build` / `./hl-serve restart --build` for local frontend refresh

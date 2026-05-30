@@ -1,5 +1,3 @@
-import type { TraceEventItem } from "../../lib/schemas";
-
 type PromptBlock = {
   name: string;
   role: string;
@@ -102,6 +100,6 @@ export function summarizeModelCall(payload: Record<string, unknown>): string {
   return parts.join(" · ") || "model call";
 }
 
-export function isModelCallEvent(evt: TraceEventItem): boolean {
-  return evt.event_type === "model_call" || evt.event_type === "model_call_started";
+export function isLlmGenerateSpan(name: string): boolean {
+  return name === "llm.generate";
 }

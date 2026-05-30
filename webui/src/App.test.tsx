@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 
@@ -87,9 +87,11 @@ describe("App shell", () => {
       expect(screen.getByRole("tablist", { name: /会话视图|Session views/ })).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByRole("tab", { name: /追踪|Trace/ }));
+    const sessionTabs = screen.getByRole("tablist", { name: /会话视图|Session views/ });
+    fireEvent.click(within(sessionTabs).getByRole("tab", { name: /追踪|Trace/ }));
     await waitFor(() => {
-      expect(screen.getByRole("heading", { name: /Trace 跨度|Trace spans/ })).toBeTruthy();
+      expect(document.querySelector(".trace-jaeger-panel")).toBeTruthy();
+      expect(screen.getByRole("tab", { name: /Timeline/ })).toBeTruthy();
     });
   });
 

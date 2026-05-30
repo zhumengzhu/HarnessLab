@@ -1,29 +1,90 @@
-import type { TraceSpanNode } from "./buildTraceSpanTree";
-import { formatSpanDuration } from "./buildTraceSpanTree";
+import type { SpanEventItem, SpanLinkItem, SpanRecordItem } from "../../lib/schemas";
+import { spanDisplaySubtitle } from "../../lib/spanDisplay";
+import { spanServiceColor } from "../../lib/spanColor";
+import { spanResourceRows, spanServiceName } from "../../lib/spanResource";
+import {
+  formatRelativeStart,
+  formatSpanDuration,
+  spanStatus,
+  spanTimeline,
+} from "../../lib/spanTree";
 import { useI18n } from "../../lib/i18n";
 import { ModelCallInspector } from "./ModelCallInspector";
+import { TraceAttributesTable } from "./TraceAttributesTable";
+import { TraceDetailAccordion } from "./TraceDetailAccordion";
 
 type TraceSpanDetailProps = {
-  span: TraceSpanNode | null;
-  sessionDurationMs: number | null;
+  span: SpanRecordItem | null;
+  traceStartMs: number;
+  traceDurationMs: number;
+  compact?: boolean;
+  onClose?: () => void;
 };
 
-function fieldRows(payload: Record<string, unknown>): Array<[string, string]> {
-  const skip = new Set(["prompt_blocks", "api_messages", "context", "reasoning_text"]);
+function attributeRows(record: SpanRecordItem): Array<[string, string]> {
   const rows: Array<[string, string]> = [];
-  for (const [key, value] of Object.entries(payload)) {
-    if (skip.has(key)) continue;
+  for (const [key, value] of Object.entries(record.attributes ?? {})) {
+    if (value == null || key === "harnesslab.live") continue;
+    rows.push([key, typeof value === "object" ? JSON.stringify(value) : String(value)]);
+  }
+  rows.sort((a, b) => a[0].localeCompare(b[0]));
+  return rows;
+}
+
+function metricRows(metrics: Record<string, unknown>): Array<[string, string]> {
+  const rows: Array<[string, string]> = [];
+  for (const [key, value] of Object.entries(metrics)) {
+    if (key === "context" || value == null) continue;
+    rows.push([key, typeof value === "object" ? JSON.stringify(value) : String(value)]);
+  }
+  rows.sort((a, b) => a[0].localeCompare(b[0]));
+  return rows;
+}
+
+function previewRows(rows: Array<[string, string]>, limit = 2): string {
+  return rows
+    .slice(0, limit)
+    .map(([key, value]) => `${key}=${value.length > 24 ? `${value.slice(0, 24)}…` : value}`)
+    .join(", ");
+}
+
+function eventAttributeRows(event: SpanEventItem): Array<[string, string]> {
+  const rows: Array<[string, string]> = [
+    ["event.name", event.name],
+    ["event.time", event.time],
+  ];
+  for (const [key, value] of Object.entries(event.attributes ?? {})) {
     if (value == null) continue;
-    if (typeof value === "object") {
-      rows.push([key, JSON.stringify(value)]);
-    } else {
-      rows.push([key, String(value)]);
-    }
+    rows.push([key, typeof value === "object" ? JSON.stringify(value) : String(value)]);
   }
   return rows;
 }
 
-export function TraceSpanDetail({ span, sessionDurationMs }: TraceSpanDetailProps) {
+function formatEventOffset(eventTime: string, traceStartMs: number): string {
+  const ms = Date.parse(eventTime) - traceStartMs;
+  if (!Number.isFinite(ms) || ms <= 0) return "+0ms";
+  return `+${formatSpanDuration(ms)}`;
+}
+
+function linkAttributeRows(link: SpanLinkItem): Array<[string, string]> {
+  const rows: Array<[string, string]> = [
+    ["link.trace_id", link.linked_trace_id],
+    ["link.span_id", link.linked_span_id],
+  ];
+  for (const [key, value] of Object.entries(link.attributes ?? {})) {
+    if (value == null) continue;
+    rows.push([key, typeof value === "object" ? JSON.stringify(value) : String(value)]);
+  }
+  return rows;
+}
+
+export function TraceSpanDetail({
+  span,
+  traceStartMs,
+  traceDurationMs,
+  compact = false,
+  onClose,
+}: TraceSpanDetailProps) {
   const { t } = useI18n();
   if (!span) {
     return (
@@ -33,65 +94,165 @@ export function TraceSpanDetail({ span, sessionDurationMs }: TraceSpanDetailProp
     );
   }
 
-  const payload = span.payload ?? {};
-  const barDenominator = sessionDurationMs && sessionDurationMs > 0 ? sessionDurationMs : null;
+  const status = spanStatus(span);
+  const serviceName = spanServiceName(span);
+  const serviceColor = spanServiceColor(serviceName);
+  const subtitle = spanDisplaySubtitle(span);
+  const timeline = spanTimeline(span, traceStartMs, traceDurationMs);
+  const metrics = span.metrics ?? {};
+  const context =
+    typeof metrics.context === "object" && metrics.context
+      ? (metrics.context as Record<string, unknown>)
+      : null;
+  const tags = attributeRows(span);
+  const processRows = spanResourceRows(span);
+  const metricEntries = metricRows(metrics);
+  const events = span.events ?? [];
+  const links = span.links ?? [];
 
   return (
-    <div className="trace-span-detail">
-      <header className="trace-span-detail-header">
-        <h3>{span.name}</h3>
-        <div className="trace-span-detail-meta">
-          <span className={`trace-span-status trace-span-status-${span.status}`}>{span.status}</span>
-          <span>{formatSpanDuration(span.durationMs)}</span>
-          {span.eventType ? <span>{span.eventType}</span> : null}
+    <div
+      className={`trace-span-detail trace-jaeger-span-detail${compact ? " trace-span-detail-compact" : ""}`}
+      style={{ "--trace-service-color": serviceColor } as React.CSSProperties}
+    >
+      <header className="trace-jaeger-detail-header">
+        <div className="trace-jaeger-detail-title-row">
+          <h3 className="trace-jaeger-operation-name">{span.name}</h3>
+          {status === "error" ? (
+            <span className="trace-waterfall-error-icon trace-waterfall-error-icon-detail">!</span>
+          ) : null}
+          {onClose ? (
+            <button
+              type="button"
+              className="trace-jaeger-detail-close"
+              aria-label={t("trace.closeDetail")}
+              onClick={onClose}
+            >
+              ×
+            </button>
+          ) : null}
         </div>
-      </header>
-
-      {barDenominator != null && span.durationMs != null ? (
-        <div className="trace-span-detail-bar" aria-hidden>
+        {subtitle ? <p className="trace-span-detail-subtitle">{subtitle}</p> : null}
+        <dl className="trace-jaeger-overview trace-jaeger-labeled-list">
+          <div>
+            <dt>{t("trace.detailService")}</dt>
+            <dd>{serviceName}</dd>
+          </div>
+          <div>
+            <dt>{t("trace.detailDuration")}</dt>
+            <dd>{formatSpanDuration(span.duration_ms)}</dd>
+          </div>
+          <div>
+            <dt>{t("trace.detailStartTime")}</dt>
+            <dd>{formatRelativeStart(span, traceStartMs)}</dd>
+          </div>
+        </dl>
+        <div className="trace-span-detail-bar trace-jaeger-detail-bar" aria-hidden>
           <div
-            className="trace-span-detail-bar-fill"
+            className="trace-span-detail-bar-fill trace-jaeger-detail-bar-fill"
             style={{
-              marginLeft: `${Math.min(100, (span.startMs / barDenominator) * 100)}%`,
-              width: `${Math.max(0.5, (span.durationMs / barDenominator) * 100)}%`,
+              marginLeft: `${timeline.offsetPct}%`,
+              width: `${timeline.widthPct}%`,
             }}
           />
         </div>
-      ) : null}
+      </header>
 
-      {Object.keys(payload).length ? (
-        <dl className="trace-span-fields">
-          {fieldRows(payload).map(([key, value]) => (
-            <div key={key} className="trace-span-field">
-              <dt>{key}</dt>
-              <dd>{value}</dd>
+      <div className="trace-jaeger-detail-sections">
+        <TraceDetailAccordion
+          label={t("trace.detailTags")}
+          defaultOpen
+          summaryPreview={previewRows(tags)}
+        >
+          <TraceAttributesTable rows={tags} />
+        </TraceDetailAccordion>
+
+        <TraceDetailAccordion
+          label={t("trace.detailProcess")}
+          defaultOpen
+          summaryPreview={previewRows(processRows)}
+        >
+          <TraceAttributesTable rows={processRows} />
+        </TraceDetailAccordion>
+
+        {events.length ? (
+          <TraceDetailAccordion
+            label={t("trace.detailEvents", { count: String(events.length) })}
+            defaultOpen={events.length <= 3}
+            summaryPreview={events
+              .slice(0, 2)
+              .map((evt) => evt.name)
+              .join(", ")}
+          >
+            <div className="trace-detail-events">
+              {events.map((event, index) => {
+                const eventRows = eventAttributeRows(event);
+                const rel = formatEventOffset(event.time, traceStartMs);
+                return (
+                  <TraceDetailAccordion
+                    key={`${event.name}-${event.time}-${index}`}
+                    label={`${event.name} (${rel})`}
+                    defaultOpen={index === 0 && events.length === 1}
+                    summaryPreview={previewRows(eventRows.slice(2), 1)}
+                  >
+                    <TraceAttributesTable rows={eventRows} />
+                  </TraceDetailAccordion>
+                );
+              })}
             </div>
-          ))}
-        </dl>
-      ) : null}
+          </TraceDetailAccordion>
+        ) : null}
 
-      {span.kind === "model" && typeof payload.decision_kind === "string" ? (
-        <ModelCallInspector payload={payload} />
-      ) : null}
+        {metricEntries.length ? (
+          <TraceDetailAccordion
+            label={t("trace.detailMetrics")}
+            summaryPreview={previewRows(metricEntries)}
+          >
+            <TraceAttributesTable rows={metricEntries} />
+          </TraceDetailAccordion>
+        ) : null}
 
-      {span.events.length ? (
-        <details className="trace-inspector-section">
-          <summary>{t("trace.sourceEvents", { count: span.events.length })}</summary>
-          <ul className="trace-span-source-events">
-            {span.events.map((evt) => (
-              <li key={`${evt.event_type}-${evt.created_at}`}>
-                <strong>{evt.event_type}</strong>
-                <span>{evt.created_at}</span>
-              </li>
-            ))}
-          </ul>
-        </details>
-      ) : null}
+        {span.name === "llm.generate" ? (
+          <TraceDetailAccordion label={t("trace.detailPrompt")}>
+            <ModelCallInspector
+              payload={{
+                ...metrics,
+                context,
+                decision_kind: span.attributes["harnesslab.decision.kind"],
+              }}
+            />
+          </TraceDetailAccordion>
+        ) : null}
 
-      <details className="trace-raw-json">
-        <summary>{t("trace.rawJson")}</summary>
-        <pre>{JSON.stringify(payload, null, 2)}</pre>
-      </details>
+        {links.length ? (
+          <TraceDetailAccordion
+            label={t("trace.spanLinks", { count: String(links.length) })}
+            summaryPreview={links
+              .slice(0, 2)
+              .map((link) => String(link.attributes?.["harnesslab.link.kind"] ?? "link"))
+              .join(", ")}
+          >
+            <div className="trace-detail-events">
+              {links.map((link, index) => (
+                <TraceDetailAccordion
+                  key={`${link.linked_trace_id}-${link.linked_span_id}-${index}`}
+                  label={String(link.attributes?.["harnesslab.link.kind"] ?? "link")}
+                  summaryPreview={`${link.linked_trace_id.slice(0, 8)}:${link.linked_span_id.slice(0, 8)}`}
+                >
+                  <TraceAttributesTable rows={linkAttributeRows(link)} />
+                </TraceDetailAccordion>
+              ))}
+            </div>
+          </TraceDetailAccordion>
+        ) : null}
+
+        <footer className="trace-jaeger-detail-footer">
+          <code title={span.span_id}>{span.span_id}</code>
+          <span className="trace-jaeger-detail-footer-meta">
+            trace {span.trace_id.slice(0, 12)}… · turn {span.turn_index}
+          </span>
+        </footer>
+      </div>
     </div>
   );
 }

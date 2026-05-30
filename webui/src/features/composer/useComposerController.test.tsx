@@ -85,7 +85,7 @@ describe("useComposerController session selection", () => {
       queryClient,
       onBeforeSend: vi.fn(),
       onAdoptSession,
-      onAppendTraceEvent: vi.fn(),
+      onAppendSpan: vi.fn(),
       onSetStreamMessages,
       onSetStreamToolCards: vi.fn(),
     });
@@ -126,7 +126,7 @@ describe("useComposerController session selection", () => {
       queryClient,
       onBeforeSend: vi.fn(),
       onAdoptSession,
-      onAppendTraceEvent: vi.fn(),
+      onAppendSpan: vi.fn(),
       onSetStreamMessages: vi.fn(),
       onSetStreamToolCards: vi.fn(),
     });
@@ -164,7 +164,7 @@ describe("useComposerController session selection", () => {
       queryClient,
       onBeforeSend: vi.fn(),
       onAdoptSession,
-      onAppendTraceEvent: vi.fn(),
+      onAppendSpan: vi.fn(),
       onSetStreamMessages: vi.fn(),
       onSetStreamToolCards: vi.fn(),
     });

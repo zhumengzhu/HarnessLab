@@ -10,7 +10,7 @@ import pytest
 
 from harnesslab import cli
 
-FIXTURE = Path(__file__).resolve().parent / "fixtures" / "sample_failure_trace.jsonl"
+FIXTURE = Path(__file__).resolve().parent / "fixtures" / "sample_failure_spans.jsonl"
 
 
 @pytest.fixture(autouse=True)
@@ -19,7 +19,7 @@ def isolate_cwd(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
 
 def _staged_fixture(tmp_path: Path) -> Path:
-    target = tmp_path / "trace.jsonl"
+    target = tmp_path / "spans.jsonl"
     shutil.copy(FIXTURE, target)
     return target
 
@@ -49,7 +49,7 @@ def test_propose_missing_trace_file_raises(
     )
     with pytest.raises(SystemExit) as exc:
         cli.main()
-    assert "trace file not found" in str(exc.value)
+    assert "spans file not found" in str(exc.value)
 
 
 def test_propose_missing_eval_report_raises(

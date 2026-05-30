@@ -1,5 +1,15 @@
+import type {
+  SpanEventPayload,
+  SpanLinkPayload,
+  SpanRecordItem,
+  SpanStartedPayload,
+} from "./schemas";
+
 export type SseHandlers = {
-  onTrace?: (payload: unknown) => void;
+  onSpanStarted?: (payload: SpanStartedPayload) => void;
+  onSpanEvent?: (payload: SpanEventPayload) => void;
+  onSpanCompleted?: (record: SpanRecordItem) => void;
+  onSpanLink?: (payload: SpanLinkPayload) => void;
   onReasoningDelta?: (payload: { text: string; step_index?: number }) => void;
   onAssistantDelta?: (payload: { text: string; step_index?: number }) => void;
   onDone?: (payload: unknown) => void;
@@ -50,7 +60,18 @@ export async function postSse(
       }
       if (!dataLine) continue;
       const payload = JSON.parse(dataLine);
-      if (eventType === "trace" && handlers.onTrace) handlers.onTrace(payload);
+      if (eventType === "span.started" && handlers.onSpanStarted) {
+        handlers.onSpanStarted(payload as SpanStartedPayload);
+      }
+      if (eventType === "span.event" && handlers.onSpanEvent) {
+        handlers.onSpanEvent(payload as SpanEventPayload);
+      }
+      if (eventType === "span.completed" && handlers.onSpanCompleted) {
+        handlers.onSpanCompleted(payload as SpanRecordItem);
+      }
+      if (eventType === "span.link" && handlers.onSpanLink) {
+        handlers.onSpanLink(payload as SpanLinkPayload);
+      }
       if (eventType === "reasoning_delta" && handlers.onReasoningDelta) {
         handlers.onReasoningDelta(payload as { text: string; step_index?: number });
       }

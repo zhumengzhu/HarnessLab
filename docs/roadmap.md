@@ -1001,6 +1001,23 @@ Next: token streaming beyond DeepSeek (P0) and provider failover UX (P2).
 | **Anthropic / Gemini multi-turn tool+thinking replay audit** | Same class of bug on other transforms | **Done** — fixture tests in `test_anthropic_messages_transform.py` / `test_google_generate_content_transform.py` |
 | **Token streaming beyond DeepSeek** | Web UI renders deltas; other backends step-only | After P0 replay audit green |
 
+### Observability v2 — Span-first telemetry (complete)
+
+Normative spec: [`architecture/observability-v2.md`](architecture/observability-v2.md).
+**O1–O7** landed on the feature branch; runtime writes `spans.jsonl` only (no
+v1/v2 dual-write).
+
+| Phase | Deliverable | Status |
+| --- | --- | --- |
+| **O0** | Design doc + consumer checklist | **DONE** |
+| **O1** | `SpanRecord`, `SpanRecorderPort`, `trace_scope`, contract tests | **DONE** |
+| **O2** | `LocalSpanRecorder`, `spans.jsonl` | **DONE** |
+| **O3** | Loop span instrumentation | **DONE** |
+| **O4** | OTLP lifecycle export + span metrics | **DONE** |
+| **O5** | Span-forest replay/eval/improve | **DONE** |
+| **O6** | `SpanHub` SSE + Web API spans | **DONE** |
+| **O7** | Docs sync + eval baselines + quality gate | **DONE** |
+
 ### P1 — Multi-agent & skills (elevated)
 
 > Formerly P3 / P4. Sub-agent PoC and workspace skills exist; next is

@@ -20,7 +20,7 @@ import harnesslab
 from harnesslab.checkpoint.store import preview_restore, restore_snapshots
 from harnesslab.core.loop import DEFAULT_MAX_STEPS, HarnessLoop
 from harnesslab.core.memory_policy import session_memory_key
-from harnesslab.core.models import Session, TraceEvent
+from harnesslab.core.models import Session, SpanRecord
 from harnesslab.core.title import TITLE_MAX_LEN
 from harnesslab.core.turn_steer import TurnSteerBuffer
 from harnesslab.providers.context_limits import (
@@ -32,18 +32,24 @@ from harnesslab.providers.deepseek_config import (
     DEEPSEEK_UI_EFFORTS,
     deepseek_ui_effort,
 )
-from harnesslab.replay.trace_reader import read_trace
+from harnesslab.replay.span_reader import filter_spans_by_session, read_spans
 from harnesslab.telemetry.log import get_logger
+from harnesslab.telemetry.span_attributes import (
+    HARNESSLAB_PARENT_SESSION_ID,
+    HARNESSLAB_TURN_INDEX,
+    SPAN_LLM_GENERATE,
+    SPAN_TURN,
+)
 from harnesslab.web.session_model import (
     apply_session_model_patch,
     config_changes_for_model_selection,
     effective_operator_config_for_session,
     resolve_target_backend,
 )
-from harnesslab.web.trace_hub import TraceHub
+from harnesslab.web.span_hub import SpanHub
 from harnesslab.web.usage_aggregate import (
     UsageRange,
-    aggregate_usage_from_events,
+    aggregate_usage_from_spans,
     apply_usage_display_currency,
     merge_session_metadata,
 )
@@ -53,33 +59,6 @@ _log = get_logger("web.server")
 _GATE_TIMEOUT_SECONDS = 600
 _GATE_OUTPUT_LIMIT = 12000
 
-TOOL_PANEL_EVENT_TYPES = frozenset(
-    {
-        "user_input_received",
-        "step_started",
-        "step_completed",
-        "model_call_started",
-        "decision_made",
-        "tool_executed",
-        "tool_denied",
-        "tool_invalid_args",
-        "memory_read",
-        "memory_written",
-        "workspace_memory_read",
-        "workspace_memory_written",
-        "compaction_started",
-        "compaction_completed",
-        "session_titled",
-        "user_steer_received",
-        "sub_agent_spawned",
-        "sub_agent_completed",
-        "hook_invoked",
-        "hook_blocked",
-        "hook_failed",
-        "model_call",
-        "session_finished",
-    }
-)
 
 
 _ENV_KEYS: dict[str, str] = {
@@ -130,8 +109,8 @@ class WebRuntime:
     model_backend: str
     workspace_root: Path
     default_max_steps: int = DEFAULT_MAX_STEPS
-    trace_hub: TraceHub | None = None
-    trace_path: Path | None = None
+    span_hub: SpanHub | None = None
+    spans_path: Path | None = None
     settings: dict[str, Any] = field(default_factory=dict)
     operator_config: Any | None = None  # OperatorConfig, typed as Any to avoid import cycle
     turn_steer: TurnSteerBuffer = field(default_factory=TurnSteerBuffer)
@@ -392,11 +371,11 @@ def _session_json(
 
 
 def _usage_payload(runtime: WebRuntime, range_key: UsageRange) -> dict[str, Any]:
-    events: list[TraceEvent] = []
-    path = runtime.trace_path
+    spans: list[SpanRecord] = []
+    path = runtime.spans_path
     if path is not None and path.is_file():
-        events = read_trace(path)
-    usage = aggregate_usage_from_events(events, range_key=range_key)
+        spans = read_spans(path)
+    usage = aggregate_usage_from_spans(spans, range_key=range_key)
     sessions = _list_sessions(runtime, limit=500, status=None, include_id=None)
     usage = merge_session_metadata(usage, sessions)
     display_currency = None
@@ -503,35 +482,52 @@ def _message_json(msg) -> dict[str, Any]:  # type: ignore[no-untyped-def]
     return payload
 
 
-def _trace_event_json(event: TraceEvent) -> dict[str, Any]:
-    return event.model_dump(mode="json")
+def _span_json(span: SpanRecord) -> dict[str, Any]:
+    return span.model_dump(mode="json")
 
 
-def _tool_card_json(event: TraceEvent) -> dict[str, Any]:
-    payload = event.payload
+def _tool_card_from_span(span: SpanRecord) -> dict[str, Any]:
+    attrs = span.attributes
+    metrics = span.metrics
+    output_preview = metrics.get("output_preview", "")
+    if not isinstance(output_preview, str):
+        output_preview = str(output_preview)
     return {
-        "tool": payload.get("tool"),
-        "ok": payload.get("ok", True),
-        "error": payload.get("error"),
-        "output_preview": payload.get("output_preview", ""),
-        "output_truncated": payload.get("output_truncated", False),
-        "duration_ms": payload.get("duration_ms"),
+        "tool": attrs.get("harnesslab.tool.name") or span.name.removeprefix("tool."),
+        "ok": bool(attrs.get("harnesslab.tool.ok", True)),
+        "error": metrics.get("error"),
+        "output_preview": output_preview[:512],
+        "output_truncated": bool(metrics.get("output_truncated", False)),
+        "duration_ms": metrics.get("duration_ms"),
     }
 
 
-def _tool_cards_for_turn(events: list[TraceEvent], turn_index: int) -> list[dict[str, Any]]:
+def _tool_cards_for_turn(spans: list[SpanRecord], turn_index: int) -> list[dict[str, Any]]:
+    turn_roots = [
+        span
+        for span in spans
+        if span.name == SPAN_TURN and span.attributes.get(HARNESSLAB_TURN_INDEX) == turn_index
+    ]
+    if not turn_roots:
+        return []
+    trace_id = turn_roots[-1].trace_id
     cards: list[dict[str, Any]] = []
-    capturing = False
-    for event in events:
-        if event.event_type == "user_input_received":
-            if event.payload.get("turn_index") == turn_index:
-                capturing = True
-                cards = []
-            elif capturing:
-                break
-        if capturing and event.event_type == "tool_executed":
-            cards.append(_tool_card_json(event))
+    for span in spans:
+        if span.trace_id != trace_id:
+            continue
+        if not span.name.startswith("tool.") or span.name.startswith("tool.hooks."):
+            continue
+        if span.name.count(".") != 1:
+            continue
+        cards.append(_tool_card_from_span(span))
     return cards
+
+
+def _session_spans(runtime: WebRuntime, session_id: str) -> list[SpanRecord]:
+    path = runtime.spans_path
+    if path is None or not path.is_file():
+        return []
+    return filter_spans_by_session(read_spans(path), session_id)
 
 
 def _checkpoint_store_for(runtime: WebRuntime):
@@ -599,17 +595,13 @@ def _rewind_session(
     preview = preview_restore(runtime.workspace_root, checkpoint.snapshots)
     touched = restore_snapshots(runtime.workspace_root, checkpoint.snapshots)
     session = runtime.loop._sessions.get(session_id)  # noqa: SLF001
-    runtime.loop._trace.record(  # noqa: SLF001
-        TraceEvent(
-            run_id=session.id,
-            session_id=session.id,
-            event_type="checkpoint_restored",
-            payload={
-                "checkpoint_id": checkpoint_id,
-                "paths": touched,
-            },
-            created_at=runtime.loop._clock.now(),  # noqa: SLF001
-        )
+    runtime.loop._loop_spans.add_step_event(  # noqa: SLF001
+        session,
+        "session.checkpoint_restored",
+        attributes={
+            "checkpoint_id": checkpoint_id,
+            "paths": touched,
+        },
     )
     return {
         "session_id": session_id,
@@ -618,12 +610,6 @@ def _rewind_session(
         "preview": preview,
     }
 
-
-def _session_trace_events(runtime: WebRuntime, session_id: str) -> list[TraceEvent]:
-    path = runtime.trace_path
-    if path is None or not path.is_file():
-        return []
-    return [e for e in read_trace(path) if e.session_id == session_id]
 
 
 def _memory_notes_for(loop: HarnessLoop, session_id: str) -> str | None:
@@ -828,7 +814,7 @@ class _Handler(BaseHTTPRequestHandler):
                 model_id = resolve_openai_model_name(config=cfg)
             elif backend == "gemini":
                 model_id = resolve_gemini_model_name(config=cfg)
-            trace_path = self.runtime.trace_path
+            spans_path = self.runtime.spans_path
             pricing = load_pricing_catalog()
             return self._json_ok(
                 {
@@ -839,7 +825,8 @@ class _Handler(BaseHTTPRequestHandler):
                     "model_label": _MODEL_LABELS.get(model_id or "", model_id or backend),
                     "workspace": str(self.runtime.workspace_root),
                     "runtime_context_tokens": self.runtime.loop._limits.context_window_tokens,  # noqa: SLF001
-                    "trace_path": str(trace_path) if trace_path else None,
+                    "spans_path": str(spans_path) if spans_path else None,
+                    "trace_path": str(spans_path) if spans_path else None,
                     "pricing_version": pricing.pricing_version,
                     "pricing_fingerprint": catalog_fingerprint(),
                 }
@@ -944,25 +931,30 @@ class _Handler(BaseHTTPRequestHandler):
                 )
             session_id, action = remainder.split("/", 1)
             if action == "trace":
-                events = self._trace_events_for(session_id)
-                filtered = [
-                    _trace_event_json(e)
-                    for e in events
-                    if e.event_type in TOOL_PANEL_EVENT_TYPES
-                ]
-                return self._json_ok({"session_id": session_id, "events": filtered})
+                spans = _session_spans(self.runtime, session_id)
+                return self._json_ok(
+                    {
+                        "session_id": session_id,
+                        "spans": [_span_json(span) for span in spans],
+                    }
+                )
             if action == "trace/jsonl":
-                events = self._trace_events_for(session_id)
+                spans = _session_spans(self.runtime, session_id)
                 lines = [
-                    json.dumps(_trace_event_json(e), ensure_ascii=True)
-                    for e in events
+                    json.dumps(_span_json(span), ensure_ascii=True)
+                    for span in spans
                 ]
                 return self._json_ok(
                     {
                         "session_id": session_id,
+                        "spans_path": (
+                            str(self.runtime.spans_path)
+                            if self.runtime.spans_path
+                            else None
+                        ),
                         "trace_path": (
-                            str(self.runtime.trace_path)
-                            if self.runtime.trace_path
+                            str(self.runtime.spans_path)
+                            if self.runtime.spans_path
                             else None
                         ),
                         "line_count": len(lines),
@@ -1195,8 +1187,8 @@ class _Handler(BaseHTTPRequestHandler):
     def _turn_payload(self, session: Session, reply: str) -> dict[str, Any]:
         notes = _memory_notes_for(self.runtime.loop, session.id)
         finished_turn = max(session.turn_count - 1, 0)
-        trace_events = _session_trace_events(self.runtime, session.id)
-        tool_cards = _tool_cards_for_turn(trace_events, finished_turn)
+        session_spans = _session_spans(self.runtime, session.id)
+        tool_cards = _tool_cards_for_turn(session_spans, finished_turn)
         context_snapshot = _last_context_snapshot(self.runtime, session.id)
         return {
             "session": _session_json(session, memory_notes=notes),
@@ -1222,32 +1214,41 @@ class _Handler(BaseHTTPRequestHandler):
         self.close_connection = True
 
         write = self._sse_writer()
-        hub = self.runtime.trace_hub
+        hub = self.runtime.span_hub
         child_session_ids: set[str] = set()
 
-        def _event_visible(event: TraceEvent) -> bool:
-            if event.session_id == session_id:
-                return True
-            if (
-                event.event_type == "session_started"
-                and event.payload.get("parent_session_id") == session_id
-            ):
-                child_session_ids.add(event.session_id)
-                return True
-            return event.session_id in child_session_ids
+        def on_started(payload: dict[str, Any]) -> None:
+            sid = str(payload.get("session_id", ""))
+            attrs = payload.get("attributes") if isinstance(payload.get("attributes"), dict) else {}
+            if sid != session_id:
+                if attrs.get(HARNESSLAB_PARENT_SESSION_ID) == session_id:
+                    child_session_ids.add(sid)
+                elif sid not in child_session_ids:
+                    return
+            out = dict(payload)
+            if sid != session_id:
+                out["child_session_id"] = sid
+            write("span.started", out)
 
-        def on_event(event: TraceEvent) -> None:
-            if not _event_visible(event):
+        def on_event(payload: dict[str, Any]) -> None:
+            write("span.event", payload)
+
+        def on_completed(record: SpanRecord) -> None:
+            if record.session_id != session_id and record.session_id not in child_session_ids:
                 return
-            if event.event_type not in TOOL_PANEL_EVENT_TYPES:
-                return
-            payload = _trace_event_json(event)
-            if event.session_id != session_id:
-                payload["child_session_id"] = event.session_id
-            write("trace", payload)
+            payload = _span_json(record)
+            if record.session_id != session_id:
+                payload["child_session_id"] = record.session_id
+            write("span.completed", payload)
+
+        def on_link(payload: dict[str, Any]) -> None:
+            write("span.link", payload)
 
         if hub is not None:
-            hub.subscribe(on_event)
+            hub.subscribe_started(on_started)
+            hub.subscribe_event(on_event)
+            hub.subscribe_completed(on_completed)
+            hub.subscribe_link(on_link)
         lock = self.runtime.lock_for(session_id)
 
         def on_stream_delta(kind: str, text: str, step_index: int) -> None:
@@ -1274,7 +1275,10 @@ class _Handler(BaseHTTPRequestHandler):
         finally:
             loop._stream_sink = prev_sink  # noqa: SLF001
             if hub is not None:
-                hub.unsubscribe(on_event)
+                hub.unsubscribe_started(on_started)
+                hub.unsubscribe_event(on_event)
+                hub.unsubscribe_completed(on_completed)
+                hub.unsubscribe_link(on_link)
 
     def _sse_writer(self) -> Callable[[str, dict[str, Any]], None]:
         def write(event: str, data: dict[str, Any]) -> None:
@@ -1285,8 +1289,8 @@ class _Handler(BaseHTTPRequestHandler):
 
         return write
 
-    def _trace_events_for(self, session_id: str) -> list[TraceEvent]:
-        return _session_trace_events(self.runtime, session_id)
+    def _trace_events_for(self, session_id: str) -> list[SpanRecord]:
+        return _session_spans(self.runtime, session_id)
 
     def _serve_static(self, rel: str) -> None:
         try:
@@ -1389,14 +1393,14 @@ def _select_static_dir() -> Path:
 def _last_context_snapshot(
     runtime: "WebRuntime", session_id: str
 ) -> dict[str, Any] | None:
-    """Return the context payload from the most recent model_call trace event."""
+    """Return the context payload from the most recent ``llm.generate`` span."""
 
     from harnesslab.core.context import make_conversation_snapshot  # noqa: PLC0415
 
-    events = _session_trace_events(runtime, session_id)
-    for event in reversed(events):
-        if event.event_type == "model_call":
-            ctx = event.payload.get("context")
+    spans = _session_spans(runtime, session_id)
+    for span in reversed(spans):
+        if span.name == SPAN_LLM_GENERATE:
+            ctx = span.metrics.get("context")
             if isinstance(ctx, dict):
                 return ctx
     # No model_call in trace (older sessions or pre-restart turns): estimate

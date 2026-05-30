@@ -16,13 +16,15 @@ from harnesslab.core.compaction import (
 from harnesslab.core.config import RuntimeLimits
 from harnesslab.core.loop import HarnessLoop
 from harnesslab.core.models import Decision, Message, Session
-from harnesslab.core.replay import ReplayTraceRecorder
+from harnesslab.core.replay import ReplaySpanRecorder
 from harnesslab.core.runtime import DEFAULT_REPLAY_CLOCK_START, FrozenClock, SeqIdProvider
 from harnesslab.policy.default_policy import DefaultPolicy
 from harnesslab.providers.deepseek import DeepSeekModel
 from harnesslab.session.in_memory import InMemorySessionStore
+from harnesslab.telemetry.span_attributes import HARNESSLAB_COMPACTION_TRIGGER
 from harnesslab.tools.file_tools import WriteFileTool
 from harnesslab.tools.registry import ToolRegistry
+from tests.span_test_helpers import chronological_spans, compact_spans
 
 # ---------- ModelOverflowError plumbing ----------
 
@@ -65,20 +67,20 @@ def _build_loop(
     *,
     threshold: int = 10_000,
     keep_last: int = 4,
-) -> tuple[HarnessLoop, ReplayTraceRecorder]:
+) -> tuple[HarnessLoop, ReplaySpanRecorder]:
     limits = RuntimeLimits(
         compaction_threshold_tokens=threshold,
         compaction_keep_last_messages=keep_last,
     )
     tools = ToolRegistry()
     tools.register(WriteFileTool(tmp_path, limits=limits))
-    recorder = ReplayTraceRecorder()
+    recorder = ReplaySpanRecorder()
     loop = HarnessLoop(
         model=model,
         policy=DefaultPolicy(workspace_root=tmp_path),
         sessions=InMemorySessionStore(),
         tools=tools,
-        trace=recorder,
+        spans=recorder,
         limits=limits,
         clock=FrozenClock(start=DEFAULT_REPLAY_CLOCK_START),
         ids=SeqIdProvider(),
@@ -108,17 +110,13 @@ def test_overflow_triggers_emergency_compaction_and_retry(tmp_path: Path) -> Non
     # Two model decisions: one overflow + one recovery.
     assert model.calls == 2
 
-    starts = [e for e in recorder.events if e.event_type == "compaction_started"]
-    completes = [e for e in recorder.events if e.event_type == "compaction_completed"]
-    # The threshold is generous, so the only compaction event must be
-    # the overflow-triggered emergency one.
-    assert len(starts) == 1
-    assert starts[0].payload["trigger"] == "overflow"
-    assert starts[0].payload["keep_last"] == 2  # max(1, 4 // 2)
-    assert starts[0].payload["estimated_tokens"] == 999_999
-    assert len(completes) == 1
-    assert completes[0].payload["trigger"] == "overflow"
-    assert completes[0].payload["removed_messages"] > 0
+    compacts = compact_spans(recorder.spans)
+    assert len(compacts) == 1
+    compact = compacts[0]
+    assert compact.attributes[HARNESSLAB_COMPACTION_TRIGGER] == "overflow"
+    assert compact.attributes.get("harnesslab.compaction.keep_last") == 2
+    assert compact.metrics.get("estimated_tokens_before") == 999_999
+    assert compact.metrics.get("removed_messages", 0) > 0
 
     # The retry must see the compacted message list (system summary +
     # the surviving recent messages + the new user turn).
@@ -148,10 +146,19 @@ def test_second_overflow_terminates_with_explanatory_final(tmp_path: Path) -> No
     assert "Context window exceeded" in response
     assert model.calls == 2  # original + one retry
 
-    finished = [e for e in recorder.events if e.event_type == "session_finished"]
-    assert finished[0].payload["reason"] == "final"
-    decisions = [e for e in recorder.events if e.event_type == "decision_made"]
-    assert decisions[-1].payload["kind"] == "final"
+    turns = [
+        s
+        for s in chronological_spans(recorder.spans)
+        if s.name == "harnesslab.turn"
+    ]
+    assert turns[-1].attributes.get("harnesslab.terminal.reason") == "final"
+    steps = [s for s in chronological_spans(recorder.spans) if s.name == "harnesslab.step"]
+    assert any(
+        ev.attributes.get("kind") == "final"
+        for step in steps
+        for ev in step.events
+        if ev.name == "decision.applied"
+    )
 
 
 # ---------- DeepSeek maps API overflow → ModelOverflowError ----------
@@ -290,12 +297,13 @@ def test_overflow_compaction_appears_in_jsonl_trace(tmp_path: Path) -> None:
 
     loop.run_session(session.id, "go", max_steps=2)
 
-    trace_path = tmp_path / ".harnesslab" / "trace.jsonl"
-    events = [json.loads(line) for line in trace_path.read_text().splitlines() if line]
-    overflow_events = [
-        e for e in events
-        if e["event_type"] == "compaction_started"
-        and e["payload"].get("trigger") == "overflow"
+    spans_path = tmp_path / ".harnesslab" / "spans.jsonl"
+    spans = [json.loads(line) for line in spans_path.read_text().splitlines() if line]
+    overflow = [
+        s
+        for s in spans
+        if s["name"] == "context.compact"
+        and s["attributes"].get("harnesslab.compaction.trigger") == "overflow"
     ]
-    assert len(overflow_events) == 1
-    assert overflow_events[0]["payload"]["estimated_tokens"] == 200_000
+    assert len(overflow) == 1
+    assert overflow[0]["metrics"]["estimated_tokens_before"] == 200_000

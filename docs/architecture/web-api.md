@@ -215,23 +215,61 @@ Response: `{ "session": { ...SessionSummary fields including model_backend, mode
 
 ### `GET /api/sessions/{id}/trace`
 
-Filtered trace events for the Advanced trace panel (tool/step subset).
+Completed spans for the session (read from `.harnesslab/spans.jsonl`, filtered by
+`session_id`). The Web UI groups the flat list by `trace_id` (one group = one
+turn). Shape normative in [`data-model.md`](data-model.md) § SpanRecord.
 
 ```json
 {
   "session_id": "ses_abc",
-  "events": [
+  "spans": [
     {
-      "event_type": "model_call",
-      "payload": { "decision_kind": "tool", "context": {}, "prompt_blocks": [] }
+      "trace_id": "tr_…",
+      "span_id": "sp_…",
+      "parent_span_id": null,
+      "name": "harnesslab.turn",
+      "kind": "internal",
+      "session_id": "ses_abc",
+      "turn_index": 0,
+      "start_time": "2026-05-31T12:00:00.000Z",
+      "end_time": "2026-05-31T12:00:05.000Z",
+      "duration_ms": 5000,
+      "status": "ok",
+      "resource": {
+        "service.name": "harnesslab",
+        "deployment.environment": "local"
+      },
+      "attributes": { "harnesslab.session.id": "ses_abc" },
+      "events": [],
+      "metrics": {}
     }
   ]
 }
 ```
 
+In-flight spans (`span.started` only) are **not** included — use SSE during an
+active turn, or merge client-side with stream events (see [`webui-design.md`](webui-design.md)).
+
+### `GET /api/sessions/{id}/trace/jsonl`
+
+Same spans as `…/trace`, returned as a single JSONL string plus metadata:
+
+```json
+{
+  "session_id": "ses_abc",
+  "spans_path": "/path/to/.harnesslab/spans.jsonl",
+  "trace_path": "/path/to/.harnesslab/spans.jsonl",
+  "line_count": 42,
+  "jsonl": "{…}\n{…}\n"
+}
+```
+
+(`trace_path` is an alias of `spans_path` for backward-compatible clients.)
+
 ### `GET /api/sessions/{id}/context`
 
-Latest `ContextSnapshot` from the most recent `model_call` in trace.
+Latest `ContextSnapshot` from the most recent `llm.generate` span
+(`SpanRecord.metrics.context`) for the session.
 
 ### `GET /api/proposals?status=open|all`
 
@@ -389,35 +427,51 @@ header `Accept: text/event-stream`.
 
 Response: `Content-Type: text/event-stream; charset=utf-8`
 
-### Event types
+Normative span shapes: [`data-model.md`](data-model.md) § SpanRecord,
+[`observability-v2.md`](observability-v2.md) § D9.
 
-| Event | Payload | Purpose |
-| --- | --- | --- |
-| `trace` | Trace event JSON (subset of `TOOL_PANEL_EVENT_TYPES`) | Step / model_call / tool activity |
-| `reasoning_delta` | `{ "text": "...", "step_index": 0 }` | Token-level thinking (DeepSeek first) |
-| `assistant_delta` | `{ "text": "...", "step_index": 0 }` | Token-level answer text |
-| `done` | Turn response shape (above) | Turn complete |
-| `error` | `{ "message": "..." }` | Turn failed |
+### Span lifecycle (Observability v2)
 
-Wire format:
+| Event | Payload | Persisted to `spans.jsonl` | Purpose |
+| --- | --- | --- | --- |
+| `span.started` | `{ trace_id, span_id, parent_span_id, name, kind, session_id, turn_index, attributes }` | No | In-flight waterfall / Live Turn / Activity |
+| `span.event` | `{ trace_id, span_id, name, attributes, time }` | No | Instant facts (budget, policy deny, steer) |
+| `span.completed` | Full `SpanRecord` | Yes (one JSON line per span) | Trace Tab, replay, metrics |
+| `span.link` | `{ trace_id, span_id, linked_trace_id, linked_span_id, attributes }` | No | Sub-agent cross-trace link |
+
+Sub-agent turns may include `child_session_id` on `span.started` / `span.completed`
+when the span belongs to a child session watched by the parent stream.
+
+### Turn completion and token deltas
+
+| Event | Payload | Persisted | Purpose |
+| --- | --- | --- | --- |
+| `reasoning_delta` | `{ "text": "...", "step_index": 0 }` | No | Token-level thinking (DeepSeek first) |
+| `assistant_delta` | `{ "text": "...", "step_index": 0 }` | No | Token-level answer text |
+| `done` | Turn response shape (see above) | N/A | Turn complete |
+| `error` | `{ "message": "..." }` | N/A | Turn failed |
+
+### Wire example
 
 ```text
-event: trace
-data: {"event_type":"step_started","payload":{...}}
+event: span.started
+data: {"trace_id":"…","span_id":"…","name":"llm.generate","kind":"client","session_id":"ses_…","turn_index":0,"attributes":{}}
 
-event: reasoning_delta
+event: span.completed
+data: {"trace_id":"…","span_id":"…","name":"llm.generate","duration_ms":1234,"metrics":{...},"attributes":{...}}
+
+event: assistant_delta
 data: {"text":"partial","step_index":0}
 
 event: done
 data: {"session":{...},"reply":"..."}
 ```
 
-SSE deltas are **not** persisted to `trace.jsonl` (ephemeral UI only).
-See [`data-model.md`](data-model.md).
+**Ordering:** span lifecycle events for the turn precede the terminal `done`
+frame (see `tests/test_web_server.py::test_web_sse_stream_event_ordering`).
 
-Common `trace` event types consumed by Chat UI: `step_started`,
-`model_call_started`, `model_call`, `decision_made`, `tool_executed`,
-`tool_denied`, `compaction_started`, `compaction_completed`.
+v1 `event: trace` with flat `TraceEvent` / `event_type` payloads is **retired**
+at Observability v2 cutover.
 
 ## Slash commands (transport)
 

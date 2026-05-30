@@ -5,8 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 
 from harnesslab.core.loop import HarnessLoop
-from harnesslab.core.models import Decision, Session, TraceEvent
-from harnesslab.core.replay import ReplayModel, ReplayTraceRecorder
+from harnesslab.core.models import Decision, Session
+from harnesslab.core.replay import ReplayModel, ReplaySpanRecorder
 from harnesslab.policy.default_policy import DefaultPolicy
 from harnesslab.session.in_memory import InMemorySessionStore
 from harnesslab.tools.file_tools import WriteFileTool
@@ -40,18 +40,27 @@ def test_replay_model_falls_back_when_exhausted() -> None:
     assert "exhausted" in decision.assistant_message
 
 
-def test_replay_trace_recorder_collects_events_in_order() -> None:
-    recorder = ReplayTraceRecorder()
-    e1 = TraceEvent(run_id="r", session_id="s", event_type="a")
-    e2 = TraceEvent(run_id="r", session_id="s", event_type="b")
-    recorder.record(e1)
-    recorder.record(e2)
-    assert recorder.events == [e1, e2]
-    assert recorder.event_types() == ["a", "b"]
+def test_replay_span_recorder_collects_spans_in_order() -> None:
+    recorder = ReplaySpanRecorder()
+    h1 = recorder.start_span(
+        "harnesslab.turn",
+        session_id="s",
+        trace_id="t" * 32,
+        turn_index=0,
+    )
+    h2 = recorder.start_span(
+        "harnesslab.step",
+        session_id="s",
+        parent=h1,
+    )
+    r2 = recorder.end_span(h2)
+    r1 = recorder.end_span(h1)
+    assert recorder.spans == [r2, r1]
+    assert [s.name for s in recorder.spans] == ["harnesslab.step", "harnesslab.turn"]
 
 
 def test_loop_drives_with_replay_components(tmp_path: Path) -> None:
-    """ReplayModel + ReplayTraceRecorder are real Port implementations:
+    """ReplayModel + ReplaySpanRecorder are real Port implementations:
     the loop should drive them end-to-end without modification."""
 
     decisions = [
@@ -63,7 +72,7 @@ def test_loop_drives_with_replay_components(tmp_path: Path) -> None:
         Decision(kind="assistant", assistant_message="all done"),
     ]
     model = ReplayModel(decisions=decisions)
-    recorder = ReplayTraceRecorder()
+    recorder = ReplaySpanRecorder()
     tools = ToolRegistry()
     tools.register(WriteFileTool(tmp_path))
 
@@ -72,7 +81,7 @@ def test_loop_drives_with_replay_components(tmp_path: Path) -> None:
         policy=DefaultPolicy(workspace_root=tmp_path),
         sessions=InMemorySessionStore(),
         tools=tools,
-        trace=recorder,
+        spans=recorder,
     )
 
     session = loop.start(goal="replay")
@@ -81,6 +90,7 @@ def test_loop_drives_with_replay_components(tmp_path: Path) -> None:
 
     assert "[tool:write_file]" in tool_reply
     assert assistant_reply == "all done"
-    assert "session_started" in recorder.event_types()
-    assert "tool_executed" in recorder.event_types()
+    names = [s.name for s in recorder.spans]
+    assert "harnesslab.turn" in names
+    assert "tool.write_file" in names
     assert model.remaining == 0

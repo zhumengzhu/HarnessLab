@@ -10,8 +10,8 @@ from harnesslab.cli import build_runtime
 from harnesslab.core.loop import HarnessLoop
 from harnesslab.core.models import Decision
 from harnesslab.core.turn_steer import TurnSteerBuffer
-from harnesslab.replay.trace_reader import read_trace
-from harnesslab.telemetry.jsonl_recorder import JsonlTraceRecorder
+from harnesslab.replay import read_spans
+from harnesslab.telemetry.local_span_recorder import LocalSpanRecorder
 
 
 class _TwoStepToolModel:
@@ -38,7 +38,7 @@ def _build_loop(tmp_path: Path, model: _TwoStepToolModel, steer: TurnSteerBuffer
     loop = build_runtime(
         tmp_path,
         storage_backend="memory",
-        trace=JsonlTraceRecorder(tmp_path / "trace.jsonl"),
+        spans=LocalSpanRecorder(tmp_path / "trace.jsonl"),
     )
     loop._model = model  # noqa: SLF001
     loop._turn_steer = steer
@@ -75,7 +75,12 @@ def test_steer_injects_user_message_before_next_step(tmp_path: Path) -> None:
     user_texts = [m.content for m in loaded.messages if m.role == "user"]
     assert "also summarize notes/a.txt" in user_texts
 
-    events = read_trace(tmp_path / "trace.jsonl")
-    steer_events = [e for e in events if e.event_type == "user_steer_received"]
+    spans = read_spans(tmp_path / "trace.jsonl")
+    steer_events = [
+        ev
+        for span in spans
+        for ev in span.events
+        if ev.name == "user.steer"
+    ]
     assert len(steer_events) == 1
-    assert steer_events[0].payload["user_input"] == "also summarize notes/a.txt"
+    assert steer_events[0].attributes["user_input"] == "also summarize notes/a.txt"

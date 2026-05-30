@@ -84,10 +84,10 @@ Lifecycle helper (repo root):
 
 **Web UI (TypeScript):** after `cd webui && bun install && bun run build`, `serve`
 uses the TS bundle by default (`HARNESSLAB_WEB_UI_VERSION=ts`). If the bundle is
-missing, it falls back to the legacy static UI.
+missing, `GET /` returns **503** with build instructions — there is no legacy HTML fallback.
 
-- **Simple** mode — chat, thinking/tool activity, model picker, slash commands.
-- **Advanced** — trace panel, proposals, session metadata, budget events.
+- **Chat** — thinking/tool activity, model picker, slash commands, SSE streaming.
+- **Operator surfaces** — Trace / Activity / Proposals tabs, session metadata, budget events (see [`docs/architecture/webui-design.md`](docs/architecture/webui-design.md)).
 - **Slash commands** — `/remember`, `/remember-global`, `/compact`, `/skill list`,
   and workspace skills as `/skillname <task>` (Cursor-style; see `skills/*.md`).
 - **Sub-agent (Phase 6)** — enable `loop.multi_agent.enabled` in config or Web
@@ -202,13 +202,13 @@ See [`eval/README.md`](eval/README.md).
 
 ### Replay, metrics & context
 
-Traces append to `<workspace>/.harnesslab/trace.jsonl`.
+Telemetry appends to `<workspace>/.harnesslab/spans.jsonl` (Observability v2 span records).
 
 ```bash
-uv run harnesslab replay .harnesslab/trace.jsonl
-uv run harnesslab replay .harnesslab/trace.jsonl --workspace .
-uv run harnesslab metrics .harnesslab/trace.jsonl
-uv run harnesslab context .harnesslab/trace.jsonl show
+uv run harnesslab replay .harnesslab/spans.jsonl
+uv run harnesslab replay .harnesslab/spans.jsonl --workspace .
+uv run harnesslab metrics .harnesslab/spans.jsonl
+uv run harnesslab context .harnesslab/spans.jsonl show
 ```
 
 | `replay` exit | Meaning |
@@ -217,9 +217,9 @@ uv run harnesslab context .harnesslab/trace.jsonl show
 | 2 | Unreplayable trace |
 | 4 | Divergence detected |
 
-Semantic replay ignores timestamps, volatile tool output previews, model token
-counts, and `context` snapshots; event order, tool args, and policy outcomes
-must match.
+Semantic replay compares span forests per turn (preorder DFS); timing,
+token counts, and `metrics.context` are volatile; span names, attributes,
+tool args, and policy outcomes must match.
 
 ### Improvement proposals
 
@@ -228,8 +228,8 @@ must match.
 see [`AGENTS.md`](AGENTS.md) (Proposal Handling).
 
 ```bash
-uv run harnesslab propose --trace .harnesslab/trace.jsonl
-uv run harnesslab propose --trace .harnesslab/trace.jsonl --eval-report eval/reports/latest.json
+uv run harnesslab propose --trace .harnesslab/spans.jsonl
+uv run harnesslab propose --trace .harnesslab/spans.jsonl --eval-report eval/reports/latest.json
 ```
 
 ## Contributing

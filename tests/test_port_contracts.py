@@ -20,15 +20,14 @@ from harnesslab.core.contracts import (
     ModelPort,
     PolicyPort,
     SessionStorePort,
+    SpanRecorderPort,
     ToolPort,
-    TraceRecorderPort,
 )
 from harnesslab.core.models import (
     Decision,
     Session,
     ToolCall,
     ToolResult,
-    TraceEvent,
 )
 from harnesslab.core.runtime import SystemClock, UuidIdProvider
 from harnesslab.core.simple_model import SimpleModel
@@ -37,7 +36,7 @@ from harnesslab.memory.sqlite_store import SqliteMemoryStore
 from harnesslab.policy.default_policy import DefaultPolicy
 from harnesslab.session.in_memory import InMemorySessionStore
 from harnesslab.session.sqlite_store import SqliteSessionStore
-from harnesslab.telemetry.jsonl_recorder import JsonlTraceRecorder
+from harnesslab.telemetry.memory_span_recorder import MemorySpanRecorder
 from harnesslab.tools.file_tools import ReadFileTool, WriteFileTool
 from harnesslab.tools.shell_tool import RunShellSafeTool
 
@@ -120,19 +119,17 @@ def test_memory_store_port_contract(memory_store: MemoryStorePort) -> None:
     assert memory_store.get("k") == "v2"
 
 
-def test_trace_recorder_port_contract(tmp_path: Path) -> None:
-    trace_path = tmp_path / "trace.jsonl"
-    recorder: TraceRecorderPort = JsonlTraceRecorder(trace_path)
-    event = TraceEvent(
-        run_id="ses_test",
+def test_span_recorder_port_contract() -> None:
+    recorder: SpanRecorderPort = MemorySpanRecorder()
+    handle = recorder.start_span(
+        "harnesslab.turn",
         session_id="ses_test",
-        event_type="contract_probe",
-        payload={"k": 1},
+        trace_id="a" * 32,
+        turn_index=0,
     )
-    recorder.record(event)
-    lines = trace_path.read_text(encoding="utf-8").splitlines()
-    assert len(lines) == 1
-    assert "contract_probe" in lines[0]
+    record = recorder.end_span(handle)
+    assert record.name == "harnesslab.turn"
+    assert record.session_id == "ses_test"
 
 
 def test_artifact_store_port_contract() -> None:

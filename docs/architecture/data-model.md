@@ -177,6 +177,11 @@ Suggested fields:
 
 ## TraceEvent
 
+> **Status:** Current runtime contract (v1). Target replacement:
+> [`SpanRecord`](#spanrecord-v2--design-approved-not-shipped) per
+> [`observability-v2.md`](observability-v2.md). Retired at cutover — no
+> prolonged dual-write.
+
 Represents one telemetry event for replay and debugging.
 
 Top-level fields:
@@ -260,6 +265,35 @@ Attached to every `model_call.payload.context`:
 | `dynamic_block_tokens` | optional, adapter-supplied |
 | `prompt_block_names` | optional, ordered list of prompt block names |
 | `context_breakdown_tokens` | optional, token buckets for UI-style context panes (`system_prompt`, `tool_definitions`, `rules`, `skills`, `subagent_definitions`, `summarized_conversation`, `conversation`) |
+
+## SpanRecord (v2 — shipped)
+
+Normative spec: [`observability-v2.md`](observability-v2.md). One JSONL line
+per **completed** span at `.harnesslab/spans.jsonl`. Primary telemetry for
+new runs; flat `TraceEvent` / v1 `trace.jsonl` are legacy-only.
+
+Top-level fields:
+
+| Field | Notes |
+| --- | --- |
+| `resource` | Process-scoped snapshot (OTel Resource parity) |
+| `trace_id`, `span_id`, `parent_span_id` | Span identity; new `trace_id` per turn |
+| `name`, `kind` | e.g. `llm.generate`, `client` |
+| `session_id`, `turn_index` | Top-level correlation (duplicate span attrs for filter) |
+| `start_time`, `end_time`, `duration_ms` | Volatile — stripped in replay compare |
+| `status`, `status_message` | OTel span status |
+| `attributes` | Stable semantic replay surface (`harnesslab.*`, `gen_ai.*`) |
+| `events` | Nested instant records (`SpanEvent`) |
+| `metrics` | Volatile telemetry (tokens, latency, cost, `context`) |
+| `links` (optional) | Cross-trace links (e.g. `sub_agent.run` → child turn root) |
+
+**Port:** `SpanRecorderPort` — `start_span`, `end_span`, `add_span_event`,
+`add_span_link`, `current_span(session_id)`. See observability-v2 § D4.
+
+**`run_id`:** Not carried forward. Use `trace_id` per turn + `session_id`.
+
+**Replay compare:** Span forest preorder DFS per turn, not flat event list.
+See observability-v2 § D7.
 
 ## MemoryRecord (Planned)
 
@@ -354,22 +388,23 @@ Notes:
   when retrieval/writeback policy lands, without breaking `memory_kv`.
 - `traces` are emitted to JSONL only; persisting them to SQLite is
   deferred (the Step 5 replayer reads JSONL directly, which is enough
-  for the current divergence/metrics use cases).
+  for the current divergence/metrics use cases). v2 target file:
+  `.harnesslab/spans.jsonl` ([`observability-v2.md`](observability-v2.md)).
 
-### OpenTelemetry fan-out (Post-MVP P7)
+### OpenTelemetry export (Post-MVP P7 → Observability v2)
+
+> **Superseded:** v1 flat-event `OtelTraceRecorder` is retired at Observability
+> v2 cutover. OTLP export uses native span lifecycle via `OtelSpanRecorder`
+> (`telemetry/otel_span_recorder.py`) on the same `SpanRecorderPort` composite
+> as local JSONL. See [`observability-v2.md`](observability-v2.md) § D4, O4.
 
 When `HARNESSLAB_OTEL=1` or `OTEL_EXPORTER_OTLP_ENDPOINT` is set, CLI and
-`hl-serve` wrap the inner JSONL recorder with `OtelTraceRecorder`
-(`telemetry/otel_recorder.py`). Each `TraceEvent` still lands in JSONL
-unchanged; a parallel OTel span is emitted with:
+`hl-serve` emit **lifecycle spans** (not zero-duration flat events):
 
-- **Span name:** `harnesslab.{event_type}` (e.g. `harnesslab.model_call`)
-- **Stable attributes:** `harnesslab.run_id`, `harnesslab.session_id`,
-  `harnesslab.event_type`, and non-volatile `harnesslab.payload.*` keys copied
-  from `payload`
-- **Excluded from spans:** token counters, `latency_ms`, `model_name`,
-  `provider`, `api_family`, and other fields already treated as volatile for
-  semantic replay compare
+- **Span names:** e.g. `harnesslab.turn`, `harnesslab.step`, `llm.generate`, `tool.{name}`
+- **Resource:** process-scoped (`service.name`, `deployment.environment`, …)
+- **Span attributes:** session/turn correlation (`harnesslab.session.id`, …)
+- **Metrics:** token counters, latency, cost on `SpanRecord.metrics` → OTel instruments
 
 Eval and replay **must not** depend on OTel export or collector availability.
 

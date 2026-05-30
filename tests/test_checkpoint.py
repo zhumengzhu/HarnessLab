@@ -9,10 +9,10 @@ from harnesslab.core.loop import HarnessLoop
 from harnesslab.core.runtime import SystemClock, UuidIdProvider
 from harnesslab.core.simple_model import SimpleModel
 from harnesslab.policy.default_policy import DefaultPolicy
-from harnesslab.replay.trace_reader import read_trace
+from harnesslab.replay.span_reader import read_spans
 from harnesslab.session.sqlite_store import SqliteSessionStore
 from harnesslab.storage.sqlite import apply_migrations, connect
-from harnesslab.telemetry.jsonl_recorder import JsonlTraceRecorder
+from harnesslab.telemetry.local_span_recorder import LocalSpanRecorder
 from harnesslab.tools.file_tools import WriteFileTool
 from harnesslab.tools.registry import ToolRegistry
 
@@ -60,15 +60,15 @@ def test_loop_emits_checkpoint_created(tmp_path: Path) -> None:
     store = SqliteCheckpointStore(db_path)
     tools = ToolRegistry()
     tools.register(WriteFileTool(tmp_path))
-    trace_path = tmp_path / "trace.jsonl"
-    recorder = JsonlTraceRecorder(trace_path)
+    trace_path = tmp_path / "spans.jsonl"
+    recorder = LocalSpanRecorder(trace_path)
     sessions = SqliteSessionStore(db_path)
     loop = HarnessLoop(
         model=SimpleModel(),
         policy=DefaultPolicy(tmp_path),
         sessions=sessions,
         tools=tools,
-        trace=recorder,
+        spans=recorder,
         clock=SystemClock(),
         ids=UuidIdProvider(),
         checkpoint_store=store,
@@ -80,7 +80,11 @@ def test_loop_emits_checkpoint_created(tmp_path: Path) -> None:
         '/tool write_file {"path": "a.txt", "content": "hello"}',
         max_steps=2,
     )
-    events = [e.event_type for e in read_trace(trace_path)]
-    assert "checkpoint_created" in events
+    spans = read_spans(trace_path)
+    assert any(
+        ev.name == "checkpoint.created"
+        for span in spans
+        for ev in span.events
+    )
     store.close()
     sessions.close()

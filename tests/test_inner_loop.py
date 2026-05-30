@@ -9,27 +9,34 @@ holds (and is exercised by the existing eval/replay suites).
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
+from span_assertions import (
+    last_turn,
+    llm_spans,
+    read_spans_jsonl,
+    span_events,
+    step_spans,
+    tool_spans,
+    turn_terminal,
+)
 
 from harnesslab.cli import build_runtime
 from harnesslab.core.budget import BudgetLimits
 from harnesslab.core.config import RuntimeLimits
 from harnesslab.core.loop import HarnessLoop
 from harnesslab.core.models import Decision
-from harnesslab.core.replay import ReplayModel, ReplayTraceRecorder
+from harnesslab.core.replay import ReplayModel, ReplaySpanRecorder
 from harnesslab.policy.default_policy import DefaultPolicy
 from harnesslab.session.in_memory import InMemorySessionStore
+from harnesslab.telemetry.span_attributes import (
+    HARNESSLAB_STEP_INDEX,
+    HARNESSLAB_STEP_REASON,
+)
 from harnesslab.tools.file_tools import ReadFileTool, WriteFileTool
 from harnesslab.tools.registry import ToolRegistry
 from harnesslab.tools.shell_tool import RunShellSafeTool
-
-
-def _read_trace(workspace_root: Path) -> list[dict]:
-    trace_path = workspace_root / ".harnesslab" / "trace.jsonl"
-    return [json.loads(line) for line in trace_path.read_text().splitlines() if line]
 
 
 def _build_loop(
@@ -38,19 +45,19 @@ def _build_loop(
     *,
     replan_after_steps: int | None = None,
     budget_limits: BudgetLimits | None = None,
-) -> tuple[HarnessLoop, ReplayTraceRecorder]:
+) -> tuple[HarnessLoop, ReplaySpanRecorder]:
     limits = RuntimeLimits()
     tools = ToolRegistry()
     tools.register(ReadFileTool(tmp_path, limits=limits))
     tools.register(WriteFileTool(tmp_path, limits=limits))
     tools.register(RunShellSafeTool(tmp_path, limits=limits))
-    recorder = ReplayTraceRecorder()
+    recorder = ReplaySpanRecorder()
     loop = HarnessLoop(
         model=ReplayModel(decisions=decisions),
         policy=DefaultPolicy(workspace_root=tmp_path),
         sessions=InMemorySessionStore(),
         tools=tools,
-        trace=recorder,
+        spans=recorder,
         replan_after_steps=replan_after_steps,
         budget_limits=budget_limits,
     )
@@ -72,13 +79,12 @@ def test_run_session_executes_tool_then_final(tmp_path: Path) -> None:
     response = loop.run_session(session.id, "please write hi to notes.txt")
 
     assert response == "Wrote the note."
-    types = [e.event_type for e in recorder.events]
-    assert types.count("tool_executed") == 1
-    assert types.count("decision_made") == 2
-
-    finished = [e for e in recorder.events if e.event_type == "session_finished"]
-    assert len(finished) == 1
-    assert finished[0].payload == {"reason": "final", "steps": 2}
+    spans = recorder.spans
+    assert len(tool_spans(spans)) == 1
+    assert len(llm_spans(spans)) == 2
+    reason, steps = turn_terminal(last_turn(spans))
+    assert reason == "final"
+    assert steps == 2
 
 
 def test_run_session_terminates_on_ask_user(tmp_path: Path) -> None:
@@ -88,8 +94,9 @@ def test_run_session_terminates_on_ask_user(tmp_path: Path) -> None:
     response = loop.run_session(session.id, "start")
 
     assert response == "What next?"
-    finished = [e for e in recorder.events if e.event_type == "session_finished"]
-    assert finished[0].payload == {"reason": "ask_user", "steps": 1}
+    reason, steps = turn_terminal(last_turn(recorder.spans))
+    assert reason == "ask_user"
+    assert steps == 1
 
 
 def test_run_session_hits_max_steps(tmp_path: Path) -> None:
@@ -106,10 +113,10 @@ def test_run_session_hits_max_steps(tmp_path: Path) -> None:
     session = loop.start(goal="runaway")
     loop.run_session(session.id, "go", max_steps=3)
 
-    started = [e for e in recorder.events if e.event_type == "step_started"]
-    assert len(started) == 3
-    finished = [e for e in recorder.events if e.event_type == "session_finished"]
-    assert finished[0].payload == {"reason": "max_steps", "steps": 3}
+    assert len(step_spans(recorder.spans)) == 3
+    reason, steps = turn_terminal(last_turn(recorder.spans))
+    assert reason == "max_steps"
+    assert steps == 3
 
 
 def test_run_session_step_started_reason_propagates_prev_outcome(tmp_path: Path) -> None:
@@ -125,9 +132,11 @@ def test_run_session_step_started_reason_propagates_prev_outcome(tmp_path: Path)
     session = loop.start(goal="reason")
     loop.run_session(session.id, "do it")
 
-    started = [e for e in recorder.events if e.event_type == "step_started"]
-    assert started[0].payload == {"step_index": 0, "reason": "initial"}
-    assert started[1].payload == {"step_index": 1, "reason": "after_tool_ok"}
+    steps = step_spans(recorder.spans)
+    assert steps[0].attributes[HARNESSLAB_STEP_INDEX] == 0
+    assert steps[0].attributes[HARNESSLAB_STEP_REASON] == "initial"
+    assert steps[1].attributes[HARNESSLAB_STEP_INDEX] == 1
+    assert steps[1].attributes[HARNESSLAB_STEP_REASON] == "after_tool_ok"
 
 
 def test_run_session_rejects_zero_max_steps(tmp_path: Path) -> None:
@@ -147,9 +156,9 @@ def test_run_session_plan_decision_emits_plan_trace(tmp_path: Path) -> None:
     response = loop.run_session(session.id, "fix issue", max_steps=4)
     assert response == "done"
 
-    plan_events = [e for e in recorder.events if e.event_type == "plan_emitted"]
+    plan_events = span_events(recorder.spans, "plan.emitted")
     assert len(plan_events) == 1
-    assert "inspect" in str(plan_events[0].payload.get("plan"))
+    assert "inspect" in str(plan_events[0][1].get("plan"))
 
 
 def test_run_session_emits_replan_reminder_after_interval(tmp_path: Path) -> None:
@@ -161,36 +170,35 @@ def test_run_session_emits_replan_reminder_after_interval(tmp_path: Path) -> Non
     loop, recorder = _build_loop(tmp_path, decisions, replan_after_steps=2)
     session = loop.start(goal="long run")
     loop.run_session(session.id, "go", max_steps=4)
-    reminders = [e for e in recorder.events if e.event_type == "plan_recheck_requested"]
+    reminders = span_events(recorder.spans, "plan.recheck_requested")
     assert len(reminders) == 1
-    assert reminders[0].payload["steps_used"] == 2
+    assert reminders[0][1]["steps_used"] == 2
 
 
 def test_run_turn_is_single_step_wrapper(tmp_path: Path) -> None:
-    """run_turn must remain a max_steps=1 wrapper so the existing
-    single-step trace contract (used by eval/replay) still holds."""
+    """run_turn must remain a max_steps=1 wrapper."""
     loop = build_runtime(tmp_path)
     session = loop.start(goal="turn shape")
     loop.run_turn(session.id, '/tool write_file {"path":"a.txt","content":"x"}')
 
-    events = _read_trace(tmp_path)
-    decisions = [e for e in events if e["event_type"] == "decision_made"]
-    assert len(decisions) == 1
-    finished = [e for e in events if e["event_type"] == "session_finished"]
-    assert finished[0]["payload"] == {"reason": "max_steps", "steps": 1}
+    raw = read_spans_jsonl(tmp_path)
+    turns = [row for row in raw if row.get("name") == "harnesslab.turn"]
+    assert len(turns) == 1
+    assert turns[0]["attributes"]["harnesslab.terminal.reason"] == "max_steps"
+    assert turns[0]["attributes"]["harnesslab.steps.used"] == 1
+    llm_rows = [row for row in raw if row.get("name") == "llm.generate"]
+    assert len(llm_rows) == 1
 
 
 def test_cli_run_default_max_steps_drives_full_loop(tmp_path: Path) -> None:
-    """The CLI default (max_steps=DEFAULT_MAX_STEPS) lets a SimpleModel
-    session terminate naturally on /final without max-step truncation."""
     loop = build_runtime(tmp_path)
     session = loop.start(goal="cli style")
     response = loop.run_session(session.id, "/final all done")
     assert response == "all done"
 
-    events = _read_trace(tmp_path)
-    finished = [e for e in events if e["event_type"] == "session_finished"]
-    assert finished[0]["payload"]["reason"] == "final"
+    raw = read_spans_jsonl(tmp_path)
+    turns = [row for row in raw if row.get("name") == "harnesslab.turn"]
+    assert turns[-1]["attributes"]["harnesslab.terminal.reason"] == "final"
 
 
 def test_budget_hard_limit_stops_turn_with_ask_user(tmp_path: Path) -> None:
@@ -210,9 +218,9 @@ def test_budget_hard_limit_stops_turn_with_ask_user(tmp_path: Path) -> None:
     session = loop.start(goal="budget guard")
     response = loop.run_session(session.id, "go", max_steps=4)
     assert "Budget hard limit exceeded" in response
-    finished = [e for e in recorder.events if e.event_type == "session_finished"]
-    assert finished[0].payload["reason"] == "ask_user"
-    assert any(e.event_type == "budget_hard_exceeded" for e in recorder.events)
+    reason, _ = turn_terminal(last_turn(recorder.spans))
+    assert reason == "ask_user"
+    assert span_events(recorder.spans, "budget.hard_exceeded")
 
 
 def test_budget_soft_threshold_emits_warning_event(tmp_path: Path) -> None:
@@ -235,6 +243,6 @@ def test_budget_soft_threshold_emits_warning_event(tmp_path: Path) -> None:
     )
     session = loop.start(goal="soft budget")
     loop.run_session(session.id, "do it", max_steps=3)
-    soft = [e for e in recorder.events if e.event_type == "budget_soft_threshold"]
+    soft = span_events(recorder.spans, "budget.soft_threshold")
     assert soft
-    assert soft[0].payload["dimension"] == "max_tool_calls_per_turn"
+    assert soft[0][1]["dimension"] == "max_tool_calls_per_turn"

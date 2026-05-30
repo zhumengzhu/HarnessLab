@@ -125,7 +125,7 @@ export type UsageSessionRow = {
 
 export type UsageResponse = {
   range: string;
-  source: "trace" | "sessions";
+  source: "trace" | "sessions" | "spans";
   display_currency?: string;
   currency_symbol?: string;
   totals: UsageTotals;
@@ -244,24 +244,76 @@ export type CheckpointPreviewResponse = {
   }>;
 };
 
-export type TraceEventItem = {
-  run_id: string;
+export type SpanEventItem = {
+  name: string;
+  time: string;
+  attributes?: Record<string, unknown>;
+};
+
+export type SpanLinkItem = {
+  linked_trace_id: string;
+  linked_span_id: string;
+  attributes?: Record<string, unknown>;
+};
+
+export type SpanRecordItem = {
+  resource?: Record<string, unknown>;
+  trace_id: string;
+  span_id: string;
+  parent_span_id?: string | null;
+  name: string;
+  kind?: string;
   session_id: string;
-  event_type: string;
-  payload: Record<string, unknown>;
-  created_at: string;
-  /** Present on SSE fan-in when the event belongs to a spawned child session. */
+  turn_index: number;
+  start_time: string;
+  end_time: string;
+  duration_ms: number;
+  status?: string;
+  status_message?: string | null;
+  attributes: Record<string, unknown>;
+  events?: SpanEventItem[];
+  metrics?: Record<string, unknown>;
+  links?: SpanLinkItem[];
+  /** SSE fan-in when span belongs to a child session. */
   child_session_id?: string;
+};
+
+export type SpanStartedPayload = {
+  trace_id: string;
+  span_id: string;
+  parent_span_id?: string | null;
+  name: string;
+  kind?: string;
+  session_id: string;
+  turn_index?: number;
+  attributes?: Record<string, unknown>;
+  child_session_id?: string;
+};
+
+export type SpanEventPayload = {
+  trace_id: string;
+  span_id: string;
+  name: string;
+  attributes?: Record<string, unknown>;
+};
+
+export type SpanLinkPayload = {
+  trace_id: string;
+  span_id: string;
+  linked_trace_id: string;
+  linked_span_id: string;
+  attributes?: Record<string, unknown>;
 };
 
 export type TraceResponse = {
   session_id: string;
-  events: TraceEventItem[];
+  spans: SpanRecordItem[];
 };
 
 export type TraceJsonlResponse = {
   session_id: string;
-  trace_path: string | null;
+  spans_path?: string | null;
+  trace_path?: string | null;
   line_count: number;
   jsonl: string;
 };

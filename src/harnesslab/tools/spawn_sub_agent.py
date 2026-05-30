@@ -91,37 +91,49 @@ class SpawnSubAgentTool:
 
         self._spawn_counts[parent_id] = count + 1
 
+        parent_session = loop._sessions.get(parent_id)  # noqa: SLF001
+        tool_parent = loop._loop_spans.active_tool  # noqa: SLF001
+        if tool_parent is None:
+            return ToolResult(
+                ok=False,
+                output="",
+                error="spawn_sub_agent requires active tool span",
+            )
+
         child = loop.start_child(goal=goal, parent_session_id=parent_id)
-        loop._record(  # noqa: SLF001 — parent-session lineage for trace fan-in
-            session=loop._sessions.get(parent_id),
-            event_type="sub_agent_spawned",
-            payload={
-                "child_session_id": child.id,
-                "parent_session_id": parent_id,
-                "goal": goal,
-                "max_steps": max_steps,
-            },
-        )
-        final = loop.run_session(child.id, goal, max_steps=max_steps)
-        child_session = loop._sessions.get(child.id)  # noqa: SLF001
-        loop._record(  # noqa: SLF001 — parent trace fan-in when child finishes
-            session=loop._sessions.get(parent_id),
-            event_type="sub_agent_completed",
-            payload={
-                "child_session_id": child.id,
-                "parent_session_id": parent_id,
-                "goal": goal,
-                "step_count": child_session.step_count,
-                "status": child_session.status,
-                "final_response_preview": final[:240],
-                "budget_usage": {
+        run_started = loop._clock.now()  # noqa: SLF001
+        with loop._loop_spans.sub_agent_run(  # noqa: SLF001
+            parent_session,
+            parent_tool=tool_parent,
+            goal=goal,
+            max_steps=max_steps,
+        ) as sub_run:
+            final = loop.run_session(child.id, goal, max_steps=max_steps)
+            child_session = loop._sessions.get(child.id)  # noqa: SLF001
+            child_root = loop._loop_spans.consume_child_turn_root()  # noqa: SLF001
+            if child_root is not None:
+                loop._loop_spans.link_sub_agent(  # noqa: SLF001
+                    sub_run,
+                    child_turn_root=child_root,
+                    child_session_id=child.id,
+                )
+            duration_ms = max(
+                0.0,
+                (loop._clock.now() - run_started).total_seconds() * 1000.0,  # noqa: SLF001
+            )
+            loop._loop_spans.finish_sub_agent_run(  # noqa: SLF001
+                sub_run,
+                child_session_id=child.id,
+                ok=True,
+                metrics={
+                    "duration_ms": duration_ms,
+                    "step_count": child_session.step_count,
                     "llm_calls_total": child_session.budget_usage.llm_calls_total,
                     "tool_calls_total": child_session.budget_usage.tool_calls_total,
                     "tokens_total": child_session.budget_usage.tokens_total,
                     "cost_usd_total": child_session.budget_usage.cost_usd_total,
                 },
-            },
-        )
+            )
         payload = {
             "child_session_id": child.id,
             "parent_session_id": parent_id,

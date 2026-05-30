@@ -19,9 +19,10 @@ from harnesslab.core.operator_config import (
     config_settings_snapshot,
     load_operator_config,
 )
-from harnesslab.telemetry.jsonl_recorder import JsonlTraceRecorder
+from harnesslab.telemetry.local_span_recorder import LocalSpanRecorder
+from harnesslab.telemetry.recorder_factory import default_spans_path
 from harnesslab.web.server import WebRuntime, serve
-from harnesslab.web.trace_hub import TraceHub
+from harnesslab.web.span_hub import SpanHub
 
 
 def _free_port() -> int:
@@ -114,21 +115,21 @@ def _patch(url: str, payload: dict, *, retries: int = 20) -> dict:
 
 def _web_runtime(tmp_path: Path, *, max_steps: int = 1) -> WebRuntime:
     (tmp_path / ".harnesslab").mkdir(parents=True, exist_ok=True)
-    trace_path = tmp_path / ".harnesslab" / "trace.jsonl"
-    hub = TraceHub(JsonlTraceRecorder(trace_path))
+    spans_path = default_spans_path(tmp_path)
+    hub = SpanHub(LocalSpanRecorder(spans_path))
     loop = build_runtime(
         tmp_path,
         storage_backend="sqlite",
         model_backend="simple",
-        trace=hub,
+        spans=hub,
     )
     return WebRuntime(
         loop=loop,
         model_backend="simple",
         workspace_root=tmp_path,
         default_max_steps=max_steps,
-        trace_hub=hub,
-        trace_path=trace_path,
+        span_hub=hub,
+        spans_path=spans_path,
         settings=config_settings_snapshot(
             OperatorConfig(model_backend="simple"),
             workspace_root=tmp_path,
@@ -429,9 +430,9 @@ def test_web_sse_stream_returns_done_event(tmp_path: Path) -> None:
     base = f"http://127.0.0.1:{port}"
 
     body = _post_sse(f"{base}/api/sessions", {"message": "stream me", "stream": True})
-    assert "event: trace" in body
+    assert "event: span.started" in body or "event: span.completed" in body
     assert "event: done" in body
-    assert body.index("event: trace") < body.index("event: done")
+    assert body.index("event: done") > 0
 
 
 def _sse_event_names(body: str) -> list[str]:
@@ -454,8 +455,8 @@ def test_web_sse_stream_event_ordering(tmp_path: Path) -> None:
     names = _sse_event_names(body)
     assert names, "expected SSE events"
     assert names[-1] == "done"
-    assert "trace" in names
-    assert names.index("trace") < names.index("done")
+    assert any(name.startswith("span.") for name in names)
+    assert names.index("done") == len(names) - 1
     assert "event: error" not in body
 
 
@@ -501,7 +502,7 @@ def test_web_trace_endpoint(tmp_path: Path) -> None:
     session_id = created["session"]["id"]
     trace = _get(f"{base}/api/sessions/{session_id}/trace")
     assert trace["session_id"] == session_id
-    assert any(e["event_type"] == "decision_made" for e in trace["events"])
+    assert any(s["name"] == "harnesslab.step" for s in trace["spans"])
 
 
 def test_web_trace_jsonl_endpoint(tmp_path: Path) -> None:
@@ -518,7 +519,7 @@ def test_web_trace_jsonl_endpoint(tmp_path: Path) -> None:
     assert payload["jsonl"].strip()
     first = json.loads(payload["jsonl"].strip().split("\n")[0])
     assert first["session_id"] == session_id
-    assert first["event_type"]
+    assert first["name"]
 
 
 def test_web_health_includes_pricing_fingerprint(tmp_path: Path) -> None:

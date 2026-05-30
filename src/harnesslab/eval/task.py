@@ -10,15 +10,29 @@ from harnesslab.core.models import Decision
 
 
 class ExpectedEvent(BaseModel):
-    """A single trace-event expectation.
-
-    `event_type` must match exactly. `payload_contains` is a (possibly
-    nested) subset check against the actual event payload: every key
-    declared here must appear in the actual payload with an equal value.
-    """
+    """Legacy v1 trace-event expectation (mapped to spans at eval time)."""
 
     event_type: str
     payload_contains: dict[str, Any] | None = None
+
+
+class ExpectedSpan(BaseModel):
+    """A single span expectation (Observability v2).
+
+    ``name`` must match the completed span name (e.g. ``tool.read_file``).
+    Use ``"*"`` to match span events on any span (see ``span_event``).
+    ``attributes_contains`` is a recursive subset check on span attributes.
+    When ``span_event`` is set, a matching event must exist on the span
+    named by ``on_span`` (defaults to ``name``, or any span when ``name`` is
+    ``"*"``).
+    """
+
+    name: str
+    attributes_contains: dict[str, Any] | None = None
+    span_event: str | None = None
+    on_span: str | None = None
+    turn_index: int | None = None
+    attribute_keys_present: list[str] | None = None
 
 
 class TaskTurn(BaseModel):
@@ -64,7 +78,9 @@ class TaskBudget(BaseModel):
 class TaskExpected(BaseModel):
     final_reply_contains: list[str] = Field(default_factory=list)
     events_include: list[ExpectedEvent] = Field(default_factory=list)
+    spans_include: list[ExpectedSpan] = Field(default_factory=list)
     no_event_types: list[str] = Field(default_factory=list)
+    no_span_names: list[str] = Field(default_factory=list)
 
 
 class Task(BaseModel):

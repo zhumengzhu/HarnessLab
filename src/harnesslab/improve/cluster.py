@@ -1,14 +1,14 @@
-"""Group failure events + eval failures by fingerprint into clusters."""
+"""Group failure spans + eval failures by fingerprint into clusters."""
 
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
 
-from harnesslab.core.models import TraceEvent
+from harnesslab.core.models import SpanRecord
 from harnesslab.eval.task import TaskResult
 from harnesslab.improve.fingerprint import (
     fingerprint_for_eval_failure,
-    fingerprint_for_event,
+    fingerprint_for_span,
 )
 
 _SAMPLE_CAP = 3
@@ -18,12 +18,12 @@ class Cluster(BaseModel):
     kind: str
     signature: str
     occurrences: int
-    sample_events: list[TraceEvent] = Field(default_factory=list)
+    sample_spans: list[SpanRecord] = Field(default_factory=list)
     sample_task_failures: list[tuple[str, str]] = Field(default_factory=list)
 
 
 def build_clusters(
-    events: list[TraceEvent],
+    spans: list[SpanRecord],
     eval_results: list[TaskResult] | None = None,
     *,
     min_occurrences: int = 2,
@@ -35,12 +35,12 @@ def build_clusters(
 
     buckets: dict[tuple[str, str], dict] = {}
 
-    for event in events:
-        fp = fingerprint_for_event(event)
+    for span in spans:
+        fp = fingerprint_for_span(span)
         if fp is None:
             continue
-        bucket = buckets.setdefault(fp, {"events": [], "task_failures": []})
-        bucket["events"].append(event)
+        bucket = buckets.setdefault(fp, {"spans": [], "task_failures": []})
+        bucket["spans"].append(span)
 
     if eval_results:
         for result in eval_results:
@@ -48,12 +48,12 @@ def build_clusters(
                 continue
             for failure in result.failures:
                 fp = fingerprint_for_eval_failure(result.task_name, failure)
-                bucket = buckets.setdefault(fp, {"events": [], "task_failures": []})
+                bucket = buckets.setdefault(fp, {"spans": [], "task_failures": []})
                 bucket["task_failures"].append((result.task_name, failure))
 
     clusters: list[Cluster] = []
     for (kind, signature), bucket in buckets.items():
-        total = len(bucket["events"]) + len(bucket["task_failures"])
+        total = len(bucket["spans"]) + len(bucket["task_failures"])
         if total < min_occurrences:
             continue
         clusters.append(
@@ -61,7 +61,7 @@ def build_clusters(
                 kind=kind,
                 signature=signature,
                 occurrences=total,
-                sample_events=bucket["events"][:_SAMPLE_CAP],
+                sample_spans=bucket["spans"][:_SAMPLE_CAP],
                 sample_task_failures=bucket["task_failures"][:_SAMPLE_CAP],
             )
         )

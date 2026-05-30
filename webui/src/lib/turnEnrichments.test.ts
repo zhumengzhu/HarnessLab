@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import {
-  buildTurnEnrichmentsFromTrace,
+  buildTurnEnrichmentsFromSpans,
   enrichmentFromLiveTurn,
   findTerminalAssistantMessage,
 } from "./turnEnrichments";
-import type { MessageItem, TraceEventItem } from "./schemas";
+import type { MessageItem, SpanRecordItem } from "./schemas";
 
 function msg(partial: Partial<MessageItem> & Pick<MessageItem, "id" | "role" | "content">): MessageItem {
   return {
@@ -13,17 +13,16 @@ function msg(partial: Partial<MessageItem> & Pick<MessageItem, "id" | "role" | "
   };
 }
 
-function trace(
-  event_type: string,
-  payload: Record<string, unknown>,
-  created_at = "2026-05-25T00:00:01.000Z"
-): TraceEventItem {
+function span(partial: Partial<SpanRecordItem> & Pick<SpanRecordItem, "span_id" | "name">): SpanRecordItem {
   return {
-    run_id: "r1",
+    trace_id: "t1",
     session_id: "s1",
-    event_type,
-    payload,
-    created_at,
+    turn_index: 0,
+    start_time: "2026-05-25T00:00:01.000Z",
+    end_time: "2026-05-25T00:00:02.000Z",
+    duration_ms: 1000,
+    attributes: {},
+    ...partial,
   };
 }
 
@@ -54,52 +53,30 @@ describe("turnEnrichments", () => {
     expect(enrichment.tools).toHaveLength(1);
   });
 
-  it("builds enrichments from trace per turn", () => {
+  it("builds enrichments from spans per turn", () => {
     const messages = [
       msg({ id: "u1", role: "user", content: "run" }),
       msg({ id: "a1", role: "assistant", content: "final answer" }),
     ];
-    const events = [
-      trace("user_input_received", { turn_index: 0, user_input: "run" }, "2026-05-25T00:00:00.000Z"),
-      trace("model_call", {
-        latency_ms: 800,
-        reasoning_text: "think first",
+    const spans = [
+      span({ span_id: "turn0", name: "harnesslab.turn", turn_index: 0 }),
+      span({
+        span_id: "llm0",
+        name: "llm.generate",
+        parent_span_id: "turn0",
+        metrics: { latency_ms: 800, reasoning_text: "think first" },
+        attributes: { "harnesslab.step.index": 0 },
       }),
-      trace("tool_executed", {
-        tool: "grep",
-        ok: true,
-        output_preview: "matches",
-        duration_ms: 12,
+      span({
+        span_id: "tool0",
+        name: "tool.grep",
+        parent_span_id: "turn0",
+        attributes: { "harnesslab.tool.name": "grep", "harnesslab.tool.ok": true },
+        metrics: { output_preview: "matches", duration_ms: 12 },
       }),
     ];
-    const map = buildTurnEnrichmentsFromTrace(messages, events);
+    const map = buildTurnEnrichmentsFromSpans(messages, spans);
     expect(map.a1?.thoughts[0].text).toBe("think first");
     expect(map.a1?.tools[0].tool).toBe("grep");
-  });
-
-  it("ignores duplicate reasoning on decision_made after model_call", () => {
-    const messages = [
-      msg({ id: "u1", role: "user", content: "run" }),
-      msg({ id: "a1", role: "assistant", content: "final answer" }),
-    ];
-    const reasoning = "Let me search for MIMO pricing context.";
-    const events = [
-      trace("user_input_received", { turn_index: 0, user_input: "run" }, "2026-05-25T00:00:00.000Z"),
-      trace("model_call_started", { step_index: 0 }),
-      trace("model_call", {
-        step_index: 0,
-        latency_ms: 3500,
-        reasoning_text: reasoning,
-      }),
-      trace("decision_made", {
-        step_index: 0,
-        kind: "tool",
-        reasoning_text: reasoning,
-      }),
-    ];
-    const map = buildTurnEnrichmentsFromTrace(messages, events);
-    expect(map.a1?.thoughts).toHaveLength(1);
-    expect(map.a1?.thoughts[0].durationMs).toBe(3500);
-    expect(map.a1?.thoughts[0].text).toBe(reasoning);
   });
 });

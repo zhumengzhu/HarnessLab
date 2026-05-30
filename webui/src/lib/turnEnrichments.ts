@@ -1,5 +1,5 @@
-import type { MessageItem, ToolCard, TraceEventItem } from "./schemas";
-import { toolCardFromTraceEvent } from "./toolCardFromTrace";
+import type { MessageItem, SpanRecordItem, ToolCard } from "./schemas";
+import { toolCardFromSpan } from "./toolCardFromSpan";
 import type { ThoughtEntry } from "../features/live-turn/liveTurnReducer";
 import {
   mergeMessageReasoningIntoThoughts,
@@ -74,100 +74,51 @@ function terminalAssistantInTurn(turnMessages: MessageItem[]): MessageItem | nul
   return visible.length ? visible[visible.length - 1] : assistants[assistants.length - 1] ?? null;
 }
 
-function traceEventsForTurn(
-  events: TraceEventItem[],
-  turnIndex: number
-): TraceEventItem[] {
-  const rows: TraceEventItem[] = [];
-  let capturing = false;
-  for (const evt of events) {
-    if (evt.event_type === "user_input_received") {
-      const idx = evt.payload.turn_index;
-      if (typeof idx === "number" && idx === turnIndex) {
-        capturing = true;
-        rows.length = 0;
-        continue;
-      }
-      if (capturing) break;
-    }
-    if (capturing) rows.push(evt);
-  }
-  return rows;
-}
-
-function thoughtsFromTraceEvents(events: TraceEventItem[]): ThoughtEntry[] {
-  // Reasoning is owned by model_call (+ SSE reasoning_delta during live turns).
-  // decision_made repeats the same reasoning_text and must not be merged here.
-  let thoughts: ThoughtEntry[] = [];
-  let stepIndex = 0;
-  for (const evt of events) {
-    if (evt.event_type === "model_call_started") {
-      const idx =
-        typeof evt.payload.step_index === "number" ? evt.payload.step_index : stepIndex;
-      stepIndex = idx;
-      thoughts.push({
-        stepIndex: idx,
-        status: "thinking",
-        startedAt: new Date(evt.created_at).getTime(),
-      });
-      continue;
-    }
-    if (evt.event_type === "model_call") {
-      const latencyMs =
-        typeof evt.payload.latency_ms === "number" ? evt.payload.latency_ms : undefined;
-      const reasoning =
-        typeof evt.payload.reasoning_text === "string" ? evt.payload.reasoning_text : undefined;
-      const idx =
-        typeof evt.payload.step_index === "number" ? evt.payload.step_index : stepIndex;
-      const existing = thoughts.find(
-        (t) => t.stepIndex === idx && t.status === "thinking"
-      );
-      if (existing) {
-        existing.status = "done";
-        existing.text = reasoning ?? existing.text;
-        existing.durationMs = latencyMs;
-      } else if (reasoning || latencyMs != null) {
-        thoughts.push({
-          stepIndex: idx,
-          status: "done",
-          text: reasoning,
-          startedAt: new Date(evt.created_at).getTime() - (latencyMs ?? 0),
-          durationMs: latencyMs,
-        });
-      }
-      continue;
-    }
-  }
-  return thoughtsWithText(
-    thoughts.map((t) => ({ ...t, status: "done" as const }))
+function spansForTurn(spans: SpanRecordItem[], turnIndex: number): SpanRecordItem[] {
+  const turnRoots = spans.filter(
+    (span) => span.name === "harnesslab.turn" && span.turn_index === turnIndex
   );
+  if (!turnRoots.length) return [];
+  const traceIds = new Set(turnRoots.map((span) => span.trace_id));
+  return spans.filter((span) => traceIds.has(span.trace_id));
 }
 
-function toolsFromTraceEvents(events: TraceEventItem[]): ToolCard[] {
+function thoughtsFromSpans(spans: SpanRecordItem[]): ThoughtEntry[] {
+  const thoughts: ThoughtEntry[] = [];
+  for (const span of spans) {
+    if (span.name !== "llm.generate") continue;
+    const stepIndex =
+      typeof span.attributes["harnesslab.step.index"] === "number"
+        ? (span.attributes["harnesslab.step.index"] as number)
+        : 0;
+    const latencyMs =
+      typeof span.metrics?.latency_ms === "number" ? span.metrics.latency_ms : undefined;
+    const reasoning =
+      typeof span.metrics?.reasoning_text === "string" ? span.metrics.reasoning_text : undefined;
+    thoughts.push({
+      stepIndex,
+      status: "done",
+      text: reasoning,
+      startedAt: new Date(span.start_time).getTime(),
+      durationMs: latencyMs,
+    });
+  }
+  return thoughtsWithText(thoughts);
+}
+
+function toolsFromSpans(spans: SpanRecordItem[]): ToolCard[] {
   const tools: ToolCard[] = [];
-  for (const evt of events) {
-    if (evt.event_type === "tool_executed") {
-      const card = toolCardFromTraceEvent(evt);
-      if (card) tools.push(card);
-    }
-    if (evt.event_type === "tool_denied") {
-      tools.push({
-        tool: String(evt.payload.tool || "tool"),
-        ok: false,
-        error: String(evt.payload.reason || evt.payload.policy_decision || "denied"),
-        output_preview: "",
-        output_truncated: false,
-        duration_ms: null,
-      });
-    }
+  for (const span of spans) {
+    const card = toolCardFromSpan(span);
+    if (card) tools.push(card);
   }
   return tools;
 }
 
 /** Map terminal assistant message id → thoughts + tools for each user turn. */
-export function buildTurnEnrichmentsFromTrace(
+export function buildTurnEnrichmentsFromSpans(
   messages: MessageItem[],
-  traceEvents: TraceEventItem[]
+  spans: SpanRecordItem[]
 ): Record<string, TurnEnrichment> {
   const turns = splitMessageTurns(messages);
   const out: Record<string, TurnEnrichment> = {};
@@ -176,20 +127,28 @@ export function buildTurnEnrichmentsFromTrace(
     const target = terminalAssistantInTurn(turnMessages);
     if (!target) return;
 
-    const turnTrace = traceEventsForTurn(traceEvents, turnIndex);
-    let thoughts = thoughtsFromTraceEvents(turnTrace);
+    const turnSpans = spansForTurn(spans, turnIndex);
+    let thoughts = thoughtsFromSpans(turnSpans);
     thoughts = mergeMessageReasoningIntoThoughts(
       thoughts,
       target.reasoning_text,
       target.created_at
     );
-    const tools = toolsFromTraceEvents(turnTrace);
+    const tools = toolsFromSpans(turnSpans);
 
     if (!thoughts.length && !tools.length) return;
     out[target.id] = { thoughts, tools };
   });
 
   return out;
+}
+
+/** @deprecated use buildTurnEnrichmentsFromSpans */
+export function buildTurnEnrichmentsFromTrace(
+  messages: MessageItem[],
+  _traceEvents: unknown[]
+): Record<string, TurnEnrichment> {
+  return buildTurnEnrichmentsFromSpans(messages, []);
 }
 
 export function mergeTurnEnrichments(

@@ -17,7 +17,7 @@ from harnesslab.core.contracts import (
     ArtifactStorePort,
     MemoryStorePort,
     SessionStorePort,
-    TraceRecorderPort,
+    SpanRecorderPort,
 )
 from harnesslab.core.loop import DEFAULT_MAX_STEPS, HarnessLoop
 from harnesslab.core.models import Session
@@ -68,7 +68,7 @@ from harnesslab.replay import (
     child_session_ids_for_parent,
     detect_divergence,
     group_by_session,
-    read_trace,
+    read_spans,
     replay_session,
 )
 from harnesslab.session.in_memory import InMemorySessionStore
@@ -81,11 +81,9 @@ from harnesslab.skills.catalog import (
     search_skills,
 )
 from harnesslab.skills.index_loader import default_catalog_sources
-from harnesslab.telemetry.aggregate import aggregate, render_metrics
-from harnesslab.telemetry.jsonl_recorder import JsonlTraceRecorder
+from harnesslab.telemetry.aggregate import aggregate_spans, render_metrics
 from harnesslab.telemetry.log import configure_logging, get_logger
-from harnesslab.telemetry.otel_metrics import wrap_trace_recorder_with_metrics
-from harnesslab.telemetry.otel_recorder import wrap_trace_recorder
+from harnesslab.telemetry.recorder_factory import build_span_recorder, default_spans_path
 from harnesslab.tools.fetch_url_tool import FetchUrlTool, resolve_jina_api_key
 from harnesslab.tools.file_tools import (
     EditFileTool,
@@ -107,7 +105,7 @@ from harnesslab.tools.research_tools import (
 from harnesslab.tools.shell_tool import RunShellSafeTool
 from harnesslab.tools.spawn_sub_agent import SpawnSubAgentTool
 from harnesslab.web.server import WebRuntime, serve
-from harnesslab.web.trace_hub import TraceHub
+from harnesslab.web.span_hub import SpanHub
 
 StorageBackend = Literal["memory", "sqlite"]
 ModelBackend = Literal["simple", "deepseek", "anthropic", "openai", "gemini"]
@@ -365,7 +363,7 @@ def build_runtime(
     storage_backend: StorageBackend = "memory",
     sqlite_path: Path | None = None,
     model_backend: ModelBackend = "simple",
-    trace: TraceRecorderPort | None = None,
+    spans: SpanRecorderPort | None = None,
     shell_profile: str | None = None,
     operator_config: OperatorConfig | None = None,
 ) -> HarnessLoop:
@@ -521,12 +519,8 @@ def build_runtime(
                 max_per_session=limits.max_sub_agents_per_session,
             )
         )
-    if trace is None:
-        trace = wrap_trace_recorder_with_metrics(
-            wrap_trace_recorder(
-                JsonlTraceRecorder(workspace_root / ".harnesslab" / "trace.jsonl")
-            )
-        )
+    if spans is None:
+        spans = build_span_recorder(workspace_root)
     raw_skill_mode = (
         os.environ.get("HARNESSLAB_SKILL_SELECTION_MODE")
         or (
@@ -640,7 +634,7 @@ def build_runtime(
         policy=policy,
         sessions=sessions,
         tools=tools,
-        trace=trace,
+        spans=spans,
         clock=SystemClock(),
         ids=UuidIdProvider(),
         limits=limits,
@@ -1372,15 +1366,15 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         return EXIT_USAGE
     workspace_root = Path(args.workspace_root).resolve()
     sqlite_path = Path(args.sqlite_path) if args.sqlite_path else None
-    trace_path = workspace_root / ".harnesslab" / "trace.jsonl"
-    trace_hub = TraceHub(wrap_trace_recorder(JsonlTraceRecorder(trace_path)))
+    spans_path = default_spans_path(workspace_root)
+    span_hub = SpanHub(build_span_recorder(workspace_root, spans_path=spans_path))
     try:
         loop = build_runtime(
             workspace_root=workspace_root,
             storage_backend="sqlite",
             sqlite_path=sqlite_path,
             model_backend=model_backend,  # type: ignore[arg-type]
-            trace=trace_hub,
+            spans=span_hub,
             limits=resolve_runtime_limits(None, config=config),
             shell_profile=resolve_shell_profile(None, config=config),
             operator_config=config,
@@ -1393,8 +1387,8 @@ def _cmd_serve(args: argparse.Namespace) -> int:
         model_backend=model_backend,  # type: ignore[arg-type]
         workspace_root=workspace_root,
         default_max_steps=max_steps,
-        trace_hub=trace_hub,
-        trace_path=trace_path,
+        span_hub=span_hub,
+        spans_path=spans_path,
         operator_config=config,
         settings=_serve_settings_snapshot(
             config,
@@ -1444,20 +1438,20 @@ def _load_suite_or_single(tasks_dir: Path, task_stem: str | None) -> TaskSuite:
 
 
 def _cmd_replay(args: argparse.Namespace) -> int:
-    trace_path = Path(args.trace)
-    if not trace_path.exists():
-        raise SystemExit(f"trace file not found: {trace_path}")
+    spans_path = Path(args.trace)
+    if not spans_path.exists():
+        raise SystemExit(f"spans file not found: {spans_path}")
     try:
-        events = read_trace(trace_path)
+        spans = read_spans(spans_path)
     except json.JSONDecodeError as exc:
-        print(f"invalid JSONL trace: {exc}", file=sys.stderr)
+        print(f"invalid JSONL spans: {exc}", file=sys.stderr)
         return EXIT_UNREPLAYABLE
 
-    grouped = group_by_session(events)
+    grouped = group_by_session(spans)
     if args.session_id is not None:
         if args.session_id not in grouped:
             print(
-                f"session id {args.session_id!r} not found in trace "
+                f"session id {args.session_id!r} not found in spans "
                 f"(present: {list(grouped.keys())})",
                 file=sys.stderr,
             )
@@ -1466,7 +1460,7 @@ def _cmd_replay(args: argparse.Namespace) -> int:
         if args.include_children:
             session_ids.extend(
                 sid
-                for sid in child_session_ids_for_parent(events, args.session_id)
+                for sid in child_session_ids_for_parent(spans, args.session_id)
                 if sid in grouped
             )
         grouped = {sid: grouped[sid] for sid in session_ids}
@@ -1474,23 +1468,23 @@ def _cmd_replay(args: argparse.Namespace) -> int:
     workspace_root = Path(args.workspace).resolve() if args.workspace else None
 
     any_divergence = False
-    spawn_fan_in = frozenset({"sub_agent_spawned", "sub_agent_completed"})
-    for sid, session_events in grouped.items():
+    ignore = frozenset({"sub_agent.run"})
+    for sid, session_spans in grouped.items():
         try:
-            replayed = replay_session(session_events, workspace_root=workspace_root)
+            replayed = replay_session(session_spans, workspace_root=workspace_root)
         except UnreplayableTraceError as exc:
             print(f"[{sid}] unreplayable: {exc}", file=sys.stderr)
             return EXIT_UNREPLAYABLE
-        ignore = (
-            spawn_fan_in
-            if any(e.event_type in spawn_fan_in for e in session_events)
+        use_ignore = (
+            ignore
+            if any(s.name == "sub_agent.run" for s in session_spans)
             else frozenset()
         )
         report = detect_divergence(
-            session_events,
+            session_spans,
             replayed,
             strict=args.strict,
-            ignore_event_types=ignore,
+            ignore_span_names=use_ignore,
         )
         print(f"[{sid}] {report.render()}")
         if not report.matched:
@@ -1500,16 +1494,16 @@ def _cmd_replay(args: argparse.Namespace) -> int:
 
 
 def _cmd_metrics(args: argparse.Namespace) -> int:
-    trace_path = Path(args.trace)
-    if not trace_path.exists():
-        raise SystemExit(f"trace file not found: {trace_path}")
+    spans_path = Path(args.trace)
+    if not spans_path.exists():
+        raise SystemExit(f"spans file not found: {spans_path}")
     try:
-        events = read_trace(trace_path)
+        spans = read_spans(spans_path)
     except json.JSONDecodeError as exc:
-        print(f"invalid JSONL trace: {exc}", file=sys.stderr)
+        print(f"invalid JSONL spans: {exc}", file=sys.stderr)
         return EXIT_USAGE
 
-    metrics = aggregate(events)
+    metrics = aggregate_spans(spans)
     if args.json:
         print(json.dumps(metrics.model_dump(mode="json"), indent=2))
     else:
@@ -1525,15 +1519,15 @@ def _cmd_propose(args: argparse.Namespace) -> int:
         )
         return EXIT_USAGE
 
-    events = []
+    spans_list: list = []
     if args.trace:
-        trace_path = Path(args.trace)
-        if not trace_path.exists():
-            raise SystemExit(f"trace file not found: {trace_path}")
+        spans_path = Path(args.trace)
+        if not spans_path.exists():
+            raise SystemExit(f"spans file not found: {spans_path}")
         try:
-            events = read_trace(trace_path)
+            spans_list = read_spans(spans_path)
         except json.JSONDecodeError as exc:
-            print(f"invalid JSONL trace: {exc}", file=sys.stderr)
+            print(f"invalid JSONL spans: {exc}", file=sys.stderr)
             return EXIT_USAGE
 
     eval_results: list[TaskResult] | None = None
@@ -1545,7 +1539,7 @@ def _cmd_propose(args: argparse.Namespace) -> int:
 
     out_dir = Path(args.out)
     proposals = generate(
-        events,
+        spans_list,
         eval_results=eval_results,
         min_occurrences=args.min_occurrences,
     )
@@ -1866,10 +1860,10 @@ def _cmd_context(args: argparse.Namespace) -> int:
 
 
 def _cmd_context_show(args: argparse.Namespace) -> int:
-    events = _read_trace_or_exit(args.trace)
-    snapshots = _collect_context_snapshots(events, args.session_id)
+    spans = _read_spans_or_exit(args.trace)
+    snapshots = _collect_context_snapshots(spans, args.session_id)
     if not snapshots:
-        msg = "(no model_call events with context found"
+        msg = "(no llm.generate spans with context found"
         if args.session_id:
             msg += f" for session {args.session_id!r}"
         print(msg + ")")
@@ -1893,50 +1887,48 @@ def _cmd_context_show(args: argparse.Namespace) -> int:
 
 
 def _cmd_context_series(args: argparse.Namespace) -> int:
-    events = _read_trace_or_exit(args.trace)
-    snapshots = _collect_context_snapshots(events, args.session_id)
+    spans = _read_spans_or_exit(args.trace)
+    snapshots = _collect_context_snapshots(spans, args.session_id)
     if not snapshots:
-        print("(no model_call events with context found)")
+        print("(no llm.generate spans with context found)")
         return EXIT_OK
     rows = snapshots[-max(1, args.limit) :]
     print(_format_context_series(rows))
     return EXIT_OK
 
 
-def _read_trace_or_exit(trace_arg: str) -> list:
-    trace_path = Path(trace_arg)
-    if not trace_path.exists():
-        raise SystemExit(f"trace file not found: {trace_path}")
+def _read_spans_or_exit(spans_arg: str) -> list:
+    spans_path = Path(spans_arg)
+    if not spans_path.exists():
+        raise SystemExit(f"spans file not found: {spans_path}")
     try:
-        return read_trace(trace_path)
+        return read_spans(spans_path)
     except json.JSONDecodeError as exc:
-        print(f"invalid JSONL trace: {exc}", file=sys.stderr)
+        print(f"invalid JSONL spans: {exc}", file=sys.stderr)
         raise SystemExit(EXIT_USAGE) from exc
 
 
 def _collect_context_snapshots(
-    events: list,
+    spans: list,
     session_id: str | None,
 ) -> list[dict]:
-    """Return one ``{session_id, created_at, **snapshot}`` row per call.
+    """Return one ``{session_id, created_at, **snapshot}`` row per LLM call."""
 
-    Snapshots are ordered by ``created_at`` so ``[-1]`` is the latest
-    and ``[-N:]`` is the most recent window.
-    """
+    from harnesslab.telemetry.span_attributes import SPAN_LLM_GENERATE
 
     rows: list[dict] = []
-    for ev in events:
-        if ev.event_type != "model_call":
+    for span in spans:
+        if span.name != SPAN_LLM_GENERATE:
             continue
-        if session_id and ev.session_id != session_id:
+        if session_id and span.session_id != session_id:
             continue
-        ctx = ev.payload.get("context")
+        ctx = span.metrics.get("context")
         if not isinstance(ctx, dict):
             continue
         rows.append(
             {
-                "session_id": ev.session_id,
-                "created_at": ev.created_at.isoformat(),
+                "session_id": span.session_id,
+                "created_at": span.end_time.isoformat(),
                 **ctx,
             }
         )

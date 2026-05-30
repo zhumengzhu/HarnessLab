@@ -35,8 +35,9 @@ from harnesslab.core.contracts import (
     PolicyPort,
     SemanticMemoryStorePort,
     SessionStorePort,
-    TraceRecorderPort,
+    SpanRecorderPort,
 )
+from harnesslab.core.loop_spans import LoopSpans
 from harnesslab.core.memory_policy import (
     append_note,
     format_memory_message,
@@ -53,9 +54,9 @@ from harnesslab.core.models import (
     Decision,
     Message,
     Session,
+    SpanHandle,
     ToolCall,
     ToolResult,
-    TraceEvent,
 )
 from harnesslab.core.runtime import SystemClock, UuidIdProvider
 from harnesslab.core.skill_policy import (
@@ -104,7 +105,7 @@ class HarnessLoop:
         policy: PolicyPort,
         sessions: SessionStorePort,
         tools: ToolRegistry,
-        trace: TraceRecorderPort,
+        spans: SpanRecorderPort,
         clock: ClockPort | None = None,
         ids: IdPort | None = None,
         limits: RuntimeLimits | None = None,
@@ -125,7 +126,8 @@ class HarnessLoop:
         self._policy = policy
         self._sessions = sessions
         self._tools = tools
-        self._trace = trace
+        self._spans = spans
+        self._loop_spans = LoopSpans(spans)
         self._clock: ClockPort = clock or SystemClock()
         self._ids: IdPort = ids or UuidIdProvider()
         self._limits: RuntimeLimits = limits or RuntimeLimits()
@@ -155,11 +157,6 @@ class HarnessLoop:
             title=derive_title_from_text(goal),
         )
         self._sessions.create(session)
-        self._record(
-            session=session,
-            event_type="session_started",
-            payload=self._session_started_payload(goal=goal),
-        )
         _log.info("session started id=%s goal=%r", session.id, goal[:80])
         return session
 
@@ -174,14 +171,6 @@ class HarnessLoop:
             parent_session_id=parent_session_id,
         )
         self._sessions.create(session)
-        self._record(
-            session=session,
-            event_type="session_started",
-            payload={
-                **self._session_started_payload(goal=goal),
-                "parent_session_id": parent_session_id,
-            },
-        )
         return session
 
     def fork(self, source_id: str, *, goal: str | None = None) -> Session:
@@ -219,14 +208,6 @@ class HarnessLoop:
             messages=copied_messages,
         )
         self._sessions.create(forked)
-        self._record(
-            session=forked,
-            event_type="session_started",
-            payload={
-                **self._session_started_payload(goal=forked.goal),
-                "parent_session_id": parent.id,
-            },
-        )
         return forked
 
     def run_turn(self, session_id: str, user_input: str) -> str:
@@ -261,227 +242,86 @@ class HarnessLoop:
 
         session = self._sessions.get(session_id)
         session.status = "running"
-        self._record(
-            session=session,
-            event_type="user_input_received",
-            payload={
-                "turn_index": session.turn_count,
-                "user_input": user_input,
-            },
-        )
-        session.messages.append(
-            self._make_message(role="user", content=user_input, session=session)
-        )
-        self._inject_workspace_memory(session)
-        self._inject_session_memory(session)
+        shell_profile = self._shell_profile()
 
-        remember_body = parse_remember_command(user_input)
-        if remember_body is not None:
-            return self._run_remember_turn(session, remember_body)
-
-        global_body = parse_remember_global_command(user_input)
-        if global_body is not None:
-            return self._run_remember_global_turn(session, global_body)
-
-        if parse_compact_command(user_input):
-            return self._run_compact_turn(session)
-
-        skill_command = parse_skill_command(user_input)
-        if skill_command is None:
-            skill_command = parse_direct_skill_command(
-                user_input, list_skills(self._workspace_root)
-            )
-        model_user_input = user_input
-        if skill_command is not None:
-            if skill_command.kind == "invoke":
-                model_user_input = self._prepare_skill_invoke(session, skill_command)
-            else:
-                return self._run_skill_turn(session, skill_command)
-
-        effective_max_steps = max_steps
-        if skill_command is not None and skill_command.kind == "invoke":
-            effective_max_steps = max(max_steps, SKILL_INVOKE_MIN_STEPS)
-
-        last_response = ""
-        terminal_reason = "max_steps"
-        steps_used = 0
-        prev_terminal: str | None = None
-        turn_usage = TurnBudgetUsage()
-        turn_started_at = self._clock.now()
-        session_wall_base = session.budget_usage.wall_time_ms_total
-
-        for step_index in range(effective_max_steps):
-            self._record(
-                session=session,
-                event_type="step_started",
-                payload={
-                    "step_index": step_index,
-                    "reason": (
-                        "initial" if step_index == 0 else f"after_{prev_terminal}"
-                    ),
-                },
-            )
-            _log.debug(
-                "step started session=%s index=%s reason=%s",
-                session.id,
-                step_index,
-                "initial" if step_index == 0 else f"after_{prev_terminal}",
-            )
-
-            if step_index > 0:
-                self._apply_pending_steer(session, step_index=step_index)
-
-            self._maybe_compact(session, trigger="threshold")
-            if self._enforce_budget(
-                session=session,
-                turn_usage=turn_usage,
-                turn_started_at=turn_started_at,
-                session_wall_base=session_wall_base,
-            ):
-                terminal_reason = self._budget_limits.action_on_hard
-                if terminal_reason == "error":
-                    terminal_reason = "final"
-                last_response = self._budget_stop_message(session)
-                session.messages.append(
-                    self._make_message(
-                        role="assistant",
-                        content=last_response,
-                        session=session,
-                    )
-                )
-                break
-
-            step_input = model_user_input if step_index == 0 else ""
-            self._record(
-                session=session,
-                event_type="model_call_started",
-                payload={
-                    "step_index": step_index,
-                    "thinking_likely": self._model_thinking_likely(),
-                },
-            )
-            decision, decision_started, decision_ended = self._call_model_with_overflow(
-                session, step_input, step_index=step_index
-            )
-            turn_usage.llm_calls += 1
-            session.budget_usage.llm_calls_total += 1
-            token_total = self._model_total_tokens()
-            if token_total is not None:
-                session.budget_usage.tokens_total += token_total
-            self._accumulate_model_cost(session)
-            self._record(
-                session=session,
-                event_type="model_call",
-                payload=self._model_call_payload(
-                    decision=decision,
-                    started_at=decision_started,
-                    ended_at=decision_ended,
-                    session=session,
-                ),
-            )
-            self._record(
-                session=session,
-                event_type="decision_made",
-                payload={
-                    "kind": decision.kind,
-                    "tool_name": decision.tool_name,
-                    "tool_args": decision.tool_args,
-                    "assistant_message": decision.assistant_message,
-                    "reasoning_text": self._model_reasoning_text(),
-                },
-            )
-
-            step_response, step_outcome = self._apply_decision(session, decision)
-            if step_outcome in {"tool_ok", "tool_error"}:
-                turn_usage.tool_calls += 1
-                session.budget_usage.tool_calls_total += 1
-            _log.debug(
-                "decision applied session=%s kind=%s outcome=%s",
-                session.id,
-                decision.kind,
-                step_outcome,
-            )
-            last_response = step_response
-            prev_terminal = step_outcome
-            steps_used = step_index + 1
-            session.step_count += 1
-            session.last_step_at = self._clock.now()
-
-            self._record(
-                session=session,
-                event_type="step_completed",
-                payload={
-                    "step_index": step_index,
-                    "outcome": step_outcome,
-                },
-            )
-
-            turn_usage.wall_time_ms = self._elapsed_ms(turn_started_at)
-            session.budget_usage.wall_time_ms_total = self._session_wall_time_total(
-                base_ms=session_wall_base,
-                turn_elapsed_ms=turn_usage.wall_time_ms,
-            )
-            if self._enforce_budget(
-                session=session,
-                turn_usage=turn_usage,
-                turn_started_at=turn_started_at,
-                session_wall_base=session_wall_base,
-            ):
-                terminal_reason = self._budget_limits.action_on_hard
-                if terminal_reason == "error":
-                    terminal_reason = "final"
-                last_response = self._budget_stop_message(session)
-                session.messages.append(
-                    self._make_message(
-                        role="assistant",
-                        content=last_response,
-                        session=session,
-                    )
-                )
-                break
-
-            if decision.kind in TERMINAL_DECISION_KINDS:
-                terminal_reason = decision.kind
-                break
-            self._maybe_emit_replan_reminder(
-                session=session,
-                steps_used=steps_used,
-                max_steps=effective_max_steps,
-            )
-
-        if (
-            terminal_reason == "max_steps"
-            and steps_used >= effective_max_steps
-            and effective_max_steps > 1
-        ):
-            last_response = (
-                f"Step budget reached ({effective_max_steps} inner steps). "
-                "This session is still open — send **continue** to keep researching, "
-                "or **summarize what you have so far** for a partial report."
+        with self._loop_spans.turn_scope(
+            session,
+            user_input=user_input,
+            max_steps=max_steps,
+            shell_profile=shell_profile,
+        ) as turn_handle:
+            self._spans.add_span_event(
+                turn_handle,
+                "user.input.received",
+                {"user_input": user_input},
             )
             session.messages.append(
-                self._make_message(
-                    role="assistant",
-                    content=last_response,
-                    session=session,
-                )
+                self._make_message(role="user", content=user_input, session=session)
             )
-            session.status = "waiting_user"
+            self._inject_workspace_memory(session)
+            self._inject_session_memory(session)
 
-        turn_usage.wall_time_ms = self._elapsed_ms(turn_started_at)
-        session.budget_usage.wall_time_ms_total = self._session_wall_time_total(
-            base_ms=session_wall_base,
-            turn_elapsed_ms=turn_usage.wall_time_ms,
-        )
+            remember_body = parse_remember_command(user_input)
+            if remember_body is not None:
+                return self._run_remember_turn(session, remember_body, turn_handle)
 
-        self._record(
-            session=session,
-            event_type="session_finished",
-            payload={
-                "reason": terminal_reason,
-                "steps": steps_used,
-            },
-        )
+            global_body = parse_remember_global_command(user_input)
+            if global_body is not None:
+                return self._run_remember_global_turn(session, global_body, turn_handle)
+
+            if parse_compact_command(user_input):
+                return self._run_compact_turn(session, turn_handle)
+
+            skill_command = parse_skill_command(user_input)
+            if skill_command is None:
+                skill_command = parse_direct_skill_command(
+                    user_input, list_skills(self._workspace_root)
+                )
+            model_user_input = user_input
+            if skill_command is not None:
+                if skill_command.kind == "invoke":
+                    model_user_input = self._prepare_skill_invoke(session, skill_command)
+                else:
+                    return self._run_skill_turn(session, skill_command, turn_handle)
+
+            effective_max_steps = max_steps
+            if skill_command is not None and skill_command.kind == "invoke":
+                effective_max_steps = max(max_steps, SKILL_INVOKE_MIN_STEPS)
+
+            last_response, terminal_reason, steps_used = self._run_model_turn_steps(
+                session,
+                model_user_input=model_user_input,
+                max_steps=effective_max_steps,
+                skill_command=skill_command,
+            )
+
+            if (
+                terminal_reason == "max_steps"
+                and steps_used >= effective_max_steps
+                and effective_max_steps > 1
+            ):
+                last_response = (
+                    f"Step budget reached ({effective_max_steps} inner steps). "
+                    "This session is still open — send **continue** to keep researching, "
+                    "or **summarize what you have so far** for a partial report."
+                )
+                session.messages.append(
+                    self._make_message(
+                        role="assistant",
+                        content=last_response,
+                        session=session,
+                    )
+                )
+                session.status = "waiting_user"
+
+            self._loop_spans.store_child_turn_root(turn_handle)
+            self._maybe_auto_title(session, turn_handle)
+            self._loop_spans.finish_turn(
+                turn_handle,
+                terminal_reason=terminal_reason,
+                steps_used=steps_used,
+            )
+
         _log.info(
             "session finished id=%s reason=%s steps=%s turn=%s",
             session.id,
@@ -495,63 +335,233 @@ class HarnessLoop:
             session.status = "done"
         elif terminal_reason == "ask_user":
             session.status = "waiting_user"
-        # Hitting max_steps leaves status as "running" — the next
-        # run_session call can extend the session.
-        self._maybe_auto_title(session)
         self._sessions.save(session)
         return last_response
 
-    def _maybe_auto_title(self, session: Session) -> None:
+    def _run_model_turn_steps(
+        self,
+        session: Session,
+        *,
+        model_user_input: str,
+        max_steps: int,
+        skill_command: SkillCommand | None,
+    ) -> tuple[str, str, int]:
+        """Inner step loop; returns ``(last_response, terminal_reason, steps_used)``."""
+
+        last_response = ""
+        terminal_reason = "max_steps"
+        steps_used = 0
+        prev_terminal: str | None = None
+        turn_usage = TurnBudgetUsage()
+        turn_started_at = self._clock.now()
+        session_wall_base = session.budget_usage.wall_time_ms_total
+
+        def _execute_steps() -> None:
+            nonlocal last_response, terminal_reason, steps_used, prev_terminal
+            for step_index in range(max_steps):
+                step_reason = (
+                    "initial" if step_index == 0 else f"after_{prev_terminal}"
+                )
+                _log.debug(
+                    "step started session=%s index=%s reason=%s",
+                    session.id,
+                    step_index,
+                    step_reason,
+                )
+                with self._loop_spans.step(
+                    session, step_index=step_index, reason=step_reason
+                ) as step_handle:
+                    if step_index > 0:
+                        self._apply_pending_steer(session, step_index=step_index)
+
+                    self._maybe_compact(session, trigger="threshold")
+                    if self._enforce_budget(
+                        session=session,
+                        turn_usage=turn_usage,
+                        turn_started_at=turn_started_at,
+                        session_wall_base=session_wall_base,
+                    ):
+                        terminal_reason = self._budget_limits.action_on_hard
+                        if terminal_reason == "error":
+                            terminal_reason = "final"
+                        last_response = self._budget_stop_message(session)
+                        session.messages.append(
+                            self._make_message(
+                                role="assistant",
+                                content=last_response,
+                                session=session,
+                            )
+                        )
+                        self._loop_spans.finish_step(step_handle, outcome="budget_stop")
+                        break
+
+                    step_input = model_user_input if step_index == 0 else ""
+                    with self._loop_spans.llm_generate(
+                        session,
+                        step_index=step_index,
+                        thinking_likely=self._model_thinking_likely(),
+                    ) as llm_handle:
+                        decision, decision_started, decision_ended = (
+                            self._call_model_with_overflow(
+                                session, step_input, step_index=step_index
+                            )
+                        )
+                        turn_usage.llm_calls += 1
+                        session.budget_usage.llm_calls_total += 1
+                        token_total = self._model_total_tokens()
+                        if token_total is not None:
+                            session.budget_usage.tokens_total += token_total
+                        self._accumulate_model_cost(session)
+                        call_payload = self._model_call_payload(
+                            decision=decision,
+                            started_at=decision_started,
+                            ended_at=decision_ended,
+                            session=session,
+                        )
+                        meta = self._model_metadata(self._model_raw_meta())
+                        self._loop_spans.finish_llm_generate(
+                            llm_handle,
+                            decision_kind=decision.kind,
+                            metrics=self._llm_metrics_from_payload(call_payload),
+                            provider=(
+                                str(meta["provider"])
+                                if meta.get("provider") is not None
+                                else None
+                            ),
+                            model_id=(
+                                str(meta["model_name"])
+                                if meta.get("model_name") is not None
+                                else None
+                            ),
+                            failover_attempts=int(meta.get("failover_attempts") or 0),
+                        )
+                    self._loop_spans.add_step_event(
+                        session,
+                        "decision.applied",
+                        attributes={
+                            "kind": decision.kind,
+                            "tool_name": decision.tool_name,
+                            "tool_args": decision.tool_args,
+                            "assistant_message": decision.assistant_message,
+                            "reasoning_text": self._model_reasoning_text(),
+                        },
+                    )
+
+                    step_response, step_outcome = self._apply_decision(session, decision)
+                    if step_outcome in {"tool_ok", "tool_error"}:
+                        turn_usage.tool_calls += 1
+                        session.budget_usage.tool_calls_total += 1
+                    _log.debug(
+                        "decision applied session=%s kind=%s outcome=%s",
+                        session.id,
+                        decision.kind,
+                        step_outcome,
+                    )
+                    last_response = step_response
+                    prev_terminal = step_outcome
+                    steps_used = step_index + 1
+                    session.step_count += 1
+                    session.last_step_at = self._clock.now()
+                    self._loop_spans.finish_step(step_handle, outcome=step_outcome)
+
+                    turn_usage.wall_time_ms = self._elapsed_ms(turn_started_at)
+                    session.budget_usage.wall_time_ms_total = (
+                        self._session_wall_time_total(
+                            base_ms=session_wall_base,
+                            turn_elapsed_ms=turn_usage.wall_time_ms,
+                        )
+                    )
+                    if self._enforce_budget(
+                        session=session,
+                        turn_usage=turn_usage,
+                        turn_started_at=turn_started_at,
+                        session_wall_base=session_wall_base,
+                    ):
+                        terminal_reason = self._budget_limits.action_on_hard
+                        if terminal_reason == "error":
+                            terminal_reason = "final"
+                        last_response = self._budget_stop_message(session)
+                        session.messages.append(
+                            self._make_message(
+                                role="assistant",
+                                content=last_response,
+                                session=session,
+                            )
+                        )
+                        break
+
+                    if decision.kind in TERMINAL_DECISION_KINDS:
+                        terminal_reason = decision.kind
+                        break
+                    self._maybe_emit_replan_reminder(
+                        session=session,
+                        steps_used=steps_used,
+                        max_steps=max_steps,
+                    )
+
+        if skill_command is not None and skill_command.kind == "invoke":
+            name = (skill_command.name or "").strip()
+            task = model_user_input
+            with self._loop_spans.skill_invoke(
+                session, skill_name=name, task=task
+            ):
+                _execute_steps()
+        else:
+            _execute_steps()
+
+        turn_usage.wall_time_ms = self._elapsed_ms(turn_started_at)
+        session.budget_usage.wall_time_ms_total = self._session_wall_time_total(
+            base_ms=session_wall_base,
+            turn_elapsed_ms=turn_usage.wall_time_ms,
+        )
+        return last_response, terminal_reason, steps_used
+
+    def _maybe_auto_title(self, session: Session, turn_handle: SpanHandle | None = None) -> None:
         """Replace the placeholder title after the first user turn.
 
         Runs at most once (``turn_count == 1``). Failures are silent;
         the derived title from :func:`derive_title_from_text` remains.
         """
 
-        if session.turn_count != 1 or self._title_namer is None:
+        if session.turn_count != 0 or self._title_namer is None:
             return
         previous = session.title
         try:
-            proposed = self._title_namer(session)
+            with self._loop_spans.llm_title(session, parent=turn_handle):
+                proposed = self._title_namer(session)
         except Exception:
             return
         if not proposed or proposed == previous:
             return
         session.title = proposed
-        self._record(
-            session=session,
-            event_type="session_titled",
-            payload={
-                "title": proposed,
-                "previous_title": previous,
-                "source": "llm",
-            },
-        )
 
-    def _run_remember_turn(self, session: Session, body: str) -> str:
+    def _run_remember_turn(
+        self, session: Session, body: str, turn_handle: SpanHandle
+    ) -> str:
         """Handle ``/remember`` without calling the model."""
 
-        if self._memory is None:
-            reply = "Memory store is not configured."
-        else:
-            self._write_remember_note(session, body)
-            reply = "Stored in session memory."
+        with self._loop_spans.slash_remember(session):
+            if self._memory is None:
+                reply = "Memory store is not configured."
+            else:
+                self._write_remember_note(session, body)
+                reply = "Stored in session memory."
 
         session.messages.append(
             self._make_message(role="assistant", content=reply, session=session)
         )
-        self._record(
-            session=session,
-            event_type="session_finished",
-            payload={"reason": "remember", "steps": 0},
+        self._maybe_auto_title(session, turn_handle)
+        self._loop_spans.finish_turn(
+            turn_handle, terminal_reason="remember", steps_used=0
         )
         session.turn_count += 1
         session.status = "running"
-        self._maybe_auto_title(session)
         self._sessions.save(session)
         return reply
 
-    def _run_remember_global_turn(self, session: Session, body: str) -> str:
+    def _run_remember_global_turn(
+        self, session: Session, body: str, turn_handle: SpanHandle
+    ) -> str:
         """Handle ``/remember-global`` without calling the model."""
 
         if self._memory is None or self._workspace_root is None:
@@ -563,18 +573,16 @@ class HarnessLoop:
         session.messages.append(
             self._make_message(role="assistant", content=reply, session=session)
         )
-        self._record(
-            session=session,
-            event_type="session_finished",
-            payload={"reason": "remember_global", "steps": 0},
+        self._maybe_auto_title(session, turn_handle)
+        self._loop_spans.finish_turn(
+            turn_handle, terminal_reason="remember_global", steps_used=0
         )
         session.turn_count += 1
         session.status = "running"
-        self._maybe_auto_title(session)
         self._sessions.save(session)
         return reply
 
-    def _run_compact_turn(self, session: Session) -> str:
+    def _run_compact_turn(self, session: Session, turn_handle: SpanHandle) -> str:
         """Handle ``/compact`` — operator-initiated context compaction."""
 
         if session.messages and session.messages[-1].role == "user":
@@ -606,14 +614,12 @@ class HarnessLoop:
         session.messages.append(
             self._make_message(role="assistant", content=reply, session=session)
         )
-        self._record(
-            session=session,
-            event_type="session_finished",
-            payload={"reason": "compact", "steps": 0},
+        self._maybe_auto_title(session, turn_handle)
+        self._loop_spans.finish_turn(
+            turn_handle, terminal_reason="compact", steps_used=0
         )
         session.turn_count += 1
         session.status = "running"
-        self._maybe_auto_title(session)
         self._sessions.save(session)
         return reply
 
@@ -641,11 +647,14 @@ class HarnessLoop:
         self._sessions.save(session)
         return task
 
-    def _run_skill_turn(self, session: Session, command: SkillCommand) -> str:
+    def _run_skill_turn(
+        self, session: Session, command: SkillCommand, turn_handle: SpanHandle
+    ) -> str:
         """Handle ``/skill`` commands without model calls."""
 
         available = list_skills(self._workspace_root)
         selected = selected_skills_from_messages(session.messages)
+        command_label = command.kind if command.kind != "add" else f"add:{command.name}"
 
         if command.kind == "list":
             lines = [
@@ -659,12 +668,26 @@ class HarnessLoop:
                 "Selected skills: " + (", ".join(selected) if selected else "(none)")
             )
             reply = "\n".join(lines)
-            return self._finish_skill_turn(session, reply, selected=selected, persist=False)
+            return self._finish_skill_turn(
+                session,
+                reply,
+                turn_handle=turn_handle,
+                command=command_label,
+                selected=selected,
+                persist=False,
+            )
 
         if command.kind == "clear":
             selected = []
             reply = "Cleared selected skills for this session."
-            return self._finish_skill_turn(session, reply, selected=selected, persist=True)
+            return self._finish_skill_turn(
+                session,
+                reply,
+                turn_handle=turn_handle,
+                command=command_label,
+                selected=selected,
+                persist=True,
+            )
 
         if command.kind in {"add", "remove"}:
             name = (command.name or "").strip()
@@ -672,6 +695,8 @@ class HarnessLoop:
                 return self._finish_skill_turn(
                     session,
                     "Usage: /skill [list|clear|add <name>|remove <name>|<name>].",
+                    turn_handle=turn_handle,
+                    command=command_label,
                     selected=selected,
                     persist=False,
                 )
@@ -679,6 +704,8 @@ class HarnessLoop:
                 return self._finish_skill_turn(
                     session,
                     f"Skill '{name}' not found under skills/*.md.",
+                    turn_handle=turn_handle,
+                    command=command_label,
                     selected=selected,
                     persist=False,
                 )
@@ -689,11 +716,20 @@ class HarnessLoop:
             else:
                 selected = [item for item in selected if item != name]
                 reply = f"Removed skill '{name}' from this session."
-            return self._finish_skill_turn(session, reply, selected=selected, persist=True)
+            return self._finish_skill_turn(
+                session,
+                reply,
+                turn_handle=turn_handle,
+                command=command_label,
+                selected=selected,
+                persist=True,
+            )
 
         return self._finish_skill_turn(
             session,
             "Usage: /skill [list|clear|add <name>|remove <name>|<name>].",
+            turn_handle=turn_handle,
+            command=command_label,
             selected=selected,
             persist=False,
         )
@@ -703,6 +739,8 @@ class HarnessLoop:
         session: Session,
         reply: str,
         *,
+        turn_handle: SpanHandle,
+        command: str,
         selected: list[str],
         persist: bool,
     ) -> str:
@@ -714,17 +752,16 @@ class HarnessLoop:
                     session=session,
                 )
             )
-        session.messages.append(
-            self._make_message(role="assistant", content=reply, session=session)
-        )
-        self._record(
-            session=session,
-            event_type="session_finished",
-            payload={"reason": "skill", "steps": 0},
+        with self._loop_spans.skill_command(session, command=command):
+            session.messages.append(
+                self._make_message(role="assistant", content=reply, session=session)
+            )
+        self._maybe_auto_title(session, turn_handle)
+        self._loop_spans.finish_turn(
+            turn_handle, terminal_reason="skill", steps_used=0
         )
         session.turn_count += 1
         session.status = "running"
-        self._maybe_auto_title(session)
         self._sessions.save(session)
         return reply
 
@@ -736,14 +773,13 @@ class HarnessLoop:
             return
         pending = buffer.drain(session.id)
         for steer_index, text in enumerate(pending):
-            self._record(
-                session=session,
-                event_type="user_steer_received",
-                payload={
-                    "turn_index": session.turn_count,
+            self._loop_spans.add_step_event(
+                session,
+                "user.steer",
+                attributes={
                     "step_index": step_index,
-                    "user_input": text,
                     "steer_index": steer_index,
+                    "user_input": text,
                 },
             )
             session.messages.append(
@@ -766,12 +802,13 @@ class HarnessLoop:
                 session=session,
             )
         )
-        self._record(
-            session=session,
-            event_type="workspace_memory_read",
-            payload={
+        self._loop_spans.add_step_event(
+            session,
+            "memory.read",
+            attributes={
                 "key": key,
                 "line_count": notes.count("\n") + 1,
+                "scope": "workspace",
             },
         )
 
@@ -791,12 +828,13 @@ class HarnessLoop:
                 session=session,
             )
         )
-        self._record(
-            session=session,
-            event_type="memory_read",
-            payload={
+        self._loop_spans.add_step_event(
+            session,
+            "memory.read",
+            attributes={
                 "key": key,
                 "line_count": notes.count("\n") + 1,
+                "scope": "session",
             },
         )
 
@@ -808,12 +846,11 @@ class HarnessLoop:
         previous = self._memory.get(key) if self._memory else None
         updated = append_note(previous, line)
         self._memory.put(key, updated)  # type: ignore[union-attr]
-        self._record(
-            session=session,
-            event_type="memory_written",
-            payload={
+        self._loop_spans.add_step_event(
+            session,
+            "memory.written",
+            attributes={
                 "key": key,
-                "line": line,
                 "line_count": updated.count("\n") + 1,
                 "source": "remember",
             },
@@ -829,12 +866,11 @@ class HarnessLoop:
         previous = self._memory.get(key) if self._memory else None
         updated = append_note(previous, line)
         self._memory.put(key, updated)  # type: ignore[union-attr]
-        self._record(
-            session=session,
-            event_type="workspace_memory_written",
-            payload={
+        self._loop_spans.add_step_event(
+            session,
+            "memory.written",
+            attributes={
                 "key": key,
-                "line": line,
                 "line_count": updated.count("\n") + 1,
                 "source": "remember_global",
             },
@@ -844,11 +880,19 @@ class HarnessLoop:
     # compaction
     # ------------------------------------------------------------------
 
+    def _compact_parent(self, trigger: str) -> SpanHandle:
+        if trigger == "manual":
+            parent = self._loop_spans.turn
+        else:
+            parent = self._loop_spans.active_step or self._loop_spans.turn
+        if parent is None:
+            raise RuntimeError(f"compaction requires active turn/step (trigger={trigger})")
+        return parent
+
     def _maybe_compact(self, session: Session, *, trigger: str) -> None:
         """Compact older messages when the conversation exceeds the budget.
 
-        Emits ``compaction_started`` and ``compaction_completed`` trace
-        events around the work. The summary is produced by the
+        Emits ``context.compact`` spans around the work. The summary is produced by the
         loop-level summarizer when supplied; otherwise the
         deterministic fallback in :mod:`harnesslab.core.compaction`
         is used so eval and replay stay reproducible.
@@ -876,34 +920,37 @@ class HarnessLoop:
             if estimated_tokens_override is not None
             else estimate_messages_tokens(session.messages)
         )
-        self._record(
-            session=session,
-            event_type="compaction_started",
-            payload={
-                "trigger": trigger,
-                "message_count": len(session.messages),
-                "estimated_tokens": estimated,
-                "threshold_tokens": self._limits.compaction_threshold_tokens,
-                "keep_last": keep_last,
-            },
-        )
-
-        new_messages, stats = compact_messages(
-            session.messages,
+        messages_before = len(session.messages)
+        parent = self._compact_parent(trigger)
+        compact_started = self._clock.now()
+        with self._loop_spans.compact(
+            session,
+            parent=parent,
+            trigger=trigger,
             keep_last=keep_last,
-            summarizer=self._summarizer,
-            now=self._clock.now(),
-            new_id=self._ids.new_id,
+            messages_before=messages_before,
+            threshold_tokens=self._limits.compaction_threshold_tokens,
+        ) as compact_handle:
+            new_messages, stats = compact_messages(
+                session.messages,
+                keep_last=keep_last,
+                summarizer=self._summarizer,
+                now=self._clock.now(),
+                new_id=self._ids.new_id,
+            )
+            session.messages = new_messages
+        duration_ms = max(
+            0.0,
+            (self._clock.now() - compact_started).total_seconds() * 1000.0,
         )
-        session.messages = new_messages
-
-        self._record(
-            session=session,
-            event_type="compaction_completed",
-            payload={
-                "trigger": trigger,
-                **stats,
+        self._loop_spans.finish_compact(
+            compact_handle,
+            messages_after=len(new_messages),
+            metrics={
+                "duration_ms": duration_ms,
+                "estimated_tokens_before": estimated,
                 "estimated_tokens_after": estimate_messages_tokens(new_messages),
+                **stats,
             },
         )
 
@@ -1146,10 +1193,10 @@ class HarnessLoop:
             tool_args=call.args,
             snapshots=snapshots,
         )
-        self._record(
-            session=session,
-            event_type="checkpoint_created",
-            payload={
+        self._loop_spans.add_step_event(
+            session,
+            "checkpoint.created",
+            attributes={
                 "checkpoint_id": checkpoint_id,
                 "tool_name": call.name,
                 "paths": sorted(snapshots.keys()),
@@ -1220,10 +1267,8 @@ class HarnessLoop:
                     provider_extra=extra,
                 )
             )
-            self._record(
-                session=session,
-                event_type="plan_emitted",
-                payload={"plan": reply},
+            self._loop_spans.add_step_event(
+                session, "plan.emitted", attributes={"plan": reply}
             )
             return reply, "plan"
 
@@ -1249,10 +1294,10 @@ class HarnessLoop:
         session.messages.append(
             self._make_message(role="system", content=reminder, session=session)
         )
-        self._record(
-            session=session,
-            event_type="plan_recheck_requested",
-            payload={
+        self._loop_spans.add_step_event(
+            session,
+            "plan.recheck_requested",
+            attributes={
                 "steps_used": steps_used,
                 "replan_after_steps": self._replan_after_steps,
             },
@@ -1295,16 +1340,16 @@ class HarnessLoop:
                 continue
             turn_usage.soft_notified.add(breach.dimension)
             session.budget_usage.last_budget_status = "soft_exceeded"
-            self._record_budget_event(session, breach, event_type="budget_soft_threshold")
+            self._record_budget_event(session, breach, event_name="budget.soft_threshold")
         if not hard:
             return False
         session.budget_usage.last_budget_status = "hard_exceeded"
         for breach in hard:
-            self._record_budget_event(session, breach, event_type="budget_hard_exceeded")
-        self._record(
-            session=session,
-            event_type="budget_enforcement_action",
-            payload={"action": self._budget_limits.action_on_hard},
+            self._record_budget_event(session, breach, event_name="budget.hard_exceeded")
+        self._loop_spans.add_step_event(
+            session,
+            "budget.enforcement_action",
+            attributes={"action": self._budget_limits.action_on_hard},
         )
         return True
 
@@ -1313,12 +1358,12 @@ class HarnessLoop:
         session: Session,
         breach: BudgetBreach,
         *,
-        event_type: str,
+        event_name: str,
     ) -> None:
-        self._record(
-            session=session,
-            event_type=event_type,
-            payload={
+        self._loop_spans.add_step_event(
+            session,
+            event_name,
+            attributes={
                 "dimension": breach.dimension,
                 "current": breach.current,
                 "limit": breach.limit,
@@ -1374,179 +1419,195 @@ class HarnessLoop:
             args=decision.tool_args,
         )
 
-        schema_ok, schema_error = self._tools.validate_args(call)
-        if not schema_ok:
-            invalid_msg = f"Tool args invalid: {schema_error}"
-            self._append_tool_exchange(session, call, invalid_msg)
-            self._record(
-                session=session,
-                event_type="tool_invalid_args",
-                payload={
-                    "tool_call_id": call.id,
-                    "tool": call.name,
-                    "args": call.args,
-                    "error": schema_error,
-                },
-            )
-            return invalid_msg, "tool_invalid_args"
+        with self._loop_spans.tool(
+            session, tool_name=call.name, tool_call_id=call.id
+        ) as tool_handle:
+            schema_ok, schema_error = self._tools.validate_args(call)
+            if not schema_ok:
+                invalid_msg = f"Tool args invalid: {schema_error}"
+                self._append_tool_exchange(session, call, invalid_msg)
+                self._loop_spans.tool_event(
+                    tool_handle,
+                    "tool.args_invalid",
+                    attributes={"error": schema_error},
+                )
+                self._loop_spans.finish_tool(
+                    tool_handle,
+                    ok=False,
+                    policy_decision=None,
+                    metrics={},
+                    status_message=schema_error,
+                )
+                return invalid_msg, "tool_invalid_args"
 
-        allowed, reason = self._policy.allow_tool(call)
-        call.policy_decision = f"{'allow' if allowed else 'deny'}:{reason}"
+            allowed, reason = self._policy.allow_tool(call)
+            call.policy_decision = f"{'allow' if allowed else 'deny'}:{reason}"
 
-        if not allowed:
-            denied_msg = f"Tool denied by policy: {reason}"
-            self._append_tool_exchange(session, call, denied_msg)
-            self._record(
-                session=session,
-                event_type="tool_denied",
-                payload={
-                    "tool_call_id": call.id,
-                    "tool": call.name,
-                    "args": call.args,
-                    "policy_decision": call.policy_decision,
-                    "reason": reason,
-                },
+            if not allowed:
+                denied_msg = f"Tool denied by policy: {reason}"
+                self._append_tool_exchange(session, call, denied_msg)
+                self._loop_spans.tool_event(
+                    tool_handle,
+                    "tool.policy_denied",
+                    attributes={
+                        "policy_decision": call.policy_decision,
+                        "reason": reason,
+                    },
+                )
+                self._loop_spans.finish_tool(
+                    tool_handle,
+                    ok=False,
+                    policy_decision=call.policy_decision,
+                    metrics={},
+                    status_message=reason,
+                )
+                _log.warning(
+                    "tool denied session=%s tool=%s reason=%s",
+                    session.id,
+                    call.name,
+                    reason,
+                )
+                return denied_msg, "tool_denied"
+
+            call.started_at = self._clock.now()
+            blocked = self._run_pre_tool_hooks(session, call, tool_handle)
+            if blocked is not None:
+                call.policy_decision = f"deny:hook:{blocked}"
+                denied_msg = f"Tool denied by hook: {blocked}"
+                self._append_tool_exchange(session, call, denied_msg)
+                self._loop_spans.finish_tool(
+                    tool_handle,
+                    ok=False,
+                    policy_decision=call.policy_decision,
+                    metrics=self._tool_duration_metrics(call),
+                    status_message=blocked,
+                )
+                return denied_msg, "tool_denied"
+            self._maybe_create_checkpoint(session, call)
+            result = self._tools.execute(call)
+            if result.ok and self._artifacts is not None:
+                ext = maybe_externalize_tool_output(
+                    result.output,
+                    artifact_store=self._artifacts,
+                    ids=self._ids,
+                    session_id=session.id,
+                    threshold_bytes=self._limits.artifact_threshold_bytes,
+                )
+                result = ToolResult(
+                    ok=result.ok,
+                    output=ext.output,
+                    error=result.error,
+                    artifact_ref=ext.artifact_ref,
+                )
+            call.ended_at = self._clock.now()
+            self._run_post_tool_hooks(session, call, result, tool_handle)
+
+            tool_message = self._format_tool_message(call=call, result=result)
+            self._append_tool_exchange(session, call, tool_message)
+            exec_payload = self._tool_executed_payload(call=call, result=result)
+            metrics = self._tool_duration_metrics(call)
+            metrics.update(
+                {
+                    k: exec_payload[k]
+                    for k in (
+                        "duration_ms",
+                        "output_size",
+                        "output_preview",
+                        "output_truncated",
+                    )
+                    if k in exec_payload
+                }
             )
-            _log.warning(
-                "tool denied session=%s tool=%s reason=%s",
+            self._loop_spans.finish_tool(
+                tool_handle,
+                ok=result.ok,
+                policy_decision=call.policy_decision,
+                metrics=metrics,
+                status_message=result.error,
+            )
+            _log.info(
+                "tool executed session=%s tool=%s ok=%s duration_ms=%s",
                 session.id,
                 call.name,
-                reason,
+                result.ok,
+                metrics.get("duration_ms"),
             )
-            return denied_msg, "tool_denied"
+            return tool_message, "tool_ok" if result.ok else "tool_error"
 
-        call.started_at = self._clock.now()
-        blocked = self._run_pre_tool_hooks(session, call)
-        if blocked is not None:
-            call.policy_decision = f"deny:hook:{blocked}"
-            denied_msg = f"Tool denied by hook: {blocked}"
-            self._append_tool_exchange(session, call, denied_msg)
-            self._record(
-                session=session,
-                event_type="tool_denied",
-                payload={
-                    "tool_call_id": call.id,
-                    "tool": call.name,
-                    "args": call.args,
-                    "policy_decision": call.policy_decision,
-                    "reason": f"hook:{blocked}",
-                },
-            )
-            return denied_msg, "tool_denied"
-        self._maybe_create_checkpoint(session, call)
-        result = self._tools.execute(call)
-        if result.ok and self._artifacts is not None:
-            ext = maybe_externalize_tool_output(
-                result.output,
-                artifact_store=self._artifacts,
-                ids=self._ids,
-                session_id=session.id,
-                threshold_bytes=self._limits.artifact_threshold_bytes,
-            )
-            result = ToolResult(
-                ok=result.ok,
-                output=ext.output,
-                error=result.error,
-                artifact_ref=ext.artifact_ref,
-            )
-        call.ended_at = self._clock.now()
-        self._run_post_tool_hooks(session, call, result)
-
-        tool_message = self._format_tool_message(call=call, result=result)
-        self._append_tool_exchange(session, call, tool_message)
-        self._record(
-            session=session,
-            event_type="tool_executed",
-            payload=self._tool_executed_payload(call=call, result=result),
-        )
-        _log.info(
-            "tool executed session=%s tool=%s ok=%s duration_ms=%s",
-            session.id,
-            call.name,
-            result.ok,
-            (
-                (call.ended_at - call.started_at).total_seconds() * 1000.0
-                if call.started_at and call.ended_at
-                else None
-            ),
-        )
-        return tool_message, "tool_ok" if result.ok else "tool_error"
-
-    def _run_pre_tool_hooks(self, session: Session, call: ToolCall) -> str | None:
+    def _run_pre_tool_hooks(
+        self, session: Session, call: ToolCall, tool_handle: SpanHandle
+    ) -> str | None:
         runner = self._hook_runner
         if runner is None:
             return None
         for hook in runner.pre_hooks:
-            self._record(
-                session=session,
-                event_type="hook_invoked",
-                payload={
-                    "phase": "pre_tool",
-                    "name": hook.name,
-                    "type": hook.hook_type,
-                    "tool_name": call.name,
-                },
-            )
-            try:
-                decision = runner.run_pre(hook, call)
-            except Exception as exc:  # noqa: BLE001
-                self._record(
-                    session=session,
-                    event_type="hook_failed",
-                    payload={
-                        "phase": "pre_tool",
-                        "name": hook.name,
-                        "type": hook.hook_type,
-                        "tool_name": call.name,
-                        "error": f"{type(exc).__name__}: {exc}",
-                    },
-                )
-                continue
-            if decision.action == "block":
+            decision = None
+            with self._loop_spans.tool_phase(
+                session,
+                tool_name=call.name,
+                phase="pre",
+                parent=tool_handle,
+                hook_name=hook.name,
+                hook_type=hook.hook_type,
+            ):
+                try:
+                    decision = runner.run_pre(hook, call)
+                except Exception as exc:  # noqa: BLE001
+                    self._loop_spans.tool_event(
+                        tool_handle,
+                        "hook.failed",
+                        attributes={
+                            "phase": "pre_tool",
+                            "name": hook.name,
+                            "error": f"{type(exc).__name__}: {exc}",
+                        },
+                    )
+                    continue
+            if decision is not None and decision.action == "block":
                 reason = decision.reason or f"blocked by hook '{hook.name}'"
-                self._record(
-                    session=session,
-                    event_type="hook_blocked",
-                    payload={
+                self._loop_spans.tool_event(
+                    tool_handle,
+                    "tool.hook_blocked",
+                    attributes={
                         "phase": "pre_tool",
                         "name": hook.name,
-                        "type": hook.hook_type,
-                        "tool_name": call.name,
                         "reason": reason,
                     },
                 )
                 return reason
         return None
 
-    def _run_post_tool_hooks(self, session: Session, call: ToolCall, result: ToolResult) -> None:
+    def _run_post_tool_hooks(
+        self,
+        session: Session,
+        call: ToolCall,
+        result: ToolResult,
+        tool_handle: SpanHandle,
+    ) -> None:
         runner = self._hook_runner
         if runner is None:
             return
         for hook in runner.post_hooks:
-            self._record(
-                session=session,
-                event_type="hook_invoked",
-                payload={
-                    "phase": "post_tool",
-                    "name": hook.name,
-                    "type": hook.hook_type,
-                    "tool_name": call.name,
-                },
-            )
-            try:
-                runner.run_post(hook, call, result)
-            except Exception as exc:  # noqa: BLE001
-                self._record(
-                    session=session,
-                    event_type="hook_failed",
-                    payload={
-                        "phase": "post_tool",
-                        "name": hook.name,
-                        "type": hook.hook_type,
-                        "tool_name": call.name,
-                        "error": f"{type(exc).__name__}: {exc}",
-                    },
-                )
+            with self._loop_spans.tool_phase(
+                session,
+                tool_name=call.name,
+                phase="post",
+                parent=tool_handle,
+                hook_name=hook.name,
+                hook_type=hook.hook_type,
+            ):
+                try:
+                    runner.run_post(hook, call, result)
+                except Exception as exc:  # noqa: BLE001
+                    self._loop_spans.tool_event(
+                        tool_handle,
+                        "hook.failed",
+                        attributes={
+                            "phase": "post_tool",
+                            "name": hook.name,
+                            "error": f"{type(exc).__name__}: {exc}",
+                        },
+                    )
 
     def _tool_executed_payload(self, call: ToolCall, result: ToolResult) -> dict:
         duration_ms: float | None = None
@@ -1629,23 +1690,39 @@ class HarnessLoop:
             session_id=session_id,
         )
 
-    def _session_started_payload(self, *, goal: str) -> dict:
-        payload: dict = {"goal": goal}
+    def _shell_profile(self) -> str | None:
         profile = getattr(self._policy, "_shell_profile", None)
-        if profile:
-            payload["shell_profile"] = profile
-        return payload
+        return str(profile) if profile else None
 
-    def _record(self, session: Session, event_type: str, payload: dict) -> None:
-        self._trace.record(
-            TraceEvent(
-                run_id=session.id,
-                session_id=session.id,
-                event_type=event_type,
-                payload=payload,
-                created_at=self._clock.now(),
-            )
-        )
+    @staticmethod
+    def _llm_metrics_from_payload(payload: dict) -> dict[str, Any]:
+        metrics: dict[str, Any] = {}
+        if "latency_ms" in payload:
+            metrics["latency_ms"] = payload["latency_ms"]
+        if "request_tokens" in payload:
+            metrics["input_tokens"] = payload["request_tokens"]
+        if "response_tokens" in payload:
+            metrics["output_tokens"] = payload["response_tokens"]
+        if "total_tokens" in payload:
+            metrics["total_tokens"] = payload["total_tokens"]
+        cost_estimate = payload.get("cost_estimate")
+        if isinstance(cost_estimate, dict):
+            amount = cost_estimate.get("amount_usd")
+            if amount is not None:
+                metrics["cost_usd"] = amount
+        context = payload.get("context")
+        if isinstance(context, dict):
+            metrics["context"] = context
+        return metrics
+
+    @staticmethod
+    def _tool_duration_metrics(call: ToolCall) -> dict[str, Any]:
+        if call.started_at and call.ended_at:
+            return {
+                "duration_ms": (call.ended_at - call.started_at).total_seconds()
+                * 1000.0
+            }
+        return {}
 
     @staticmethod
     def _format_tool_message(call: ToolCall, result: ToolResult) -> str:

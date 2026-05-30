@@ -29,7 +29,7 @@ the same reason on every push/PR (`/.github/workflows/ci.yml`).
 ## On contract changes
 
 If a change touches any stable Port (`ModelPort`, `PolicyPort`, `ToolPort`,
-`SessionStorePort`, `MemoryStorePort`, `TraceRecorderPort`, `ClockPort`,
+`SessionStorePort`, `MemoryStorePort`, `SpanRecorderPort`, `ClockPort`,
 `IdPort`), the same commit MUST also update:
 
 - `docs/architecture/overview.md`

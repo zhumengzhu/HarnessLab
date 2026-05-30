@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiGet, apiPatch, apiPost } from "./lib/api-client";
 import { ActivityPanel } from "./features/activity/ActivityPanel";
@@ -30,11 +30,12 @@ import {
   modelsForSessionPicker,
   resolveEffectiveModel,
 } from "./lib/sessionModel";
-import type { TurnEnrichment } from "./lib/turnEnrichments";
+import { mergeTraceSpans } from "./lib/liveSpans";
 import { isChatMessageVisible } from "./lib/messageVisibility";
 import {
-  buildTurnEnrichmentsFromTrace,
+  buildTurnEnrichmentsFromSpans,
   mergeTurnEnrichments,
+  type TurnEnrichment,
 } from "./lib/turnEnrichments";
 import {
   loadStoredActivityDisplay,
@@ -81,6 +82,8 @@ import type {
   SessionDetailResponse,
   SessionsResponse,
   SettingsResponse,
+  SpanRecordItem,
+  SpanStartedPayload,
   TraceResponse,
 } from "./lib/schemas";
 
@@ -104,7 +107,9 @@ export function App() {
     () => loadStoredSessionId()
   );
   const [sessionActionError, setSessionActionError] = useState<string | null>(null);
-  const [streamTrace, setStreamTrace] = useState<TraceResponse["events"]>([]);
+  const [streamSpans, setStreamSpans] = useState<SpanRecordItem[]>([]);
+  const [streamSpanStarted, setStreamSpanStarted] = useState<SpanStartedPayload[]>([]);
+  const streamStartMsRef = useRef<Record<string, number>>({});
   const [streamMessages, setStreamMessages] = useState<MessageItem[] | null>(null);
   const [liveContextSnapshot, setLiveContextSnapshot] = useState<ContextSnapshot | null>(null);
   const [liveTurn, setLiveTurn] = useState<LiveTurnState | null>(null);
@@ -166,7 +171,9 @@ export function App() {
     saveStoredSessionId(id);
     setSessionActionError(null);
     if (switchingSession) {
-      setStreamTrace([]);
+      setStreamSpans([]);
+      setStreamSpanStarted([]);
+      streamStartMsRef.current = {};
       setStreamMessages(null);
       setLiveContextSnapshot(null);
       setLiveTurn(null);
@@ -206,18 +213,32 @@ export function App() {
     queryClient,
     onBeforeSend: () => {
       setSessionActionError(null);
-      setStreamTrace([]);
+      setStreamSpans([]);
+      setStreamSpanStarted([]);
+      streamStartMsRef.current = {};
     },
     onAdoptSession: (id) => adoptSessionId(id),
-    onAppendTraceEvent: (evt) => {
-      setStreamTrace((prev) => [...prev, evt]);
-      if (evt.event_type === "model_call") {
-        const ctx = (evt.payload as Record<string, unknown>)["context"];
+    onSpanStarted: (payload) => {
+      if (!streamStartMsRef.current[payload.span_id]) {
+        streamStartMsRef.current[payload.span_id] = Date.now();
+      }
+      setStreamSpanStarted((prev) => {
+        if (prev.some((item) => item.span_id === payload.span_id)) return prev;
+        return [...prev, payload];
+      });
+    },
+    onAppendSpan: (span) => {
+      setStreamSpans((prev) => {
+        const rest = prev.filter((item) => item.span_id !== span.span_id);
+        return [...rest, span];
+      });
+      if (span.name === "llm.generate") {
+        const ctx = span.metrics?.context;
         if (ctx && typeof ctx === "object") {
           setLiveContextSnapshot(ctx as ContextSnapshot);
         }
       }
-      if (evt.event_type === "sub_agent_spawned") {
+      if (span.name === "sub_agent.run") {
         void queryClient.invalidateQueries({ queryKey: ["sessions"] });
       }
     },
@@ -279,7 +300,7 @@ export function App() {
     queryKey: ["trace", selectedSessionId],
     queryFn: () =>
       apiGet<TraceResponse>(`/api/sessions/${encodeURIComponent(selectedSessionId || "")}/trace`),
-    enabled: Boolean(selectedSessionId) && mainView === "chat",
+    enabled: Boolean(selectedSessionId),
   });
 
   useEffect(() => {
@@ -295,20 +316,20 @@ export function App() {
     sessionDetail.error,
   ]);
 
-  const traceRows = useMemo(() => {
-    const base = sessionTrace.data?.events || [];
-    return [...base, ...streamTrace];
-  }, [sessionTrace.data?.events, streamTrace]);
+  const spanRows = useMemo(() => {
+    const base = sessionTrace.data?.spans || [];
+    return mergeTraceSpans(base, streamSpans, streamSpanStarted, streamStartMsRef.current);
+  }, [sessionTrace.data?.spans, streamSpans, streamSpanStarted]);
 
   const activityEntries = useMemo(() => {
-    const source = activityCleared ? streamTrace : traceRows;
+    const source = activityCleared ? streamSpans : spanRows;
     return buildActivityFeed(source);
-  }, [activityCleared, streamTrace, traceRows]);
+  }, [activityCleared, streamSpans, spanRows]);
 
   const allMessages = streamMessages ?? sessionDetail.data?.messages ?? [];
   const traceDerivedEnrichments = useMemo(
-    () => buildTurnEnrichmentsFromTrace(allMessages, traceRows),
-    [allMessages, traceRows]
+    () => buildTurnEnrichmentsFromSpans(allMessages, spanRows),
+    [allMessages, spanRows]
   );
   const turnEnrichments = useMemo(
     () => mergeTurnEnrichments(traceDerivedEnrichments, clientTurnEnrichments),
@@ -660,9 +681,14 @@ export function App() {
                   sessionId={selectedSessionId}
                   loading={sessionTrace.isLoading}
                   error={sessionTrace.isError ? (sessionTrace.error as Error).message : null}
-                  rows={traceRows}
-                  hasStreamTrace={streamTrace.length > 0}
-                  onClearStreamTrace={() => setStreamTrace([])}
+                  spans={spanRows}
+                  hasStreamSpans={streamSpans.length > 0 || streamSpanStarted.length > 0}
+                  isLive={composerCtrl.sending}
+                  onClearStreamSpans={() => {
+                    setStreamSpans([]);
+                    setStreamSpanStarted([]);
+                    streamStartMsRef.current = {};
+                  }}
                   onRewindSuccess={() => {
                     if (!selectedSessionId) return;
                     void queryClient.invalidateQueries({ queryKey: ["session", selectedSessionId] });

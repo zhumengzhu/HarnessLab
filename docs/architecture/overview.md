@@ -224,7 +224,7 @@ The following contracts should remain stable across implementations:
 - `SessionStorePort`
 - `MemoryStorePort`
 - `ArtifactStorePort`
-- `TraceRecorderPort`
+- `SpanRecorderPort`
 - `ClockPort`
 - `IdPort`
 
@@ -242,7 +242,7 @@ HarnessLab uses stdlib ``logging`` via ``harnesslab.telemetry.log``. Logs are
 
 | Signal | Role |
 |--------|------|
-| **Trace (JSONL)** | Replay/eval source of truth; per-step payloads |
+| **Trace (JSONL)** | Replay/eval source of truth; completed `SpanRecord` rows |
 | **Log (stderr)** | Session lifecycle, provider errors, migrations, tool summary |
 
 Configure with ``HARNESSLAB_LOG=DEBUG|INFO|WARNING|ERROR`` or CLI
@@ -253,7 +253,7 @@ at ``WARNING`` unless the app level is ``DEBUG``.
 ## Architecture Decisions (Current)
 
 - Single process runtime for fast iteration
-- JSONL trace output for transparent debugging
+- JSONL span output (`.harnesslab/spans.jsonl`) for transparent debugging
 - Policy-first tool execution (deny by default for unknown tools)
 - Built-in tool surface: `read_file`, `write_file`, `edit_file`,
   `apply_patch`, `grep`, `glob`, `fetch_url`, `web_search`,
@@ -299,20 +299,20 @@ at ``WARNING`` unless the app level is ``DEBUG``.
 
 ## Replay & Divergence Model (Step 5)
 
-The replayer takes a JSONL trace, extracts `(user_input, Decision)` pairs
+The replayer takes a JSONL span file, extracts `(user_input, Decision)` pairs
 from each session, and drives the production loop with `ReplayModel`
 backed by those decisions plus `FrozenClock` + `SeqIdProvider`. The new
-trace is then compared to the original by `detect_divergence`.
+span forest is then compared to the original by `detect_span_divergence`.
 
 ```mermaid
 flowchart TD
-    JSONL[trace.jsonl] --> Reader[trace_reader.read_trace]
+    JSONL[spans.jsonl] --> Reader[span_reader.read_spans]
     Reader --> Grouped[group_by_session]
     Grouped --> Extract[extract user_input + Decision pairs]
     Extract --> ReplayModel
     ReplayModel --> Loop[HarnessLoop with FrozenClock + SeqIdProvider]
-    Loop --> NewTrace[New TraceEvent list]
-    NewTrace --> Divergence[detect_divergence]
+    Loop --> NewSpans[New SpanRecord forest]
+    NewSpans --> Divergence[detect_span_divergence]
     Grouped --> Divergence
     Divergence --> Report[DivergenceReport]
 ```
@@ -326,10 +326,10 @@ Two comparison modes:
   (`output_preview`, `output_size`, `output_truncated`), provider
   telemetry (`model_name`, `provider`, `request_tokens`,
   `response_tokens`, `total_tokens`), and the Phase 2.6 `context`
-  snapshot on `model_call` events. What remains — event order, event
-  types, tool name, args, policy decision, `ok` / `error` — must match
-  exactly. This is the right mode for any trace produced by `SystemClock`
-  + `UuidIdProvider`.
+  snapshot on `llm.generate` span metrics. What remains — span forest
+  shape, span names, tool args, policy decision, `ok` / `error` — must
+  match exactly. This is the right mode for any span file produced by
+  `SystemClock` + `UuidIdProvider`.
 - **Strict.** No normalization; byte-for-byte comparison. Only sensible
   for traces already produced by `FrozenClock` + `SeqIdProvider`
   (e.g. eval task traces).
@@ -348,7 +348,7 @@ the gate of `harnesslab eval` + `pytest`.
 
 ```mermaid
 flowchart TD
-    Trace[trace.jsonl] --> Fingerprint
+    Trace[spans.jsonl] --> Fingerprint
     EvalReport[eval/reports/latest.json] --> Fingerprint
     Fingerprint --> Cluster[build_clusters --min-occurrences=N]
     Cluster --> Generator[generate -> Proposal]
@@ -510,8 +510,8 @@ adding `ContextSnapshot` did not break eval/replay round-trips.
 
 Design principles, turn layout, Thinking/Thought UX, and SSE semantics are
 documented in [`webui-design.md`](webui-design.md). **Trace is the engine;
-Chat is the product** — Simple mode delivers full conversation UX without
-the Advanced trace panel.
+Chat is the product** — the chat Tab delivers full conversation UX without
+opening the Trace Tab.
 
 `harnesslab serve` binds a **localhost-only** HTTP server that
 reuses the production runtime — no duplicate loop logic.
@@ -523,7 +523,7 @@ flowchart LR
     Browser[Browser Chat UI] --> API[JSON + SSE API]
     API --> Loop[HarnessLoop.run_session]
     Loop --> Store[SqliteSessionStore]
-    Loop --> Trace[TraceHub → JSONL]
+    Loop --> Spans[SpanHub → spans.jsonl]
     Browser --> Panel[Tool trace panel]
     Panel --> API
 ```
@@ -536,14 +536,16 @@ See [`web-api.md`](web-api.md) for the full endpoint list. Highlights:
 - Token deltas: `reasoning_delta` / `assistant_delta` (DeepSeek first)
 
 The default browser client uses **SSE** (`Accept: text/event-stream`)
-so tool/step trace events stream live during each turn. When the active
+so span lifecycle events stream live during each turn (`span.started`,
+`span.event`, `span.completed`, `span.link`). When the active
 model supports it (DeepSeek first), ``reasoning_delta`` / ``assistant_delta``
 events stream token text into the LiveTurn panel. ``GET /api/composer/commands``
 feeds the ``/`` slash palette (built-ins + workspace skills). Simple mode
-translates trace into **LiveTurn** activity in the chat panel (Thinking…,
-Tool rows, final answer) without requiring the trace inspector. Advanced
-mode adds a right-hand trace panel with **Prompt inspector** on each
-`model_call` (`prompt_blocks` + `api_messages` full text). The message
+translates spans into **LiveTurn** activity in the chat panel (Thinking…,
+Tool rows, final answer) without requiring the Trace Tab. The **Trace Tab**
+(Jaeger-inspired waterfall + detail sidebar) exposes span trees, Tags /
+Process / Events KV tables, and a **Prompt inspector** on each
+``llm.generate`` span (``prompt_blocks`` + ``api_messages`` full text). The message
 list shows **user** and non-empty **assistant** replies; optional
 `reasoning_text` renders as collapsible **Thought** blocks. Internal
 `tool` / `system` rows remain in SQLite for the model loop.

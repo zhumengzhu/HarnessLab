@@ -2,16 +2,16 @@ import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { apiGet } from "../../lib/api-client";
 import { copyText } from "../../lib/copyText";
-import type { TraceEventItem, TraceJsonlResponse } from "../../lib/schemas";
-import { filterTraceEvents, traceEventsToJsonl } from "../../lib/traceJsonl";
+import type { SpanRecordItem, TraceJsonlResponse } from "../../lib/schemas";
+import { filterSpans, spansToJsonl } from "../../lib/traceJsonl";
 import { useI18n } from "../../lib/i18n";
 
 type TraceRawJsonlPanelProps = {
   sessionId: string | null;
-  liveRows: TraceEventItem[];
+  liveSpans: SpanRecordItem[];
   loading: boolean;
   error: string | null;
-  hasStreamTrace: boolean;
+  hasStreamSpans: boolean;
 };
 
 function downloadText(filename: string, text: string) {
@@ -25,7 +25,7 @@ function downloadText(filename: string, text: string) {
 }
 
 export function TraceRawJsonlPanel(props: TraceRawJsonlPanelProps) {
-  const { sessionId, liveRows, loading, error, hasStreamTrace } = props;
+  const { sessionId, liveSpans, loading, error, hasStreamSpans } = props;
   const { t } = useI18n();
   const [filter, setFilter] = useState("");
   const [copied, setCopied] = useState(false);
@@ -40,12 +40,12 @@ export function TraceRawJsonlPanel(props: TraceRawJsonlPanelProps) {
   });
 
   const jsonl = useMemo(() => {
-    if (hasStreamTrace && liveRows.length) {
-      return traceEventsToJsonl(filterTraceEvents(liveRows, filter));
+    if (hasStreamSpans && liveSpans.length) {
+      return spansToJsonl(filterSpans(liveSpans, filter));
     }
     const disk = persisted.data?.jsonl ?? "";
     if (!filter.trim()) {
-      return disk || traceEventsToJsonl(liveRows);
+      return disk || spansToJsonl(liveSpans);
     }
     if (disk) {
       const filtered = disk
@@ -54,11 +54,11 @@ export function TraceRawJsonlPanel(props: TraceRawJsonlPanelProps) {
         .filter((line) => line.toLowerCase().includes(filter.trim().toLowerCase()));
       return filtered.length ? `${filtered.join("\n")}\n` : "";
     }
-    return traceEventsToJsonl(filterTraceEvents(liveRows, filter));
-  }, [filter, hasStreamTrace, liveRows, persisted.data?.jsonl]);
+    return spansToJsonl(filterSpans(liveSpans, filter));
+  }, [filter, hasStreamSpans, liveSpans, persisted.data?.jsonl]);
 
   const lineCount = jsonl.trim() ? jsonl.trim().split("\n").length : 0;
-  const tracePath = persisted.data?.trace_path ?? null;
+  const spansPath = persisted.data?.spans_path ?? persisted.data?.trace_path ?? null;
   const isLoading = loading || persisted.isLoading;
 
   return (
@@ -85,7 +85,7 @@ export function TraceRawJsonlPanel(props: TraceRawJsonlPanelProps) {
             type="button"
             disabled={!jsonl.trim() || !sessionId}
             onClick={() =>
-              downloadText(`${sessionId ?? "session"}-trace.jsonl`, jsonl)
+              downloadText(`${sessionId ?? "session"}-spans.jsonl`, jsonl)
             }
           >
             {t("trace.jsonlDownload")}
@@ -105,11 +105,11 @@ export function TraceRawJsonlPanel(props: TraceRawJsonlPanelProps) {
           <div className="trace-jsonl-meta">
             <span>
               {t("trace.jsonlLines", { count: String(lineCount) })}
-              {hasStreamTrace ? ` · ${t("trace.jsonlLive")}` : ""}
+              {hasStreamSpans ? ` · ${t("trace.jsonlLive")}` : ""}
             </span>
-            {tracePath ? (
-              <code className="trace-jsonl-path" title={tracePath}>
-                {tracePath}
+            {spansPath ? (
+              <code className="trace-jsonl-path" title={spansPath}>
+                {spansPath}
               </code>
             ) : null}
           </div>

@@ -1,30 +1,20 @@
-import type { TraceEventItem } from "./schemas";
+import type { SpanRecordItem } from "./schemas";
 
-/** One JSONL line matching ``JsonlTraceRecorder`` on disk. */
-export function traceEventToJsonLine(event: TraceEventItem): string {
-  return JSON.stringify({
-    run_id: event.run_id,
-    session_id: event.session_id,
-    event_type: event.event_type,
-    payload: event.payload,
-    created_at: event.created_at,
-  });
+export function spanToJsonLine(span: SpanRecordItem): string {
+  return JSON.stringify(span);
 }
 
-export function traceEventsToJsonl(events: TraceEventItem[]): string {
-  if (!events.length) return "";
-  return `${events.map(traceEventToJsonLine).join("\n")}\n`;
+export function spansToJsonl(spans: SpanRecordItem[]): string {
+  if (!spans.length) return "";
+  return `${spans.map(spanToJsonLine).join("\n")}\n`;
 }
 
-export function filterTraceEvents(
-  events: TraceEventItem[],
-  query: string
-): TraceEventItem[] {
+export function filterSpans(spans: SpanRecordItem[], query: string): SpanRecordItem[] {
   const needle = query.trim().toLowerCase();
-  if (!needle) return events;
-  return events.filter((event) => {
-    if (event.event_type.toLowerCase().includes(needle)) return true;
-    const payload = JSON.stringify(event.payload).toLowerCase();
-    return payload.includes(needle);
+  if (!needle) return spans;
+  return spans.filter((span) => {
+    if (span.name.toLowerCase().includes(needle)) return true;
+    const blob = JSON.stringify(span).toLowerCase();
+    return blob.includes(needle);
   });
 }

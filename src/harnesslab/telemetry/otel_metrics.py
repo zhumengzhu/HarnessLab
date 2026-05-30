@@ -1,21 +1,21 @@
-"""OpenTelemetry metrics fan-out from trace events (Phase 5.6)."""
+"""OpenTelemetry metrics from completed spans (Observability v2 O4)."""
 
 from __future__ import annotations
 
 import os
 from typing import Any
 
-from harnesslab.core.contracts import TraceRecorderPort
-from harnesslab.core.models import TraceEvent
-from harnesslab.telemetry.otel_recorder import _resolve_enabled
+from harnesslab.core.contracts import SpanRecorderPort
+from harnesslab.core.models import SpanHandle, SpanKind, SpanRecord, SpanStatus
+from harnesslab.telemetry.span_attributes import SPAN_LLM_GENERATE, SPAN_TURN
 
 
-class OtelMetricsRecorder:
-    """Record metrics instruments from the same TraceEvent stream as spans."""
+class SpanMetricsRecorder:
+    """Delegate span port and emit OTel metrics on completed spans."""
 
     def __init__(
         self,
-        inner: TraceRecorderPort,
+        inner: SpanRecorderPort,
         *,
         enabled: bool | None = None,
         meter: Any | None = None,
@@ -26,14 +26,15 @@ class OtelMetricsRecorder:
         self._model_latency = None
         self._model_tokens = None
         self._tool_duration = None
-        self._session_steps = None
+        self._turn_wall = None
         if self._enabled:
-            self._init_instruments(meter)
+            if self._meter is None:
+                self._meter = _default_meter()
+            self._init_instruments(self._meter)
 
     def _init_instruments(self, meter: Any | None) -> None:
         if meter is None:
-            meter = _default_meter()
-        self._meter = meter
+            return
         self._model_latency = meter.create_histogram(
             "harnesslab.model.latency_ms",
             unit="ms",
@@ -41,58 +42,126 @@ class OtelMetricsRecorder:
         )
         self._model_tokens = meter.create_counter(
             "harnesslab.model.tokens.total",
+            unit="token",
             description="Total model tokens",
         )
         self._tool_duration = meter.create_histogram(
             "harnesslab.tool.duration_ms",
             unit="ms",
-            description="Tool execution duration",
+            description="Tool execute duration",
         )
-        self._session_steps = meter.create_histogram(
-            "harnesslab.session.steps",
-            description="Steps per session turn",
+        self._turn_wall = meter.create_histogram(
+            "harnesslab.turn.wall_ms",
+            unit="ms",
+            description="Turn wall time",
         )
 
-    def record(self, event: TraceEvent) -> None:
-        self._inner.record(event)
-        if not self._enabled or self._meter is None:
-            return
-        payload = event.payload
-        if event.event_type == "model_call":
-            attrs = {
-                "provider": str(payload.get("provider", "unknown")),
-                "api_family": str(payload.get("api_family", "unknown")),
-                "decision_kind": str(payload.get("decision_kind", "unknown")),
-            }
-            latency = payload.get("latency_ms")
+    def start_span(
+        self,
+        name: str,
+        *,
+        session_id: str,
+        kind: SpanKind = "internal",
+        attributes: dict[str, Any] | None = None,
+        parent: SpanHandle | None = None,
+        trace_id: str | None = None,
+        turn_index: int | None = None,
+    ) -> SpanHandle:
+        return self._inner.start_span(
+            name,
+            session_id=session_id,
+            kind=kind,
+            attributes=attributes,
+            parent=parent,
+            trace_id=trace_id,
+            turn_index=turn_index,
+        )
+
+    def end_span(
+        self,
+        handle: SpanHandle,
+        *,
+        status: SpanStatus = "ok",
+        status_message: str | None = None,
+        attributes: dict[str, Any] | None = None,
+        metrics: dict[str, Any] | None = None,
+    ) -> SpanRecord:
+        record = self._inner.end_span(
+            handle,
+            status=status,
+            status_message=status_message,
+            attributes=attributes,
+            metrics=metrics,
+        )
+        if self._enabled:
+            self._record_metrics(record)
+        return record
+
+    def add_span_event(
+        self,
+        handle: SpanHandle,
+        name: str,
+        attributes: dict[str, Any] | None = None,
+    ) -> None:
+        self._inner.add_span_event(handle, name, attributes=attributes)
+
+    def add_span_link(
+        self,
+        handle: SpanHandle,
+        *,
+        linked_trace_id: str,
+        linked_span_id: str,
+        attributes: dict[str, Any] | None = None,
+    ) -> None:
+        self._inner.add_span_link(
+            handle,
+            linked_trace_id=linked_trace_id,
+            linked_span_id=linked_span_id,
+            attributes=attributes,
+        )
+
+    def current_span(self, session_id: str) -> SpanHandle | None:
+        return self._inner.current_span(session_id)
+
+    def _record_metrics(self, record: SpanRecord) -> None:
+        attrs = {
+            key: str(value)
+            for key, value in record.attributes.items()
+            if isinstance(value, (str, int, float, bool))
+        }
+        metrics = record.metrics
+        if record.name == SPAN_LLM_GENERATE:
+            latency = metrics.get("latency_ms")
             if isinstance(latency, (int, float)) and self._model_latency is not None:
                 self._model_latency.record(float(latency), attributes=attrs)
-            total = payload.get("total_tokens")
+            total = metrics.get("total_tokens")
             if isinstance(total, int) and self._model_tokens is not None:
                 self._model_tokens.add(total, attributes=attrs)
-        elif event.event_type == "tool_executed":
-            attrs = {
-                "tool": str(payload.get("tool", "unknown")),
-                "ok": bool(payload.get("ok", False)),
-            }
-            duration = payload.get("duration_ms")
+        elif record.name.startswith("tool.execute") or record.name.startswith("tool."):
+            duration = metrics.get("duration_ms", record.duration_ms)
             if isinstance(duration, (int, float)) and self._tool_duration is not None:
                 self._tool_duration.record(float(duration), attributes=attrs)
-        elif event.event_type == "turn_completed":
-            steps = payload.get("steps_used")
-            if isinstance(steps, int) and self._session_steps is not None:
-                self._session_steps.record(steps)
+        elif record.name == SPAN_TURN and self._turn_wall is not None:
+            self._turn_wall.record(float(record.duration_ms), attributes=attrs)
 
 
-def wrap_trace_recorder_with_metrics(
-    inner: TraceRecorderPort,
+def attach_span_metrics(
+    inner: SpanRecorderPort,
     *,
     enabled: bool | None = None,
     meter: Any | None = None,
-) -> TraceRecorderPort:
+) -> SpanRecorderPort:
     if not _resolve_enabled(enabled):
         return inner
-    return OtelMetricsRecorder(inner, enabled=True, meter=meter)
+    return SpanMetricsRecorder(inner, enabled=True, meter=meter)
+
+
+def _resolve_enabled(explicit: bool | None) -> bool:
+    if explicit is not None:
+        return explicit
+    if os.environ.get("HARNESSLAB_OTEL", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return True
+    return bool(os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip())
 
 
 def _default_meter() -> Any:
@@ -101,7 +170,7 @@ def _default_meter() -> Any:
     from opentelemetry.sdk.resources import Resource
 
     resource = Resource.create({"service.name": "harnesslab"})
-    provider = MeterProvider(resource=resource)
+    readers = []
     endpoint = os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()
     if endpoint:
         from opentelemetry.exporter.otlp.proto.http.metric_exporter import (
@@ -109,7 +178,11 @@ def _default_meter() -> Any:
         )
         from opentelemetry.sdk.metrics.export import PeriodicExportingMetricReader
 
-        reader = PeriodicExportingMetricReader(OTLPMetricExporter())
-        provider = MeterProvider(resource=resource, metric_readers=[reader])
+        readers.append(
+            PeriodicExportingMetricReader(
+                OTLPMetricExporter(),
+            )
+        )
+    provider = MeterProvider(resource=resource, metric_readers=readers)
     metrics.set_meter_provider(provider)
     return metrics.get_meter("harnesslab")

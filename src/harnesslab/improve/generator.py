@@ -7,7 +7,7 @@ from datetime import UTC, datetime
 from hashlib import sha1
 from pathlib import Path
 
-from harnesslab.core.models import TraceEvent
+from harnesslab.core.models import SpanRecord
 from harnesslab.eval.task import TaskResult
 from harnesslab.improve.cluster import build_clusters
 from harnesslab.improve.proposal import Proposal
@@ -17,17 +17,17 @@ _SIG_HEADER = re.compile(r'^cluster_signature:\s*"(.*)"\s*$')
 
 
 def generate(
-    events: list[TraceEvent],
+    spans: list[SpanRecord],
     eval_results: list[TaskResult] | None = None,
     *,
     min_occurrences: int = 2,
     now: datetime | None = None,
 ) -> list[Proposal]:
-    """Build clusters from events + eval results and emit a Proposal each."""
+    """Build clusters from spans + eval results and emit a Proposal each."""
 
     now = now or datetime.now(UTC)
     clusters = build_clusters(
-        events, eval_results, min_occurrences=min_occurrences
+        spans, eval_results, min_occurrences=min_occurrences
     )
     proposals: list[Proposal] = []
     for cluster in clusters:
@@ -44,7 +44,7 @@ def generate(
                 related_files=related_files_for(cluster.kind),
                 suggested_actions=suggestions_for(cluster.kind),
                 sample_events=[
-                    e.model_dump(mode="json") for e in cluster.sample_events
+                    s.model_dump(mode="json") for s in cluster.sample_spans
                 ],
                 sample_task_failures=list(cluster.sample_task_failures),
             )

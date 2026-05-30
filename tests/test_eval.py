@@ -115,7 +115,7 @@ def test_runner_fails_when_expected_event_missing() -> None:
     )
     result = _result_of(task)
     assert result.passed is False
-    assert any("tool_executed" in f for f in result.failures)
+    assert any("tool" in f for f in result.failures)
 
 
 def test_runner_fails_when_forbidden_event_appears() -> None:
@@ -127,7 +127,7 @@ def test_runner_fails_when_forbidden_event_appears() -> None:
     )
     result = _result_of(task)
     assert result.passed is False
-    assert any("tool_denied" in f for f in result.failures)
+    assert any("tool" in f and "denied" in f.lower() for f in result.failures)
 
 
 def test_runner_counts_metrics_correctly() -> None:

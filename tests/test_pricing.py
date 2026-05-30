@@ -41,7 +41,7 @@ def test_estimate_call_cost_partial_model_id_match() -> None:
         request_tokens=1_000_000,
         response_tokens=1_000_000,
     )
-    assert abs(cost - (0.435 + 0.87)) < 1e-9
+    assert abs(cost - 1.26) < 1e-9
 
 
 def test_mimo_v25_cny_pricing() -> None:

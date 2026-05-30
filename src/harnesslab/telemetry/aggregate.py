@@ -25,7 +25,13 @@ import math
 
 from pydantic import BaseModel
 
-from harnesslab.core.models import TraceEvent
+from harnesslab.core.models import SpanRecord, TraceEvent
+from harnesslab.telemetry.span_attributes import (
+    HARNESSLAB_COMPACTION_TRIGGER,
+    SPAN_CONTEXT_COMPACT,
+    SPAN_LLM_GENERATE,
+    SPAN_TURN,
+)
 
 
 class LatencyStats(BaseModel):
@@ -124,6 +130,102 @@ def aggregate(events: list[TraceEvent]) -> Metrics:
 
     denials = sum(1 for e in events if e.event_type == "tool_denied")
     invalid_args = sum(1 for e in events if e.event_type == "tool_invalid_args")
+
+    return Metrics(
+        sessions=len(sessions),
+        turns=turns,
+        tool_calls=tool_calls,
+        tool_successes=tool_successes,
+        tool_failures=tool_failures,
+        denials=denials,
+        invalid_args=invalid_args,
+        tool_success_rate=(tool_successes / tool_calls) if tool_calls else None,
+        denial_rate=(
+            denials / (denials + tool_calls) if (denials + tool_calls) else None
+        ),
+        tool_latency=_latency_stats(latencies),
+        model_calls=model_calls,
+        model_call_latency=_latency_stats(model_latencies),
+        model_request_tokens=model_request_tokens,
+        model_response_tokens=model_response_tokens,
+        model_total_tokens=model_total_tokens,
+        max_conversation_tokens=max_conversation_tokens,
+        peak_usage_ratio=peak_usage_ratio,
+        compactions=compactions,
+        overflow_recoveries=overflow_recoveries,
+    )
+
+
+def aggregate_spans(spans: list[SpanRecord]) -> Metrics:
+    """Aggregate metrics from completed spans (Observability v2)."""
+
+    sessions = {s.session_id for s in spans}
+    turns = sum(1 for s in spans if s.name == SPAN_TURN)
+
+    tool_calls = 0
+    tool_successes = 0
+    tool_failures = 0
+    latencies: list[float] = []
+    model_calls = 0
+    model_latencies: list[float] = []
+    model_request_tokens = 0
+    model_response_tokens = 0
+    model_total_tokens = 0
+    max_conversation_tokens = 0
+    peak_usage_ratio: float | None = None
+    compactions = 0
+    overflow_recoveries = 0
+
+    for span in spans:
+        if span.name == SPAN_LLM_GENERATE:
+            model_calls += 1
+            metrics = span.metrics
+            lat = metrics.get("latency_ms")
+            if isinstance(lat, int | float):
+                model_latencies.append(float(lat))
+            req = metrics.get("input_tokens") or metrics.get("request_tokens")
+            resp = metrics.get("output_tokens") or metrics.get("response_tokens")
+            total = metrics.get("total_tokens")
+            if isinstance(req, int):
+                model_request_tokens += req
+            if isinstance(resp, int):
+                model_response_tokens += resp
+            if isinstance(total, int):
+                model_total_tokens += total
+            ctx = metrics.get("context")
+            if isinstance(ctx, dict):
+                conv = ctx.get("conversation_tokens")
+                if isinstance(conv, int) and conv > max_conversation_tokens:
+                    max_conversation_tokens = conv
+                ratio = ctx.get("usage_ratio")
+                if isinstance(ratio, int | float):
+                    if peak_usage_ratio is None or ratio > peak_usage_ratio:
+                        peak_usage_ratio = float(ratio)
+            continue
+        if span.name == SPAN_CONTEXT_COMPACT:
+            compactions += 1
+            if span.attributes.get(HARNESSLAB_COMPACTION_TRIGGER) == "overflow":
+                overflow_recoveries += 1
+            continue
+        if not span.name.startswith("tool.") or span.name.startswith("tool.hooks."):
+            continue
+        if span.name.count(".") != 1:
+            continue
+        tool_calls += 1
+        if span.attributes.get("harnesslab.tool.ok"):
+            tool_successes += 1
+        else:
+            tool_failures += 1
+        dur = span.metrics.get("duration_ms")
+        if isinstance(dur, int | float):
+            latencies.append(float(dur))
+
+    denials = sum(
+        1 for s in spans if any(ev.name == "tool.policy_denied" for ev in s.events)
+    )
+    invalid_args = sum(
+        1 for s in spans if any(ev.name == "tool.args_invalid" for ev in s.events)
+    )
 
     return Metrics(
         sessions=len(sessions),

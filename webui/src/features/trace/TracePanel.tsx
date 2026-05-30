@@ -1,18 +1,14 @@
-import type { TraceEventItem } from "../../lib/schemas";
+import type { SpanRecordItem } from "../../lib/schemas";
 import { useI18n } from "../../lib/i18n";
-import {
-  ModelCallInspector,
-  isModelCallEvent,
-  summarizeModelCall,
-} from "./ModelCallInspector";
+import { ModelCallInspector } from "./ModelCallInspector";
 
 type TracePanelProps = {
   selectedSessionId: string | null;
   loading: boolean;
   error: string | null;
-  rows: TraceEventItem[];
-  hasStreamTrace: boolean;
-  onClearStreamTrace: () => void;
+  spans: SpanRecordItem[];
+  hasStreamSpans: boolean;
+  onClearStreamSpans: () => void;
 };
 
 export function TracePanel(props: TracePanelProps) {
@@ -20,16 +16,16 @@ export function TracePanel(props: TracePanelProps) {
     selectedSessionId,
     loading,
     error,
-    rows,
-    hasStreamTrace,
-    onClearStreamTrace,
+    spans,
+    hasStreamSpans,
+    onClearStreamSpans,
   } = props;
   const { t } = useI18n();
   return (
     <aside className="panel">
       <div className="panel-title-row">
         <h2>{t("trace.eventsTitle")}</h2>
-        <button type="button" onClick={onClearStreamTrace} disabled={!hasStreamTrace}>
+        <button type="button" onClick={onClearStreamSpans} disabled={!hasStreamSpans}>
           {t("trace.clearStream")}
         </button>
       </div>
@@ -37,60 +33,28 @@ export function TracePanel(props: TracePanelProps) {
       {loading ? <p>{t("trace.loading")}</p> : null}
       {error ? <p>{t("common.loadFailed", { error })}</p> : null}
       <ul className="trace-list">
-        {!rows.length ? <li>{t("trace.noEvents")}</li> : null}
-        {rows.map((e, idx) => (
-          <li key={`${e.created_at}-${e.event_type}-${idx}`}>
-            <strong>{e.event_type}</strong>
-            <div className="trace-summary">{summarizeTraceEvent(e.event_type, e.payload)}</div>
-            {e.event_type === "model_call" ? (
-              <ModelCallInspector payload={e.payload} />
+        {!spans.length ? <li>{t("trace.noEvents")}</li> : null}
+        {spans.map((span) => (
+          <li key={span.span_id}>
+            <strong>{span.name}</strong>
+            <div className="trace-summary">
+              {span.status ?? "ok"} · {Math.round(span.duration_ms)}ms · turn {span.turn_index}
+            </div>
+            {span.name === "llm.generate" ? (
+              <ModelCallInspector
+                payload={{
+                  ...(span.metrics ?? {}),
+                  decision_kind: span.attributes["harnesslab.decision.kind"],
+                }}
+              />
             ) : null}
-            {!isModelCallEvent(e) || e.event_type === "model_call_started" ? (
-              <pre>{JSON.stringify(e.payload, null, 2)}</pre>
-            ) : (
-              <details className="trace-raw-json">
-                <summary>{t("trace.rawJson")}</summary>
-                <pre>{JSON.stringify(e.payload, null, 2)}</pre>
-              </details>
-            )}
+            <details className="trace-raw-json">
+              <summary>{t("trace.rawJson")}</summary>
+              <pre>{JSON.stringify(span, null, 2)}</pre>
+            </details>
           </li>
         ))}
       </ul>
     </aside>
   );
-}
-
-function summarizeTraceEvent(eventType: string, payload: Record<string, unknown>): string {
-  if (eventType === "model_call") {
-    return summarizeModelCall(payload);
-  }
-  if (eventType === "model_call_started") {
-    const step = payload.step_index;
-    const thinking = payload.thinking_likely ? "thinking likely" : "call started";
-    return typeof step === "number" ? `step ${step} · ${thinking}` : thinking;
-  }
-  if (eventType === "tool_executed") {
-    const tool = String(payload.tool || "tool");
-    const ok = Boolean(payload.ok);
-    return `${tool} · ${ok ? "ok" : "error"}`;
-  }
-  if (eventType === "tool_denied") {
-    return `denied · ${String(payload.reason || "unknown")}`;
-  }
-  if (eventType === "hook_blocked") {
-    return `blocked by hook · ${String(payload.name || "")}`;
-  }
-  if (eventType === "budget_hard_exceeded") {
-    return `budget hard · ${String(payload.dimension || "")}`;
-  }
-  if (eventType === "budget_soft_threshold") {
-    return `budget soft · ${String(payload.dimension || "")}`;
-  }
-  if (eventType === "plan_emitted") {
-    return "plan emitted";
-  }
-  if (eventType === "plan_recheck_requested") {
-    return `recheck step=${String(payload.steps_used || "")}`;
-  }
-  return "event";
 }

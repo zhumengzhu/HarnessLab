@@ -7,7 +7,7 @@ from pathlib import Path
 from harnesslab.core.loop import HarnessLoop
 from harnesslab.core.memory_policy import workspace_memory_key
 from harnesslab.core.models import Decision
-from harnesslab.core.replay import ReplayModel, ReplayTraceRecorder
+from harnesslab.core.replay import ReplayModel, ReplaySpanRecorder
 from harnesslab.core.runtime import DEFAULT_REPLAY_CLOCK_START, FrozenClock, SeqIdProvider
 from harnesslab.memory.in_memory import InMemoryMemoryStore
 from harnesslab.policy.default_policy import DefaultPolicy
@@ -17,7 +17,7 @@ from harnesslab.tools.registry import ToolRegistry
 
 def test_remember_global_persists_across_sessions(tmp_path: Path) -> None:
     memory = InMemoryMemoryStore()
-    recorder = ReplayTraceRecorder()
+    recorder = ReplaySpanRecorder()
     loop = HarnessLoop(
         model=ReplayModel(
             decisions=[
@@ -27,7 +27,7 @@ def test_remember_global_persists_across_sessions(tmp_path: Path) -> None:
         policy=DefaultPolicy(workspace_root=tmp_path),
         sessions=InMemorySessionStore(),
         tools=ToolRegistry(),
-        trace=recorder,
+        spans=recorder,
         clock=FrozenClock(start=DEFAULT_REPLAY_CLOCK_START),
         ids=SeqIdProvider(),
         memory=memory,
@@ -44,6 +44,6 @@ def test_remember_global_persists_across_sessions(tmp_path: Path) -> None:
 
     session_b = loop.start(goal="second")
     loop.run_session(session_b.id, "hello")
-    types = [e.event_type for e in recorder.events]
-    assert "workspace_memory_written" in types
-    assert "workspace_memory_read" in types
+    types = [ev.name for s in recorder.spans for ev in s.events]
+    assert "memory.written" in types
+    assert "memory.read" in types

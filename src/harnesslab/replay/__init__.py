@@ -1,22 +1,23 @@
-"""HarnessLab replay subsystem (Step 5).
+"""HarnessLab replay subsystem (Observability v2).
 
 Public API:
-    read_trace(path)                  -> list[TraceEvent]
-    group_by_session(events)          -> dict[str, list[TraceEvent]]
-    replay_session(events)            -> list[TraceEvent]
+    read_spans(path)                  -> list[SpanRecord]
+    group_by_session(spans)           -> dict[str, list[SpanRecord]]
+    replay_session(spans)             -> list[SpanRecord]
     detect_divergence(orig, replayed) -> DivergenceReport
 """
 
-from harnesslab.replay.divergence import (
+from harnesslab.replay.replayer import UnreplayableTraceError, replay_session
+from harnesslab.replay.span_divergence import (
     Divergence,
     DivergenceReport,
     detect_divergence,
 )
-from harnesslab.replay.replayer import UnreplayableTraceError, replay_session
-from harnesslab.replay.trace_reader import (
+from harnesslab.replay.span_reader import (
     child_session_ids_for_parent,
+    filter_spans_by_session,
     group_by_session,
-    read_trace,
+    read_spans,
 )
 
 __all__ = [
@@ -25,7 +26,8 @@ __all__ = [
     "UnreplayableTraceError",
     "child_session_ids_for_parent",
     "detect_divergence",
+    "filter_spans_by_session",
     "group_by_session",
-    "read_trace",
+    "read_spans",
     "replay_session",
 ]

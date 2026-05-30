@@ -12,7 +12,7 @@ from harnesslab.core.simple_model import SimpleModel
 from harnesslab.policy.default_policy import DefaultPolicy
 from harnesslab.providers.failover import FailoverModel
 from harnesslab.session.in_memory import InMemorySessionStore
-from harnesslab.telemetry.jsonl_recorder import JsonlTraceRecorder
+from harnesslab.telemetry.local_span_recorder import LocalSpanRecorder
 from harnesslab.tools.registry import ToolRegistry
 
 
@@ -27,9 +27,9 @@ class _FailingModel:
         return {"provider": "deepseek"}
 
 
-def _read_trace(workspace_root: Path) -> list[dict]:
-    trace_path = workspace_root / "trace.jsonl"
-    return [json.loads(line) for line in trace_path.read_text().splitlines() if line]
+def _read_spans(workspace_root: Path) -> list[dict]:
+    spans_path = workspace_root / "spans.jsonl"
+    return [json.loads(line) for line in spans_path.read_text().splitlines() if line]
 
 
 def test_model_call_trace_includes_failover_metadata(tmp_path: Path) -> None:
@@ -42,7 +42,7 @@ def test_model_call_trace_includes_failover_metadata(tmp_path: Path) -> None:
         policy=DefaultPolicy(tmp_path),
         sessions=InMemorySessionStore(),
         tools=ToolRegistry(),
-        trace=JsonlTraceRecorder(tmp_path / "trace.jsonl"),
+        spans=LocalSpanRecorder(tmp_path / "spans.jsonl"),
         clock=SystemClock(),
         ids=UuidIdProvider(),
         workspace_root=tmp_path,
@@ -50,10 +50,8 @@ def test_model_call_trace_includes_failover_metadata(tmp_path: Path) -> None:
     session = loop.start(goal="failover trace")
     loop.run_turn(session.id, "hello")
 
-    model_calls = [e for e in _read_trace(tmp_path) if e["event_type"] == "model_call"]
-    assert len(model_calls) == 1
-    payload = model_calls[0]["payload"]
-    assert payload["failover_backend"] == "simple"
-    assert payload["failover_index"] == 1
-    assert payload["failover_attempts"] == 2
-    assert "failover_exhausted" not in payload
+    llm_spans = [s for s in _read_spans(tmp_path) if s["name"] == "llm.generate"]
+    assert len(llm_spans) == 1
+    span = llm_spans[0]
+    assert span["attributes"]["harnesslab.failover.attempts"] == 2
+    assert span["attributes"]["harnesslab.decision.kind"] == "final"

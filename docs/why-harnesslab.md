@@ -45,10 +45,10 @@ be observable in JSONL traces and covered by tests where practical.
 
 1. [`architecture/overview.md`](architecture/overview.md) — runtime map.
 2. Run `uv run harnesslab run "hello" --model simple` and inspect
-   `.harnesslab/trace.jsonl`.
+   `.harnesslab/spans.jsonl`.
 3. [`architecture/tool-runtime.md`](architecture/tool-runtime.md) — safety model.
-4. [`architecture/data-model.md`](architecture/data-model.md) — messages, trace
-   events, sessions.
+4. [`architecture/data-model.md`](architecture/data-model.md) — messages, spans,
+   sessions.
 5. `uv run harnesslab eval` — see invariants as YAML tasks.
 6. [`roadmap.md`](roadmap.md) — what shipped vs planned.
 

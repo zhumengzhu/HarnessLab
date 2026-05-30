@@ -417,7 +417,7 @@ not targets for parity. HarnessLab remains a single-process learning harness.
 | **P4 OpenAI Responses** | Reasoning effort for GPT-5.x | Mocked SDK contract tests; opt-in config | **DONE** |
 | **P5 Gemini** | generateContent + thinking_level/budget split in catalog | One eval-style mock task (no network default) | **DONE** |
 | **P6 Provider failover** (optional) | OpenClaw-style fallback chain across configured backends | Contract tests; explicit operator opt-in | **DONE** |
-| **P7 OpenTelemetry bridge** | OTel exporter adapter behind `TraceRecorderPort` (see §11) | Traces/metrics in standard backends; eval semantic replay unchanged | **DONE** |
+| **P7 OpenTelemetry bridge** | OTel exporter adapter behind `SpanRecorderPort` (see §11) | Traces/metrics in standard backends; eval semantic replay unchanged | **DONE** |
 
 **Explicitly out of scope for P1–P7:** plugin marketplace, multi-agent. Constrained provider plugins remain deferred (§6.7).
 
@@ -455,27 +455,27 @@ When adding a model:
 
 ## 11. OpenTelemetry integration
 
-HarnessLab observability is **first-party trace JSONL** via `TraceRecorderPort`,
+HarnessLab observability is **first-party span JSONL** via `SpanRecorderPort`,
 consumed by CLI (`harnesslab replay`, `metrics`, `context`), eval semantic compare, and
-Web UI SSE. **OpenTelemetry is optional** via fan-out on the same port (P7).
+Web UI span SSE. **OpenTelemetry is optional** via fan-out on the same port (P7 / O4).
 
 ### 11.1 Why OTel fits alongside JSONL
 
 | Concern | Current | With OTel |
 |---------|---------|-----------|
-| Loop/tool/model events | JSONL trace files, one event type per row | Same events **also** emitted as OTel spans (`harnesslab.{event_type}`) |
-| Latency & tokens | Volatile fields on `model_call` payload | OTel metrics deferred; token counts stripped from span attrs by default |
-| Operator backends | File + Web SSE | Export to Jaeger, Grafana Tempo, Datadog, etc. via OTLP when configured |
-| Eval / replay | Semantic compare on JSONL | **Unchanged** — eval does not depend on OTel; replay ignores volatile OTel resource attrs |
+| Loop/tool/model telemetry | `spans.jsonl` — one completed span per row | Same spans **also** exported as lifecycle OTel spans |
+| Latency & tokens | Volatile fields on `SpanRecord.metrics` | OTel metrics from completed spans; token counts stripped from span attrs by default |
+| Operator backends | File + Web SSE (`SpanHub`) | Export to Jaeger, Grafana Tempo, Datadog, etc. via OTLP when configured |
+| Eval / replay | Semantic compare on span forests | **Unchanged** — eval does not depend on OTel; replay ignores volatile OTel resource attrs |
 
-### 11.2 Implemented shape (P7)
+### 11.2 Implemented shape (P7 + Observability v2)
 
-- **`OtelTraceRecorder`** in `telemetry/otel_recorder.py` — fan-out decorator wrapping an inner
-  `TraceRecorderPort` (JSONL, `ReplayTraceRecorder`, or `TraceHub`).
+- **`OtelSpanRecorder`** in `telemetry/otel_span_recorder.py` — lifecycle spans on
+  `SpanRecorderPort` (composite with `LocalSpanRecorder` → `spans.jsonl`).
 - Enabled when `HARNESSLAB_OTEL=1` or `OTEL_EXPORTER_OTLP_ENDPOINT` is set; CLI / `hl-serve`
-  wrap default JSONL recorders automatically.
-- Span attributes use stable `harnesslab.*` keys; volatile token/latency fields are omitted
-  (see `data-model.md`).
+  wrap default span recorders automatically.
+- Span attributes use stable `harnesslab.*` keys; volatile token/latency fields live in
+  `SpanRecord.metrics` (see `data-model.md`).
 - Semantic replay compare continues to strip volatile fields; OTel trace IDs are **never**
   part of eval baselines.
 
@@ -485,7 +485,7 @@ Web UI SSE. **OpenTelemetry is optional** via fan-out on the same port (P7).
 - Coupling eval pass/fail to an OTel collector being up.
 - Storing OTel blobs inside SQLite session rows.
 
-Tracked as **P7** in §8 (implemented). Eval/replay remain JSONL-first.
+Tracked as **P7** in §8 (implemented). Eval/replay remain span-JSONL-first.
 
 ---
 

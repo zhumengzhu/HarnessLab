@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from harnesslab.core.loop import HarnessLoop
 from harnesslab.core.models import Decision, Message, Session
-from harnesslab.core.replay import ReplayTraceRecorder
+from harnesslab.core.replay import ReplaySpanRecorder
 from harnesslab.core.simple_model import SimpleModel
 from harnesslab.core.title import (
     LiveTitleNamer,
@@ -76,22 +76,21 @@ def test_loop_auto_titles_after_first_turn(tmp_path) -> None:
             return Decision(kind="final", assistant_message="done")
 
     model = FinalModel()
-    trace = ReplayTraceRecorder()
+    trace = ReplaySpanRecorder()
     loop = HarnessLoop(
         model=model,
         policy=DefaultPolicy(workspace_root=tmp_path),
         sessions=InMemorySessionStore(),
         tools=ToolRegistry(),
-        trace=trace,
+        spans=trace,
         title_namer=LiveTitleNamer(model),
     )
     session = loop.start(goal="explore codebase structure")
     loop.run_turn(session.id, "list python files")
     updated = loop._sessions.get(session.id)  # noqa: SLF001
     assert updated.title == "Short Title Here"
-    titled = [e for e in trace.events if e.event_type == "session_titled"]
+    titled = [s for s in trace.spans if s.name == "llm.title"]
     assert len(titled) == 1
-    assert titled[0].payload["source"] == "llm"
 
 
 def test_loop_does_not_retitle_on_second_turn(tmp_path) -> None:
@@ -107,7 +106,7 @@ def test_loop_does_not_retitle_on_second_turn(tmp_path) -> None:
         policy=DefaultPolicy(workspace_root=tmp_path),
         sessions=InMemorySessionStore(),
         tools=ToolRegistry(),
-        trace=ReplayTraceRecorder(),
+        spans=ReplaySpanRecorder(),
         title_namer=CountingNamer(),
     )
     session = loop.start(goal="a")

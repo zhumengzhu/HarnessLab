@@ -187,18 +187,16 @@ def test_model_call_event_includes_context_snapshot(tmp_path) -> None:
     session = loop.start(goal="snapshot smoke")
     loop.run_turn(session.id, "hello")
 
-    trace_path = tmp_path / ".harnesslab" / "trace.jsonl"
-    assert trace_path.exists()
-    events = [
+    spans_path = tmp_path / ".harnesslab" / "spans.jsonl"
+    assert spans_path.exists()
+    spans = [
         json.loads(line)
-        for line in trace_path.read_text(encoding="utf-8").splitlines()
+        for line in spans_path.read_text(encoding="utf-8").splitlines()
     ]
-    model_calls = [e for e in events if e["event_type"] == "model_call"]
-    assert model_calls, "expected at least one model_call event"
+    llm_spans = [s for s in spans if s["name"] == "llm.generate"]
+    assert llm_spans, "expected at least one llm.generate span"
 
-    payload = model_calls[0]["payload"]
-    assert "context" in payload
-    ctx = payload["context"]
+    ctx = llm_spans[0]["metrics"]["context"]
     snap = ContextSnapshot.model_validate(ctx)
     assert "prompt_tokens_estimate" not in ctx
     assert snap.conversation_tokens > 0
@@ -213,7 +211,7 @@ def test_model_call_event_includes_adapter_prompt_breakdown(tmp_path) -> None:
     from harnesslab.core.loop import HarnessLoop
     from harnesslab.policy.default_policy import DefaultPolicy
     from harnesslab.session.in_memory import InMemorySessionStore
-    from harnesslab.telemetry.jsonl_recorder import JsonlTraceRecorder
+    from harnesslab.telemetry.local_span_recorder import LocalSpanRecorder
     from harnesslab.tools.registry import ToolRegistry
 
     class ChattyModel(ModelPort):
@@ -237,26 +235,26 @@ def test_model_call_event_includes_adapter_prompt_breakdown(tmp_path) -> None:
                 },
             }
 
-    trace_path = tmp_path / "trace.jsonl"
+    trace_path = tmp_path / "spans.jsonl"
     loop = HarnessLoop(
         model=ChattyModel(),
         policy=DefaultPolicy(workspace_root=tmp_path),
         tools=ToolRegistry(),
         sessions=InMemorySessionStore(),
-        trace=JsonlTraceRecorder(trace_path),
+        spans=LocalSpanRecorder(trace_path),
     )
     session = loop.start(goal="adapter breakdown")
     loop.run_turn(session.id, "hi")
 
     import json
 
-    events = [
+    spans = [
         json.loads(line)
         for line in trace_path.read_text(encoding="utf-8").splitlines()
     ]
-    model_calls = [e for e in events if e["event_type"] == "model_call"]
-    assert model_calls
-    ctx = model_calls[0]["payload"]["context"]
+    llm_spans = [s for s in spans if s["name"] == "llm.generate"]
+    assert llm_spans
+    ctx = llm_spans[0]["metrics"]["context"]
     assert ctx["prompt_tokens_estimate"] == 1234
     assert ctx["static_block_tokens"] == 500
     assert ctx["dynamic_block_tokens"] == 200

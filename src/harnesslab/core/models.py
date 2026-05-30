@@ -117,6 +117,59 @@ class TraceEvent(BaseModel):
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
 
 
+SpanKind = Literal["internal", "client", "server"]
+SpanStatus = Literal["ok", "error", "unset"]
+
+
+class SpanEventRecord(BaseModel):
+    name: str
+    time: datetime
+    attributes: dict[str, Any] = Field(default_factory=dict)
+
+
+class SpanLinkRecord(BaseModel):
+    trace_id: str
+    span_id: str
+    attributes: dict[str, Any] = Field(default_factory=dict)
+
+
+class SpanRecord(BaseModel):
+    """One completed span (Observability v2).
+
+    Normative spec: ``docs/architecture/observability-v2.md`` § D6.
+    """
+
+    resource: dict[str, Any] = Field(default_factory=dict)
+    trace_id: str
+    span_id: str
+    parent_span_id: str | None = None
+    name: str
+    kind: SpanKind = "internal"
+    session_id: str
+    turn_index: int
+    start_time: datetime
+    end_time: datetime
+    duration_ms: float
+    status: SpanStatus = "ok"
+    status_message: str | None = None
+    attributes: dict[str, Any] = Field(default_factory=dict)
+    events: list[SpanEventRecord] = Field(default_factory=list)
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    links: list[SpanLinkRecord] = Field(default_factory=list)
+
+
+class SpanHandle(BaseModel):
+    """Opaque span reference returned by ``SpanRecorderPort.start_span``."""
+
+    model_config = {"frozen": True}
+
+    trace_id: str
+    span_id: str
+    session_id: str
+    turn_index: int
+    name: str
+
+
 class Decision(BaseModel):
     """A single step's model decision.
 

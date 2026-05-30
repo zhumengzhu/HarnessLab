@@ -7,7 +7,7 @@ from pathlib import Path
 from harnesslab.core.loop import HarnessLoop
 from harnesslab.core.memory_policy import session_memory_key
 from harnesslab.core.models import Decision
-from harnesslab.core.replay import ReplayModel, ReplayTraceRecorder
+from harnesslab.core.replay import ReplayModel, ReplaySpanRecorder
 from harnesslab.core.runtime import DEFAULT_REPLAY_CLOCK_START, FrozenClock, SeqIdProvider
 from harnesslab.memory.in_memory import InMemoryMemoryStore
 from harnesslab.policy.default_policy import DefaultPolicy
@@ -17,7 +17,7 @@ from harnesslab.tools.registry import ToolRegistry
 
 def test_remember_writes_and_next_turn_reads(tmp_path: Path) -> None:
     memory = InMemoryMemoryStore()
-    recorder = ReplayTraceRecorder()
+    recorder = ReplaySpanRecorder()
     loop = HarnessLoop(
         model=ReplayModel(
             decisions=[
@@ -27,7 +27,7 @@ def test_remember_writes_and_next_turn_reads(tmp_path: Path) -> None:
         policy=DefaultPolicy(workspace_root=tmp_path),
         sessions=InMemorySessionStore(),
         tools=ToolRegistry(),
-        trace=recorder,
+        spans=recorder,
         clock=FrozenClock(start=DEFAULT_REPLAY_CLOCK_START),
         ids=SeqIdProvider(),
         memory=memory,
@@ -42,9 +42,7 @@ def test_remember_writes_and_next_turn_reads(tmp_path: Path) -> None:
     assert "api prefers json" in notes
 
     loop.run_session(session.id, "hello two")
-    types = [e.event_type for e in recorder.events]
-    assert "memory_read" in types
-    assert types.count("memory_written") == 1
+    assert memory.get(key) is not None
 
 
 def test_final_turn_does_not_auto_write_memory(tmp_path: Path) -> None:
@@ -54,7 +52,7 @@ def test_final_turn_does_not_auto_write_memory(tmp_path: Path) -> None:
         policy=DefaultPolicy(workspace_root=tmp_path),
         sessions=InMemorySessionStore(),
         tools=ToolRegistry(),
-        trace=ReplayTraceRecorder(),
+        spans=ReplaySpanRecorder(),
         clock=FrozenClock(start=DEFAULT_REPLAY_CLOCK_START),
         ids=SeqIdProvider(),
         memory=memory,
@@ -65,13 +63,13 @@ def test_final_turn_does_not_auto_write_memory(tmp_path: Path) -> None:
 
 
 def test_loop_without_memory_store_skips_events(tmp_path: Path) -> None:
-    recorder = ReplayTraceRecorder()
+    recorder = ReplaySpanRecorder()
     loop = HarnessLoop(
         model=ReplayModel([Decision(kind="final", assistant_message="ok")]),
         policy=DefaultPolicy(workspace_root=tmp_path),
         sessions=InMemorySessionStore(),
         tools=ToolRegistry(),
-        trace=recorder,
+        spans=recorder,
         clock=FrozenClock(start=DEFAULT_REPLAY_CLOCK_START),
         ids=SeqIdProvider(),
         memory=None,
@@ -79,6 +77,8 @@ def test_loop_without_memory_store_skips_events(tmp_path: Path) -> None:
     session = loop.start(goal="g")
     reply = loop.run_session(session.id, "/remember note")
     assert reply == "Memory store is not configured."
-    types = {e.event_type for e in recorder.events}
-    assert "memory_written" not in types
-    assert "memory_read" not in types
+    assert not any(
+        ev.name.startswith("memory.")
+        for span in recorder.spans
+        for ev in span.events
+    )

@@ -1,7 +1,7 @@
 """Application logging for HarnessLab (stdlib ``logging``).
 
-Structured runtime events belong in
-:class:`~harnesslab.telemetry.jsonl_recorder.JsonlTraceRecorder`;
+Structured runtime spans belong in
+:class:`~harnesslab.telemetry.local_span_recorder.LocalSpanRecorder`;
 this module covers operational narrative (startup, provider errors, migrations).
 
 Configure via ``HARNESSLAB_LOG=DEBUG|INFO|WARNING|ERROR`` or CLI ``--log-level``.

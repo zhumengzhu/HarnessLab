@@ -39,11 +39,18 @@ def to_markdown(proposal: Proposal) -> str:
         lines.append("## Sample events")
         lines.append("")
         for event in proposal.sample_events:
-            payload = json.dumps(event.get("payload", {}), ensure_ascii=False)
+            if "name" in event:
+                payload = json.dumps(
+                    event.get("attributes", {}), ensure_ascii=False
+                )
+                label = event.get("name")
+            else:
+                payload = json.dumps(event.get("payload", {}), ensure_ascii=False)
+                label = event.get("event_type")
             if len(payload) > _SAMPLE_PAYLOAD_PREVIEW:
                 payload = payload[: _SAMPLE_PAYLOAD_PREVIEW - 1] + "…"
             lines.append(
-                f"- `{event.get('event_type')}` "
+                f"- `{label}` "
                 f"session=`{event.get('session_id')}` "
                 f"payload=`{payload}`"
             )

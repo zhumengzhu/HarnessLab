@@ -7,7 +7,7 @@ from pathlib import Path
 from harnesslab.core.budget import BudgetLimits, TurnBudgetUsage, detect_budget_breaches
 from harnesslab.core.loop import HarnessLoop
 from harnesslab.core.models import BudgetUsage, Decision
-from harnesslab.core.replay import ReplayModel, ReplayTraceRecorder
+from harnesslab.core.replay import ReplayModel, ReplaySpanRecorder
 from harnesslab.policy.default_policy import DefaultPolicy
 from harnesslab.session.in_memory import InMemorySessionStore
 from harnesslab.tools.registry import ToolRegistry
@@ -35,14 +35,14 @@ def _build_cost_loop(
     decisions: list[Decision],
     call_meta: dict[str, object],
     budget_limits: BudgetLimits,
-) -> tuple[HarnessLoop, ReplayTraceRecorder]:
-    recorder = ReplayTraceRecorder()
+) -> tuple[HarnessLoop, ReplaySpanRecorder]:
+    recorder = ReplaySpanRecorder()
     loop = HarnessLoop(
         model=ReplayModel(decisions=decisions, call_meta=call_meta),
         policy=DefaultPolicy(workspace_root=tmp_path),
         sessions=InMemorySessionStore(),
         tools=ToolRegistry(),
-        trace=recorder,
+        spans=recorder,
         budget_limits=budget_limits,
     )
     return loop, recorder
@@ -70,10 +70,14 @@ def test_cost_budget_hard_stop_in_loop(tmp_path: Path) -> None:
     assert "Budget hard limit exceeded" in response
     assert session.budget_usage.cost_usd_total > 0.0
     hard = [
-        e
-        for e in recorder.events
-        if e.event_type == "budget_hard_exceeded"
-        and e.payload.get("dimension") == "max_session_cost_usd_total"
+        (span, ev)
+        for span, ev in (
+            (s, ev)
+            for s in recorder.spans
+            for ev in s.events
+        )
+        if ev.name == "budget.hard_exceeded"
+        and ev.attributes.get("dimension") == "max_session_cost_usd_total"
     ]
     assert hard
 
@@ -99,10 +103,11 @@ def test_cost_budget_soft_threshold_in_loop(tmp_path: Path) -> None:
     loop.run_session(session.id, "one call", max_steps=1)
 
     soft = [
-        e
-        for e in recorder.events
-        if e.event_type == "budget_soft_threshold"
-        and e.payload.get("dimension") == "max_session_cost_usd_total"
+        ev
+        for s in recorder.spans
+        for ev in s.events
+        if ev.name == "budget.soft_threshold"
+        and ev.attributes.get("dimension") == "max_session_cost_usd_total"
     ]
     assert soft
     assert session.budget_usage.last_budget_status == "soft_exceeded"

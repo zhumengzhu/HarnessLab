@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import UTC, datetime, timedelta
 from typing import Any, Literal
 
-from harnesslab.core.models import Session, TraceEvent
+from harnesslab.core.models import Session, SpanRecord, TraceEvent
 from harnesslab.providers.pricing import (
     CanonicalUsage,
     currency_symbols_from_catalog,
@@ -15,6 +15,7 @@ from harnesslab.providers.pricing import (
     usd_to_display,
 )
 from harnesslab.providers.pricing.models import CANONICAL_DIMENSIONS
+from harnesslab.telemetry.span_attributes import SPAN_LLM_GENERATE
 
 UsageRange = Literal["today", "7d", "30d", "all"]
 
@@ -241,6 +242,164 @@ def aggregate_usage_from_events(
     return {
         "range": range_key,
         "source": "trace",
+        "totals": totals,
+        "daily": daily_rows,
+        "by_model": model_rows,
+        "sessions": session_rows,
+    }
+
+
+def aggregate_usage_from_spans(
+    spans: list[SpanRecord],
+    *,
+    range_key: UsageRange = "all",
+    now: datetime | None = None,
+) -> dict[str, Any]:
+    """Build usage summary buckets from completed spans (Observability v2)."""
+
+    now = now or datetime.now(UTC)
+    start = usage_range_start(range_key, now)
+
+    totals = {
+        **_empty_row_template(),
+        "tool_calls": 0,
+        "session_count": 0,
+    }
+    daily: dict[str, dict[str, Any]] = {}
+    by_model: dict[str, dict[str, Any]] = {}
+    by_session: dict[str, dict[str, Any]] = {}
+    session_ids: set[str] = set()
+
+    def bump_daily(
+        day: str,
+        req: int,
+        resp: int,
+        total: int,
+        cost: float,
+        usage: CanonicalUsage,
+    ) -> None:
+        row = daily.setdefault(day, {"date": day, **_empty_row_template()})
+        row["input_tokens"] += req
+        row["output_tokens"] += resp
+        row["total_tokens"] += total
+        row["cost_usd"] = round(row["cost_usd"] + cost, 6)
+        row["llm_calls"] += 1
+        _bump_dimensions(row, usage)
+
+    def bump_model(
+        model: str,
+        req: int,
+        resp: int,
+        total: int,
+        cost: float,
+        usage: CanonicalUsage,
+    ) -> None:
+        row = by_model.setdefault(model, {"model": model, **_empty_row_template()})
+        row["input_tokens"] += req
+        row["output_tokens"] += resp
+        row["total_tokens"] += total
+        row["cost_usd"] = round(row["cost_usd"] + cost, 6)
+        row["llm_calls"] += 1
+        _bump_dimensions(row, usage)
+
+    def bump_session(
+        session_id: str,
+        req: int,
+        resp: int,
+        total: int,
+        cost: float,
+        usage: CanonicalUsage,
+        at: datetime,
+    ) -> None:
+        row = by_session.setdefault(
+            session_id,
+            {
+                "session_id": session_id,
+                **_empty_row_template(),
+                "tool_calls": 0,
+                "last_activity_at": None,
+            },
+        )
+        row["input_tokens"] += req
+        row["output_tokens"] += resp
+        row["total_tokens"] += total
+        row["cost_usd"] = round(row["cost_usd"] + cost, 6)
+        row["llm_calls"] += 1
+        _bump_dimensions(row, usage)
+        iso = _as_utc(at).isoformat()
+        if row["last_activity_at"] is None or iso > row["last_activity_at"]:
+            row["last_activity_at"] = iso
+
+    for span in spans:
+        if not _in_range(span.end_time, start):
+            continue
+        if span.name.startswith("tool.") and not span.name.startswith("tool.hooks."):
+            if span.name.count(".") != 1:
+                continue
+            totals["tool_calls"] += 1
+            row = by_session.setdefault(
+                span.session_id,
+                {
+                    "session_id": span.session_id,
+                    **_empty_row_template(),
+                    "tool_calls": 0,
+                    "last_activity_at": None,
+                },
+            )
+            row["tool_calls"] += 1
+            iso = _as_utc(span.end_time).isoformat()
+            if row["last_activity_at"] is None or iso > row["last_activity_at"]:
+                row["last_activity_at"] = iso
+            session_ids.add(span.session_id)
+            continue
+        if span.name != SPAN_LLM_GENERATE:
+            continue
+
+        metrics = span.metrics
+        attrs = span.attributes
+        payload: dict[str, Any] = {
+            "request_tokens": metrics.get("input_tokens") or metrics.get("request_tokens"),
+            "response_tokens": metrics.get("output_tokens") or metrics.get("response_tokens"),
+            "total_tokens": metrics.get("total_tokens"),
+            "model_name": attrs.get("gen_ai.request.model"),
+            "provider": attrs.get("gen_ai.system"),
+            "cost_estimate": (
+                {"amount_usd": metrics["cost_usd"]}
+                if isinstance(metrics.get("cost_usd"), (int, float))
+                else None
+            ),
+            "usage_breakdown": metrics.get("usage_breakdown"),
+        }
+        usage, req, resp, total = _call_usage(payload)
+        model = _model_label({**payload, **attrs})
+        cost = _call_cost(payload, model=model, usage=usage)
+        day = _as_utc(span.end_time).date().isoformat()
+
+        totals["input_tokens"] += req
+        totals["output_tokens"] += resp
+        totals["total_tokens"] += total
+        totals["cost_usd"] = round(totals["cost_usd"] + cost, 6)
+        totals["llm_calls"] += 1
+        _bump_dimensions(totals, usage)
+        session_ids.add(span.session_id)
+
+        bump_daily(day, req, resp, total, cost, usage)
+        bump_model(model, req, resp, total, cost, usage)
+        bump_session(span.session_id, req, resp, total, cost, usage, span.end_time)
+
+    totals["session_count"] = len(session_ids)
+
+    daily_rows = sorted(daily.values(), key=lambda row: row["date"])
+    model_rows = sorted(by_model.values(), key=lambda row: row["total_tokens"], reverse=True)
+    session_rows = sorted(
+        by_session.values(),
+        key=lambda row: row["total_tokens"],
+        reverse=True,
+    )
+
+    return {
+        "range": range_key,
+        "source": "spans",
         "totals": totals,
         "daily": daily_rows,
         "by_model": model_rows,

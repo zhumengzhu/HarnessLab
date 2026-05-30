@@ -17,12 +17,14 @@ from harnesslab.core.compaction import (
 from harnesslab.core.config import RuntimeLimits
 from harnesslab.core.loop import HarnessLoop
 from harnesslab.core.models import Decision, Message
-from harnesslab.core.replay import ReplayModel, ReplayTraceRecorder
+from harnesslab.core.replay import ReplayModel, ReplaySpanRecorder
 from harnesslab.core.runtime import DEFAULT_REPLAY_CLOCK_START, FrozenClock, SeqIdProvider
 from harnesslab.policy.default_policy import DefaultPolicy
 from harnesslab.session.in_memory import InMemorySessionStore
+from harnesslab.telemetry.span_attributes import HARNESSLAB_COMPACTION_TRIGGER
 from harnesslab.tools.file_tools import ReadFileTool, WriteFileTool
 from harnesslab.tools.registry import ToolRegistry
+from tests.span_test_helpers import chronological_spans, compact_spans
 
 
 def _msg(content: str, role: str = "user", session_id: str = "ses_x") -> Message:
@@ -162,7 +164,7 @@ def _build_loop_with_low_threshold(
     *,
     threshold: int,
     keep_last: int,
-) -> tuple[HarnessLoop, ReplayTraceRecorder]:
+) -> tuple[HarnessLoop, ReplaySpanRecorder]:
     limits = RuntimeLimits(
         compaction_threshold_tokens=threshold,
         compaction_keep_last_messages=keep_last,
@@ -170,13 +172,13 @@ def _build_loop_with_low_threshold(
     tools = ToolRegistry()
     tools.register(ReadFileTool(tmp_path, limits=limits))
     tools.register(WriteFileTool(tmp_path, limits=limits))
-    recorder = ReplayTraceRecorder()
+    recorder = ReplaySpanRecorder()
     loop = HarnessLoop(
         model=ReplayModel(decisions=decisions),
         policy=DefaultPolicy(workspace_root=tmp_path),
         sessions=InMemorySessionStore(),
         tools=tools,
-        trace=recorder,
+        spans=recorder,
         limits=limits,
         clock=FrozenClock(start=DEFAULT_REPLAY_CLOCK_START),
         ids=SeqIdProvider(),
@@ -201,16 +203,17 @@ def test_loop_emits_compaction_events_when_threshold_exceeded(tmp_path: Path) ->
 
     loop.run_session(session.id, "next turn", max_steps=2)
 
-    starts = [e for e in recorder.events if e.event_type == "compaction_started"]
-    completes = [e for e in recorder.events if e.event_type == "compaction_completed"]
-    assert len(starts) == 1
-    assert len(completes) == 1
-    assert starts[0].payload["trigger"] == "threshold"
-    assert starts[0].payload["estimated_tokens"] >= 200
-    assert starts[0].payload["threshold_tokens"] == 20
-    assert completes[0].payload["removed_messages"] >= 1
-    assert completes[0].payload["kept_messages"] == 2
-    assert completes[0].payload["estimated_tokens_after"] < starts[0].payload["estimated_tokens"]
+    compacts = compact_spans(recorder.spans)
+    assert len(compacts) == 1
+    compact = compacts[0]
+    assert compact.attributes[HARNESSLAB_COMPACTION_TRIGGER] == "threshold"
+    assert compact.metrics.get("estimated_tokens_before", 0) >= 200
+    assert compact.attributes.get("harnesslab.compaction.threshold_tokens") == 20
+    assert compact.metrics.get("removed_messages", 0) >= 1
+    assert compact.attributes.get("harnesslab.compaction.keep_last") == 2
+    assert compact.metrics.get("estimated_tokens_after", 0) < compact.metrics.get(
+        "estimated_tokens_before", 0
+    )
 
 
 def test_loop_does_not_compact_short_sessions(tmp_path: Path) -> None:
@@ -221,8 +224,7 @@ def test_loop_does_not_compact_short_sessions(tmp_path: Path) -> None:
     session = loop.start(goal="stay short")
     loop.run_session(session.id, "hello", max_steps=1)
 
-    assert not any(e.event_type == "compaction_started" for e in recorder.events)
-    assert not any(e.event_type == "compaction_completed" for e in recorder.events)
+    assert not compact_spans(recorder.spans)
 
 
 def test_compaction_event_appears_before_model_call(tmp_path: Path) -> None:
@@ -239,10 +241,11 @@ def test_compaction_event_appears_before_model_call(tmp_path: Path) -> None:
 
     loop.run_session(session.id, "trigger", max_steps=1)
 
-    types = [e.event_type for e in recorder.events]
-    compaction_idx = types.index("compaction_started")
-    model_idx = types.index("model_call")
-    assert compaction_idx < model_idx
+    ordered = chronological_spans(recorder.spans)
+    names = [s.name for s in ordered]
+    compact_idx = names.index("context.compact")
+    model_idx = names.index("llm.generate")
+    assert compact_idx < model_idx
 
 
 def test_compaction_replaces_session_messages_in_place(tmp_path: Path) -> None:
@@ -294,8 +297,7 @@ def test_trace_records_compaction_events(tmp_path: Path) -> None:
     )
     loop.run_session(session.id, "follow up", max_steps=1)
 
-    trace_path = tmp_path / ".harnesslab" / "trace.jsonl"
-    events = [json.loads(line) for line in trace_path.read_text().splitlines() if line]
-    types = [e["event_type"] for e in events]
-    assert "compaction_started" in types
-    assert "compaction_completed" in types
+    trace_path = tmp_path / ".harnesslab" / "spans.jsonl"
+    spans = [json.loads(line) for line in trace_path.read_text().splitlines() if line]
+    names = [s["name"] for s in spans]
+    assert "context.compact" in names

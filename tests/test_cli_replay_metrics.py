@@ -10,14 +10,14 @@ import pytest
 from harnesslab import cli
 from harnesslab.core.config import RuntimeLimits
 from harnesslab.core.loop import HarnessLoop
-from harnesslab.core.replay import ReplayModel, ReplayTraceRecorder
+from harnesslab.core.replay import ReplayModel, ReplaySpanRecorder
 from harnesslab.core.runtime import DEFAULT_REPLAY_CLOCK_START, FrozenClock, SeqIdProvider
 from harnesslab.core.simple_model import SimpleModel
 from harnesslab.eval.loader import load_suite
 from harnesslab.policy.default_policy import DefaultPolicy
-from harnesslab.replay.trace_reader import read_trace
+from harnesslab.replay import read_spans
 from harnesslab.session.in_memory import InMemorySessionStore
-from harnesslab.telemetry.jsonl_recorder import JsonlTraceRecorder
+from harnesslab.telemetry.local_span_recorder import LocalSpanRecorder
 from harnesslab.tools.file_tools import ReadFileTool, WriteFileTool
 from harnesslab.tools.registry import ToolRegistry
 from harnesslab.tools.shell_tool import RunShellSafeTool
@@ -42,15 +42,15 @@ def _write_real_trace(workspace: Path, trace_path: Path, task_name: str) -> None
     tools.register(WriteFileTool(workspace, limits=limits))
     tools.register(RunShellSafeTool(workspace, limits=limits))
     model = ReplayModel(decisions=task.decisions) if task.decisions else SimpleModel()
-    recorder = JsonlTraceRecorder(trace_path)
-    in_memory = ReplayTraceRecorder()  # noqa: F841 - kept for symmetry
+    recorder = LocalSpanRecorder(trace_path)
+    in_memory = ReplaySpanRecorder()  # noqa: F841 - kept for symmetry
 
     loop = HarnessLoop(
         model=model,
         policy=DefaultPolicy(workspace_root=workspace),
         sessions=InMemorySessionStore(),
         tools=tools,
-        trace=recorder,
+        spans=recorder,
         clock=FrozenClock(start=DEFAULT_REPLAY_CLOCK_START),
         ids=SeqIdProvider(),
     )
@@ -64,13 +64,13 @@ def _write_spawn_trace(workspace: Path, trace_path: Path) -> str:
 
     tools = ToolRegistry()
     loop_holder: list[HarnessLoop] = []
-    recorder = JsonlTraceRecorder(trace_path)
+    recorder = LocalSpanRecorder(trace_path)
     loop = HarnessLoop(
         model=SimpleModel(),
         policy=DefaultPolicy(workspace, enable_spawn_sub_agent=True),
         sessions=InMemorySessionStore(),
         tools=tools,
-        trace=recorder,
+        spans=recorder,
         clock=FrozenClock(start=DEFAULT_REPLAY_CLOCK_START),
         ids=SeqIdProvider(),
         workspace_root=workspace,
@@ -122,13 +122,15 @@ def test_replay_diverges_when_trace_tampered(
     flipped = False
     for line in lines:
         obj = json.loads(line)
-        if (
-            not flipped
-            and obj["event_type"] == "decision_made"
-            and obj["payload"].get("tool_name") == "write_file"
-        ):
-            obj["payload"]["tool_name"] = "read_file"
-            flipped = True
+        if not flipped and obj.get("name") == "harnesslab.step":
+            for event in obj.get("events", []):
+                if (
+                    event.get("name") == "decision.applied"
+                    and event.get("attributes", {}).get("tool_name") == "write_file"
+                ):
+                    event["attributes"]["tool_name"] = "read_file"
+                    flipped = True
+                    break
         tampered_lines.append(json.dumps(obj))
     assert flipped
     trace.write_text("\n".join(tampered_lines) + "\n", encoding="utf-8")
@@ -150,10 +152,14 @@ def test_replay_unreplayable_trace_returns_exit_2(
     trace.write_text(
         json.dumps(
             {
-                "run_id": "r",
+                "trace_id": "t" * 32,
+                "span_id": "s" * 16,
+                "name": "harnesslab.turn",
                 "session_id": "r",
-                "event_type": "decision_made",
-                "payload": {},
+                "turn_index": 0,
+                "start_time": "2026-01-01T00:00:00+00:00",
+                "end_time": "2026-01-01T00:00:01+00:00",
+                "duration_ms": 1.0,
             }
         )
         + "\n",
@@ -198,7 +204,7 @@ def test_replay_missing_trace_file(
     )
     with pytest.raises(SystemExit) as exc:
         cli.main()
-    assert "trace file not found" in str(exc.value)
+    assert "spans file not found" in str(exc.value)
 
 
 def test_replay_with_shared_workspace_round_trips_across_sessions(
@@ -220,13 +226,13 @@ def test_replay_with_shared_workspace_round_trips_across_sessions(
     tools.register(ReadFileTool(workspace, limits=limits))
     tools.register(WriteFileTool(workspace, limits=limits))
     tools.register(RunShellSafeTool(workspace, limits=limits))
-    recorder = JsonlTraceRecorder(trace)
+    recorder = LocalSpanRecorder(trace)
     loop = HarnessLoop(
         model=SimpleModel(),
         policy=DefaultPolicy(workspace_root=workspace),
         sessions=InMemorySessionStore(),
         tools=tools,
-        trace=recorder,
+        spans=recorder,
         clock=FrozenClock(start=DEFAULT_REPLAY_CLOCK_START),
         ids=SeqIdProvider(),
     )
@@ -254,8 +260,8 @@ def test_replay_include_children_replays_parent_and_child(
     workspace.mkdir()
     trace = tmp_path / "spawn.jsonl"
     parent_id = _write_spawn_trace(workspace, trace)
-    events = read_trace(trace)
-    session_ids = {e.session_id for e in events if e.event_type == "session_started"}
+    spans = read_spans(trace)
+    session_ids = {s.session_id for s in spans if s.name == "harnesslab.turn"}
     assert len(session_ids) >= 2
 
     monkeypatch.setattr(
@@ -332,4 +338,4 @@ def test_metrics_missing_trace_file(
     )
     with pytest.raises(SystemExit) as exc:
         cli.main()
-    assert "trace file not found" in str(exc.value)
+    assert "spans file not found" in str(exc.value)

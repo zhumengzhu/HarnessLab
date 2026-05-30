@@ -1,4 +1,4 @@
-import type { TraceEventItem } from "../../lib/schemas";
+import type { SpanEventPayload, SpanRecordItem, SpanStartedPayload } from "../../lib/schemas";
 
 export type ActivityEntry = {
   id: string;
@@ -9,187 +9,131 @@ export type ActivityEntry = {
   at: string;
 };
 
-const ACTIVITY_EVENT_TYPES = new Set([
-  "step_started",
-  "model_call_started",
-  "model_call",
-  "tool_executed",
-  "tool_denied",
-  "compaction_started",
-  "compaction_completed",
-  "user_steer_received",
-  "sub_agent_spawned",
-  "sub_agent_completed",
-]);
-
-export function isActivityTraceEvent(eventType: string): boolean {
-  return ACTIVITY_EVENT_TYPES.has(eventType);
-}
-
 function previewText(raw: unknown, max = 96): string {
   const text = String(raw ?? "").replace(/\s+/g, " ").trim();
   if (!text) return "";
   return text.length <= max ? text : `${text.slice(0, max)}…`;
 }
 
-function argFieldCount(args: unknown): number | null {
-  if (!args || typeof args !== "object" || Array.isArray(args)) {
-    return null;
+export function activityEntryFromSpanStarted(payload: SpanStartedPayload): ActivityEntry | null {
+  if (payload.name === "harnesslab.step") {
+    const stepIndex = payload.attributes?.["harnesslab.step.index"];
+    return {
+      id: `${payload.span_id}-step`,
+      kind: "step",
+      label: `step ${String(stepIndex ?? "?")} started`,
+      at: new Date().toISOString(),
+    };
   }
-  return Object.keys(args as Record<string, unknown>).length;
+  if (payload.name === "llm.generate") {
+    const stepIndex = payload.attributes?.["harnesslab.step.index"];
+    const thinking = payload.attributes?.["harnesslab.thinking.enabled"];
+    return {
+      id: `${payload.span_id}-llm`,
+      kind: "thinking",
+      label: `step ${String(stepIndex ?? "?")} · ${thinking ? "thinking…" : "calling model"}`,
+      at: new Date().toISOString(),
+    };
+  }
+  if (payload.name === "sub_agent.run") {
+    const goal = previewText(payload.attributes?.["harnesslab.sub_agent.goal"]);
+    return {
+      id: `${payload.span_id}-spawn`,
+      kind: "spawn",
+      label: "sub-agent spawn",
+      detail: goal,
+      at: new Date().toISOString(),
+    };
+  }
+  return null;
 }
 
-export function activityEntryFromTrace(evt: TraceEventItem): ActivityEntry | null {
-  if (!isActivityTraceEvent(evt.event_type)) {
-    return null;
-  }
-
-  const payload = evt.payload;
-  const id = `${evt.created_at}-${evt.event_type}-${String(payload.tool ?? payload.step_index ?? "")}`;
-
-  if (evt.event_type === "tool_executed") {
-    const tool = String(payload.tool || "tool");
-    const ok = Boolean(payload.ok ?? true);
+export function activityEntryFromSpanCompleted(span: SpanRecordItem): ActivityEntry | null {
+  if (span.name.startsWith("tool.") && !span.name.startsWith("tool.hooks.")) {
+    const tool = String(span.attributes["harnesslab.tool.name"] ?? span.name.slice(5));
+    const ok = Boolean(span.attributes["harnesslab.tool.ok"] ?? span.status !== "error");
     const duration =
-      typeof payload.duration_ms === "number" ? ` · ${Math.round(payload.duration_ms)}ms` : "";
-    const argCount = argFieldCount(payload.args);
-    const argLabel = argCount != null ? `${argCount} args` : "args hidden";
-    const output = previewText(payload.output_preview);
-    const detailParts = [argLabel];
-    if (output) {
-      detailParts.push(output);
-    } else if (payload.error) {
-      detailParts.push(previewText(payload.error));
+      typeof span.metrics?.duration_ms === "number"
+        ? ` · ${Math.round(span.metrics.duration_ms)}ms`
+        : "";
+    if (!ok && span.attributes["harnesslab.policy.decision"]) {
+      return {
+        id: `${span.span_id}-deny`,
+        kind: "tool_denied",
+        label: `${tool} · denied`,
+        detail: previewText(span.metrics?.error ?? "policy denied"),
+        ok: false,
+        at: span.end_time,
+      };
     }
     return {
-      id,
+      id: `${span.span_id}-tool`,
       kind: "tool",
       label: `${tool} · ${ok ? "ok" : "error"}${duration}`,
-      detail: detailParts.join(" · "),
+      detail: previewText(span.metrics?.output_preview ?? span.metrics?.error),
       ok,
-      at: evt.created_at,
+      at: span.end_time,
     };
   }
-
-  if (evt.event_type === "tool_denied") {
-    const tool = String(payload.tool || "tool");
+  if (span.name === "context.compact") {
+    const trigger = String(span.attributes["harnesslab.compaction.trigger"] ?? "compact");
     return {
-      id,
-      kind: "tool_denied",
-      label: `${tool} · denied`,
-      detail: previewText(payload.reason || "policy denied"),
-      ok: false,
-      at: evt.created_at,
-    };
-  }
-
-  if (evt.event_type === "model_call_started") {
-    const step =
-      typeof payload.step_index === "number" ? `step ${payload.step_index}` : "model call";
-    const thinking = payload.thinking_likely ? "thinking…" : "calling model";
-    return {
-      id,
-      kind: "thinking",
-      label: `${step} · ${thinking}`,
-      at: evt.created_at,
-    };
-  }
-
-  if (evt.event_type === "model_call") {
-    const attempts = payload.failover_attempts;
-    if (typeof attempts !== "number" || attempts <= 1) {
-      return null;
-    }
-    const backend = String(payload.failover_backend || "backend");
-    const exhausted = payload.failover_exhausted === true;
-    return {
-      id,
-      kind: "failover",
-      label: exhausted ? `failover exhausted · ${backend}` : `failover · ${backend}`,
-      detail: `attempt ${attempts}`,
-      ok: !exhausted,
-      at: evt.created_at,
-    };
-  }
-
-  if (evt.event_type === "step_started") {
-    const step =
-      typeof payload.step_index === "number" ? `step ${payload.step_index}` : "agent step";
-    return {
-      id,
-      kind: "step",
-      label: step,
-      at: evt.created_at,
-    };
-  }
-
-  if (evt.event_type === "user_steer_received") {
-    return {
-      id,
-      kind: "steer",
-      label: "steer injected",
-      detail: previewText(payload.user_input),
-      at: evt.created_at,
-    };
-  }
-
-  if (evt.event_type === "sub_agent_spawned") {
-    const childId = String(payload.child_session_id || "");
-    return {
-      id,
-      kind: "spawn",
-      label: "sub-agent spawned",
-      detail: previewText(payload.goal) || childId,
-      at: evt.created_at,
-    };
-  }
-
-  if (evt.event_type === "sub_agent_completed") {
-    const childId = String(payload.child_session_id || "");
-    return {
-      id,
-      kind: "spawn",
-      label: "sub-agent finished",
-      detail: previewText(payload.final_response_preview) || childId,
-      at: evt.created_at,
-    };
-  }
-
-  if (evt.event_type === "compaction_started") {
-    return {
-      id,
+      id: `${span.span_id}-compact`,
       kind: "compact",
-      label: "compaction started",
-      detail: previewText(payload.trigger),
-      at: evt.created_at,
+      label: `compact · ${trigger}`,
+      at: span.end_time,
     };
   }
-
-  return {
-    id,
-    kind: "compact",
-    label: "compaction completed",
-    detail:
-      typeof payload.messages_after === "number"
-        ? `${payload.messages_after} messages remain`
-        : undefined,
-    ok: true,
-    at: evt.created_at,
-  };
+  if (span.name === "llm.generate") {
+    const attempts = span.attributes["harnesslab.failover.attempts"];
+    if (typeof attempts === "number" && attempts > 1) {
+      return {
+        id: `${span.span_id}-failover`,
+        kind: "failover",
+        label: `failover · ${attempts} attempts`,
+        at: span.end_time,
+      };
+    }
+  }
+  return null;
 }
 
-export function buildActivityFeed(events: TraceEventItem[], max = 40): ActivityEntry[] {
-  const entries: ActivityEntry[] = [];
-  const seen = new Set<string>();
-
-  for (const evt of events) {
-    const entry = activityEntryFromTrace(evt);
-    if (!entry || seen.has(entry.id)) {
-      continue;
-    }
-    seen.add(entry.id);
-    entries.push(entry);
+export function activityEntryFromSpanEvent(payload: SpanEventPayload): ActivityEntry | null {
+  if (payload.name === "user.steer.received") {
+    return {
+      id: `${payload.span_id}-${payload.name}`,
+      kind: "steer",
+      label: "steer received",
+      detail: previewText(payload.attributes?.user_input),
+      at: new Date().toISOString(),
+    };
   }
+  return null;
+}
 
-  return entries.slice(-max).reverse();
+export function buildActivityFeedFromSpans(
+  spans: SpanRecordItem[],
+  cap = 200
+): ActivityEntry[] {
+  const entries: ActivityEntry[] = [];
+  for (const span of spans) {
+    const completed = activityEntryFromSpanCompleted(span);
+    if (completed) entries.push(completed);
+    for (const evt of span.events ?? []) {
+      const mapped = activityEntryFromSpanEvent({
+        trace_id: span.trace_id,
+        span_id: span.span_id,
+        name: evt.name,
+        attributes: evt.attributes,
+      });
+      if (mapped) entries.push({ ...mapped, at: evt.time || span.end_time });
+    }
+  }
+  const sorted = entries.sort((a, b) => a.at.localeCompare(b.at));
+  if (sorted.length <= cap) return sorted.reverse();
+  return sorted.slice(sorted.length - cap).reverse();
+}
+
+export function buildActivityFeed(spans: SpanRecordItem[], cap = 200): ActivityEntry[] {
+  return buildActivityFeedFromSpans(spans, cap);
 }

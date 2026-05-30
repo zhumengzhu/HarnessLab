@@ -89,7 +89,7 @@ def test_stream_reasoning_persisted_on_tool_turn(tmp_path: Path) -> None:
     from harnesslab.core.stream_context import emit_stream_delta, stream_sink_active
     from harnesslab.policy.default_policy import DefaultPolicy
     from harnesslab.session.in_memory import InMemorySessionStore
-    from harnesslab.telemetry.jsonl_recorder import JsonlTraceRecorder
+    from harnesslab.telemetry.local_span_recorder import LocalSpanRecorder
     from harnesslab.tools.registry import ToolRegistry
 
     class StreamReasoningModel:
@@ -114,7 +114,7 @@ def test_stream_reasoning_persisted_on_tool_turn(tmp_path: Path) -> None:
         policy=DefaultPolicy(tmp_path),
         sessions=InMemorySessionStore(),
         tools=tools,
-        trace=JsonlTraceRecorder(tmp_path / "trace.jsonl"),
+        spans=LocalSpanRecorder(tmp_path / "trace.jsonl"),
         clock=SystemClock(),
         ids=UuidIdProvider(),
         workspace_root=tmp_path,
@@ -132,7 +132,7 @@ def test_max_steps_appends_continue_hint(tmp_path: Path) -> None:
     from harnesslab.core.runtime import SystemClock, UuidIdProvider
     from harnesslab.policy.default_policy import DefaultPolicy
     from harnesslab.session.in_memory import InMemorySessionStore
-    from harnesslab.telemetry.jsonl_recorder import JsonlTraceRecorder
+    from harnesslab.telemetry.local_span_recorder import LocalSpanRecorder
     from harnesslab.tools.file_tools import GrepTool
     from harnesslab.tools.registry import ToolRegistry
 
@@ -150,7 +150,7 @@ def test_max_steps_appends_continue_hint(tmp_path: Path) -> None:
         policy=DefaultPolicy(tmp_path),
         sessions=InMemorySessionStore(),
         tools=tools,
-        trace=JsonlTraceRecorder(tmp_path / "trace.jsonl"),
+        spans=LocalSpanRecorder(tmp_path / "trace.jsonl"),
         clock=SystemClock(),
         ids=UuidIdProvider(),
         workspace_root=tmp_path,
@@ -166,13 +166,13 @@ def test_max_steps_appends_continue_hint(tmp_path: Path) -> None:
 
 def test_compact_command_runs_manual_compaction(tmp_path: Path) -> None:
     from harnesslab.core.config import RuntimeLimits
-    from harnesslab.core.replay import ReplayTraceRecorder
+    from harnesslab.core.replay import ReplaySpanRecorder
 
-    recorder = ReplayTraceRecorder()
+    recorder = ReplaySpanRecorder()
     loop = build_runtime(
         tmp_path,
         limits=RuntimeLimits(compaction_keep_last_messages=2),
-        trace=recorder,
+        spans=recorder,
     )
     session = loop.start(goal="long chat")
     for i in range(6):
@@ -190,9 +190,11 @@ def test_compact_command_runs_manual_compaction(tmp_path: Path) -> None:
 
     refreshed = loop._sessions.get(session.id)  # noqa: SLF001
     assert any(m.role == "system" and "Compacted" in m.content for m in refreshed.messages)
-    starts = [e for e in recorder.events if e.event_type == "compaction_started"]
-    assert starts
-    assert starts[-1].payload["trigger"] == "manual"
+    from span_assertions import compact_spans
+
+    compacts = compact_spans(recorder.spans)
+    assert compacts
+    assert compacts[-1].attributes.get("harnesslab.compaction.trigger") == "manual"
 
 
 def test_skill_command_clear_removes_selected_skills(tmp_path: Path) -> None:

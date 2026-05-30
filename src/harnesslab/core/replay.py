@@ -6,13 +6,11 @@ These implementations are intentionally minimal:
   `ModelPort.decide` without ever calling an LLM, which is exactly what
   the Step-4 eval runner needs to compare a candidate against a frozen
   baseline of decisions.
-- `ReplayTraceRecorder` collects `TraceEvent`s in memory instead of
-  writing JSONL. It satisfies `TraceRecorderPort.record` and gives
-  tests direct, ordered access to what the loop emitted.
+- `ReplaySpanRecorder` collects completed `SpanRecord`s in memory for
+  tests and eval replay.
 
-The richer Step-5 replay machinery (loading historical decisions from
-a JSONL trace, replaying with a `FrozenClock`, divergence detection)
-will be built on top of these stubs.
+The Step-5 replay machinery (loading historical spans, replaying with
+a `FrozenClock`, divergence detection) builds on these stubs.
 """
 
 from __future__ import annotations
@@ -20,7 +18,8 @@ from __future__ import annotations
 from collections import deque
 from collections.abc import Iterable
 
-from harnesslab.core.models import Decision, Session, TraceEvent
+from harnesslab.core.models import Decision, Session, SpanRecord
+from harnesslab.telemetry.memory_span_recorder import MemorySpanRecorder
 
 
 class ReplayModel:
@@ -52,14 +51,9 @@ class ReplayModel:
         return len(self._queue)
 
 
-class ReplayTraceRecorder:
-    """A `TraceRecorderPort` that appends events to an in-memory list."""
+class ReplaySpanRecorder(MemorySpanRecorder):
+    """Collect completed ``SpanRecord`` rows in memory (Observability v2)."""
 
-    def __init__(self) -> None:
-        self.events: list[TraceEvent] = []
-
-    def record(self, event: TraceEvent) -> None:
-        self.events.append(event)
-
-    def event_types(self) -> list[str]:
-        return [e.event_type for e in self.events]
+    @property
+    def spans(self) -> list[SpanRecord]:
+        return list(self._completed)

@@ -1,8 +1,8 @@
 # WebUI Design
 
 HarnessLab 的浏览器聊天界面（`harnesslab serve` / `./hl-serve`）遵循 **「Trace 是引擎，Chat 是产品」**
-原则：运行时可观测性写入 trace，用户-facing 体验由 Chat 区独立呈现。禁用 Advanced 模式或 Trace
-面板 **不得** 削弱核心对话能力（发送、停止、Thinking/Thought、Tool 活动、最终回复）。
+原则：运行时可观测性写入 span（`spans.jsonl`），用户-facing 体验由 Chat 区独立呈现。不打开 Trace
+Tab **不得** 削弱核心对话能力（发送、停止、Thinking/Thought、Tool 活动、最终回复）。
 
 ## Design principles
 
@@ -12,12 +12,12 @@ HarnessLab 的浏览器聊天界面（`harnesslab serve` / `./hl-serve`）遵循
    前端翻译为聊天气泡内的结构化块（Thinking、Tool 行、Answer）。
 4. **Provider-agnostic UI** — UI 只认 `thinking | tool | text` 三种块；vendor 差异留在 adapter。
 5. **Two-tier streaming**
-   - **Step 级（已落地）**：`step_started` / `model_call_started` / `model_call` / `tool_executed`
-     驱动 Chat 活动，不依赖 LLM token streaming。
+   - **Step 级（已落地）**：SSE `span.started` / `span.completed`（`harnesslab.step`、
+     `llm.generate`、`tool.*`）驱动 Chat 活动，不依赖 LLM token streaming。
    - **Token 级（已落地，DeepSeek 优先）**：SSE `reasoning_delta` / `assistant_delta`；
      loop 经 ``stream_context`` 绑定 sink；Web UI LiveTurn 增量渲染。
-6. **Replay stability** — trace 中 token 计数、latency、reasoning 正文为 **volatile**（不参与
-   semantic replay compare）；字段名与 API 契约在 `data-model.md` 维护。
+6. **Replay stability** — span `metrics` 中 token 计数、latency、reasoning 正文为 **volatile**
+   （不参与 semantic replay compare）；字段名与 API 契约在 `data-model.md` 维护。
 
 ## Turn layout (Chat)
 
@@ -26,24 +26,24 @@ HarnessLab 的浏览器聊天界面（`harnesslab serve` / `./hl-serve`）遵循
 ```
 User message
 └─ Assistant turn (in-flight or complete)
-   ├─ [Thinking…] → [Thought for 3s ▾]   ← thinking 模型，每步 model_call 一条
-   ├─ [Tool: web_search ▾]               ← 0..N，trace tool_executed 实时追加
-   └─ Final answer                        ← decision_made / done 后展示
+   ├─ [Thinking…] → [Thought for 3s ▾]   ← thinking 模型，每步 `llm.generate` 一条
+   ├─ [Tool: web_search ▾]               ← 0..N，`tool.*` span 完成时实时追加
+   └─ Final answer                        ← turn 结束 / `done` 后展示
 ```
 
 Turn 完成后，Thinking / Tool 活动归档到该轮 terminal assistant 消息上（`turnEnrichments`），
-刷新或切换会话后从 trace 重建（需 `user_input_received` 事件划分 turn 边界）。
+刷新或切换会话后从 persisted spans + messages 重建（按 `turn_index` 对齐）。
 
 ## Thinking / Thought state machine
 
 | 阶段 | UI 文案 | 触发 |
 |------|---------|------|
-| 推理中 | **Thinking…**（脉冲动画 + 计时） | `model_call_started` 或 `step_started` 且模型支持 reasoning |
-| 推理完成 | **Thought for {N}s ▾**（默认折叠） | `model_call` 含 `reasoning_text` 或 `latency_ms` |
+| 推理中 | **Thinking…**（脉冲动画 + 计时） | SSE `span.started` `llm.generate` 且 `harnesslab.thinking.enabled` |
+| 推理完成 | **Thought for {N}s ▾**（默认折叠） | `llm.generate` `span.completed` 含 `metrics.reasoning_text` 或 duration |
 | 无 reasoning | 不显示 Thought 块 | 非 thinking 模型 / SimpleModel |
 
-Thought 正文来源优先级：`message.reasoning_text`（API）> trace `model_call.reasoning_text` >
-content 内 `<thinking>` 标签（legacy fallback）。
+Thought 正文来源优先级：`message.reasoning_text`（API）> `llm.generate` span
+`metrics.reasoning_text` > content 内 `<thinking>` 标签（legacy fallback）。
 
 ## Simple vs Advanced → unified shell (UI-6)
 
@@ -70,18 +70,47 @@ Chat 区不再嵌入 Session metadata / Budget JSON / Tool messages 诊断块；
 
 ## Trace 视图（UI-F2）
 
-Trace Tab 内双层：
+Trace Tab 顶层：**Timeline（Spans）** · **Events** · **JSONL**，同一 chrome 行内嵌
+Checkpoints 折叠区（`SessionTraceView`）。
 
-1. **Spans（默认）** — 由 JSONL 事件 **前端启发式** 合成 Jaeger 风格层级：
-   `session → turn → step → model | tool | compaction | …`。左树 + 右详情；
-   时长条、状态色；`model_call` 保留 Prompt inspector；Raw JSON 折叠。
-2. **Events** — 保留原有 **OpenClaw 式调试列表**（`event_type` + payload JSON）。
+### Timeline（Spans，默认）
 
-后端 JSONL **不变**。无 native `span_id` 时树形为近似；OTel/Jaeger 真同源导出仍走
-`HARNESSLAB_OTEL=1`（见 `data-model.md`）。
+后端原生 `SpanRecord`（`parent_span_id` / `trace_id`），**Jaeger 借鉴布局**（非 1:1 复刻）：
 
-实现：`buildTraceSpanTree.ts`、`TraceSpanPanel.tsx`、`TraceSpanDetail.tsx`；
-`SessionTraceView` 内 Spans | Events 切换。
+| 区域 | 内容 |
+| --- | --- |
+| **主区（左）** | 全宽 waterfall：`Service & Operation \| Timeline` 两列合一；行内显示 `span.name`（如 `harnesslab.step`、`tool.fetch_url`）、可选 hint（model、policy denied）；IBM Carbon 风格 service 色；27px 紧凑行；可折叠子 span |
+| **详情侧栏（右）** | 选中 span 的详情；默认打开；可收起（HarnessLab 扩展，Jaeger 侧栏通常常驻） |
+
+**详情结构（Jaeger 式 accordion + KV 表）：**
+
+- Header：operation 名、Service / Duration / Start Time
+- **Tags** — `SpanRecord.attributes`（`harnesslab.live` 等内部键隐藏）
+- **Process** — `SpanRecord.resource`（缺省时 fallback `service.name=harnesslab`）
+- **Logs / Events** — 每条 event 嵌套 accordion + KV
+- **Metrics** — `SpanRecord.metrics`（不含嵌套 `context`）
+- **Prompt** — 仅 `llm.generate`：`ModelCallInspector`（`prompt_blocks` / `api_messages` / `context`）
+- **Links** — 跨 trace 链接（如 sub-agent）
+
+**其它：**
+
+- 每 turn 一个 `trace_id`；多 turn session 提供 turn/trace 选择器
+- **进行中 turn**：SSE `span.started` 占位 + 已完成 span 合并（`liveSpans.ts` / `mergeTraceSpans`）
+- Raw JSONL 在 **JSONL** 子 Tab（`GET …/trace/jsonl`）
+
+实现：`spanTree.ts`、`spanDisplay.ts`、`spanColor.ts`、`spanResource.ts`、
+`liveSpans.ts`、`TraceSpanPanel.tsx`、`TraceSpanDetail.tsx`、
+`TraceAttributesTable.tsx`、`TraceDetailAccordion.tsx`；
+Live Turn / Activity 消费 span SSE（`liveTurnSpanReducer.ts`、`activityFeed.ts`）。
+
+### Events（调试）
+
+OpenClaw 式 **span 列表**（非 v1 `event_type` 流）：每条为一 completed
+`SpanRecord` 摘要 + raw JSON；`llm.generate` 行内 Prompt inspector。
+
+### JSONL
+
+会话 `spans.jsonl` 行只读预览（与 persisted `span.completed` 一致）。
 
 ## Chat / Composer 减重方案（UI-7，待实施）
 
@@ -158,31 +187,35 @@ Trace / Activity **继续放在主区 Tab**（对话 | Trace | Activity），**�
 
 Trace / Activity Tab 在 UI-8 中 **仅做视觉统一**（圆角、间距），不改信息架构。
 
-## SSE 事件（Chat 消费子集）
+## SSE 事件（Chat / Trace 消费）
 
-Web UI 通过 `POST .../messages`（`stream: true`）订阅：
+Web UI 通过 `POST .../messages`（`stream: true`）订阅。Normative wire format：
+[`web-api.md`](web-api.md) § Server-Sent Events。
 
-| 事件 | Chat 用途 |
-|------|-----------|
-| `trace` | 增量更新 LiveTurn（step / thinking / tool） |
-| `reasoning_delta` | Thinking 块逐字追加 reasoning |
+| 事件 | 用途 |
+| --- | --- |
+| `span.started` | Live Turn / Activity / Trace Tab 进行中占位（未写入 JSONL） |
+| `span.event` | Activity 即时事实（budget、policy deny、steer 等） |
+| `span.completed` | 完整 `SpanRecord`；Trace Tab、JSONL 持久化 |
+| `span.link` | 子 agent 跨 trace 链接 |
+| `reasoning_delta` | Thinking 块逐字追加 |
 | `assistant_delta` | 最终回答逐字追加 |
 | `done` | 持久化 messages 对齐、清空 LiveTurn |
 | `error` | 错误态 + 停止指示 |
 
-`trace` 内常用 `event_type`：`step_started`、`model_call_started`、`model_call`、
-`decision_made`、`tool_executed`、`tool_denied`。
+v1 `event: trace` + `event_type` 扁平事件 **已退役**（Observability v2 cutover）。
+Live Turn reducer 由 span 生命周期驱动（`liveTurnSpanReducer.ts`）。
 
 ## Trace：完整 Prompt 查看（Advanced）
 
-每次 `model_call` trace payload 含：
+`llm.generate` 完成 span 的 `metrics` 含：
 
 - `prompt_blocks[]` — `{ name, role, origin, content, char_count }` 组装块全文
 - `api_messages[]` — 序列化后发给 provider 的 chat messages（OpenAI 形状）
 - `context` — 既有 `ContextSnapshot`（token 估算）
 - `reasoning_text` — 可选，thinking 模型推理正文
 
-Trace 面板对 `model_call` 展示 **Prompt inspector**（按 block 折叠 + API messages 全文），
+Trace Tab 对 `llm.generate` span 展示 **Prompt inspector**（按 block 折叠 + API messages 全文），
 供调试与上下文审计。Simple 模式用户不依赖此面板完成对话。
 
 ## Composer 交互（Cursor 风格）
@@ -331,7 +364,7 @@ and components under `webui/`.
 
 | Phase | Scope | Status |
 | --- | --- | --- |
-| **UI-1** | Design tokens; `app-shell` grid (sidebar + main + trace column); composer dock; full-height chat scroll | **Shipped** — `AppSidebar`, `app-chat-stack` |
+| **UI-1** | Design tokens; `app-shell` grid (sidebar + main); composer dock; full-height chat scroll | **Shipped** — `AppSidebar`, `app-chat-stack` |
 | **UI-2** | Sidebar polish; remove legacy session dropdown; session search/filter | **Shipped** — `filterSessions`, sidebar search + status chips |
 | **UI-3** | Tool/thought simplified output toggle; optional text size control | **Shipped** — 简洁/详细活动、A−/A+ 字号 |
 | **UI-4a** | Context 高压 **Compact** 按钮；侧栏 **会话重命名** | **Shipped** |

@@ -76,8 +76,8 @@ sequenceDiagram
 maps each assistant block’s `origin` (`session:<msg_id>`) to persisted
 reasoning. The `openai_chat` transform builds that map from the session.
 
-**Do not** infer reasoning from trace `decision_made` in the Web UI — trace
-`model_call` is the canonical source for displayed thoughts; replay uses
+**Do not** infer reasoning from span events in the Web UI — completed
+`llm.generate` span `metrics` is the canonical source for displayed thoughts; replay uses
 **persisted messages**, not trace JSONL.
 
 ---
@@ -161,10 +161,10 @@ the API requires content we no longer have.
 
 | Check | Where |
 | --- | --- |
-| Request messages include `reasoning_content` | Trace `model_call` payload `api_messages`, or log in `DeepSeekModel._request_body` |
+| Request messages include `reasoning_content` | `llm.generate` span `metrics.api_messages`, or log in `DeepSeekModel._request_body` |
 | Reasoning persisted | `GET /api/sessions/{id}` → `messages[].reasoning_text` |
 | Transform tests green | `uv run pytest tests/test_openai_chat_transform.py tests/test_deepseek_provider.py` |
-| UI thought duplication | Web UI reads trace `model_call` only — not `decision_made.reasoning_text` |
+| UI thought duplication | Web UI reads `llm.generate` span metrics only — not decision attrs on other spans |
 
 **Contract rule:** changes to replay behavior **must** update this doc,
 `provider-expansion.md` §6.6.1, and the tests above in the same PR.

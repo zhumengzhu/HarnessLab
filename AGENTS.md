@@ -122,7 +122,7 @@ Stable contract names:
 - `SessionStorePort`
 - `MemoryStorePort`
 - `ArtifactStorePort`
-- `TraceRecorderPort`
+- `SpanRecorderPort` (primary telemetry)
 - `ClockPort`
 - `IdPort`
 

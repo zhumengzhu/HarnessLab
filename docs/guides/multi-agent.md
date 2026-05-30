@@ -82,7 +82,7 @@ Child sessions set `parent_session_id` on `session_started`.
 harnesslab session show ses_parent --include-children
 
 # Replay parent, then each child (in trace order)
-harnesslab replay .harnesslab/trace.jsonl \
+harnesslab replay .harnesslab/spans.jsonl \
   --session-id ses_parent --include-children
 ```
 
