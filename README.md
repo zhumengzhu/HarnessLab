@@ -270,6 +270,7 @@ runtime contracts belong in [`docs/architecture/`](docs/architecture/).
 | [`docs/architecture/tool-runtime.md`](docs/architecture/tool-runtime.md) | Tools and policy |
 | [`docs/guides/web-research-providers.md`](docs/guides/web-research-providers.md) | Web search/fetch backends, pricing, VPN/proxy |
 | [`docs/guides/deep-research-landscape.md`](docs/guides/deep-research-landscape.md) | Deep research cross-project comparison and design |
+| [`docs/guides/deepseek-thinking-troubleshooting.md`](docs/guides/deepseek-thinking-troubleshooting.md) | DeepSeek thinking 400 / `reasoning_content` replay |
 | [`docs/architecture/data-model.md`](docs/architecture/data-model.md) | Messages, traces, sessions |
 | [`docs/architecture/compaction.md`](docs/architecture/compaction.md) | Auto/manual compaction |
 | [`docs/architecture/web-api.md`](docs/architecture/web-api.md) | HTTP + SSE API |

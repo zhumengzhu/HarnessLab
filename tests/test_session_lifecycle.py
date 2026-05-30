@@ -191,6 +191,22 @@ def test_sqlite_store_round_trips_new_session_fields(tmp_path: Path) -> None:
     assert loaded.status == "waiting_user"
 
 
+def test_sqlite_store_round_trips_session_model_fields(tmp_path: Path) -> None:
+    store = SqliteSessionStore(tmp_path / "s.sqlite")
+    s = Session(
+        id="ses_model",
+        goal="model override",
+        model_backend="deepseek",
+        model_id="deepseek-v4-pro",
+        model_effort="max",
+    )
+    store.create(s)
+    loaded = store.get("ses_model")
+    assert loaded.model_backend == "deepseek"
+    assert loaded.model_id == "deepseek-v4-pro"
+    assert loaded.model_effort == "max"
+
+
 def test_sqlite_store_save_updates_lifecycle_fields(tmp_path: Path) -> None:
     store = SqliteSessionStore(tmp_path / "s.sqlite")
     s = Session(id="ses_x", goal="g")
@@ -254,8 +270,8 @@ def test_v1_database_migrates_to_v2_in_place(tmp_path: Path) -> None:
 
     conn = connect(db_path)
     new_version = apply_migrations(conn)
-    assert new_version == 8
-    assert current_version(conn) == 8
+    assert new_version == 9
+    assert current_version(conn) == 9
     conn.close()
 
     store = SqliteSessionStore(db_path)
@@ -265,7 +281,68 @@ def test_v1_database_migrates_to_v2_in_place(tmp_path: Path) -> None:
     assert loaded.last_step_at is None
     assert loaded.parent_session_id is None
     assert loaded.title is None
+    assert loaded.model_backend is None
+    assert loaded.model_id is None
+    assert loaded.model_effort is None
     assert loaded.budget_usage.tokens_total == 0
+
+
+def test_session_list_orders_by_last_step_at(tmp_path: Path) -> None:
+    """Active sessions stay visible in capped list results."""
+    db_path = tmp_path / "sessions.db"
+    conn = connect(db_path)
+    apply_migrations(conn)
+    conn.close()
+
+    store = SqliteSessionStore(db_path)
+    older = Session(
+        id="ses_old",
+        goal="older",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        last_step_at=datetime(2026, 5, 25, 12, 0, tzinfo=UTC),
+    )
+    newer = Session(
+        id="ses_new",
+        goal="newer",
+        created_at=datetime(2026, 5, 24, tzinfo=UTC),
+        last_step_at=datetime(2026, 5, 24, tzinfo=UTC),
+    )
+    store.create(older)
+    store.create(newer)
+
+    listed = store.list(limit=10)
+    assert [s.id for s in listed] == ["ses_old", "ses_new"]
+
+
+def test_sqlite_message_counts_without_loading_messages(tmp_path: Path) -> None:
+    db_path = tmp_path / "sessions.db"
+    store = SqliteSessionStore(db_path)
+    session = Session(
+        id="ses_count",
+        goal="count me",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        messages=[
+            Message(
+                id="msg_u",
+                role="user",
+                content="hi",
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
+                session_id="ses_count",
+            ),
+            Message(
+                id="msg_a",
+                role="assistant",
+                content="hello",
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
+                session_id="ses_count",
+            ),
+        ],
+    )
+    store.create(session)
+
+    listed = store.list(limit=5)
+    assert listed[0].messages == []
+    assert store.message_counts(["ses_count"]) == {"ses_count": 2}
 
 
 def test_apply_migrations_is_idempotent(tmp_path: Path) -> None:
@@ -273,10 +350,10 @@ def test_apply_migrations_is_idempotent(tmp_path: Path) -> None:
     conn = connect(db_path)
     apply_migrations(conn)
     second = apply_migrations(conn)
-    assert second == 8
+    assert second == 9
     # No duplicate insert into schema_version.
     rows = conn.execute("SELECT version FROM schema_version ORDER BY version").fetchall()
-    assert [r["version"] for r in rows] == [1, 2, 3, 4, 5, 6, 7, 8]
+    assert [r["version"] for r in rows] == [1, 2, 3, 4, 5, 6, 7, 8, 9]
 
 
 # ---------- ReplayModel + new Decision kind compatibility ----------

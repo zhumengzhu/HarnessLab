@@ -76,4 +76,30 @@ describe("turnEnrichments", () => {
     expect(map.a1?.thoughts[0].text).toBe("think first");
     expect(map.a1?.tools[0].tool).toBe("grep");
   });
+
+  it("ignores duplicate reasoning on decision_made after model_call", () => {
+    const messages = [
+      msg({ id: "u1", role: "user", content: "run" }),
+      msg({ id: "a1", role: "assistant", content: "final answer" }),
+    ];
+    const reasoning = "Let me search for MIMO pricing context.";
+    const events = [
+      trace("user_input_received", { turn_index: 0, user_input: "run" }, "2026-05-25T00:00:00.000Z"),
+      trace("model_call_started", { step_index: 0 }),
+      trace("model_call", {
+        step_index: 0,
+        latency_ms: 3500,
+        reasoning_text: reasoning,
+      }),
+      trace("decision_made", {
+        step_index: 0,
+        kind: "tool",
+        reasoning_text: reasoning,
+      }),
+    ];
+    const map = buildTurnEnrichmentsFromTrace(messages, events);
+    expect(map.a1?.thoughts).toHaveLength(1);
+    expect(map.a1?.thoughts[0].durationMs).toBe(3500);
+    expect(map.a1?.thoughts[0].text).toBe(reasoning);
+  });
 });

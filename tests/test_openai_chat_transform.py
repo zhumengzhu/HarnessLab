@@ -180,6 +180,136 @@ def test_serialize_replays_reasoning_on_new_user_turn_after_tool_history() -> No
     assert replay_policy(session, _entry()).include_reasoning_in_tool_loop is True
 
 
+def test_serialize_replays_reasoning_on_non_tool_assistant() -> None:
+    """Mid-loop assistant/plan rows with thinking must replay reasoning_content."""
+    session = _session(
+        Message(
+            id="msg_u",
+            role="user",
+            content="research",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+        ),
+        Message(
+            id="msg_a1",
+            role="assistant",
+            content="Planning next step…",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+            reasoning_text="plan before tool",
+        ),
+        Message(
+            id="msg_a2",
+            role="assistant",
+            content="",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+            tool_calls=[
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "web_search", "arguments": "{}"},
+                }
+            ],
+            reasoning_text="tool step thought",
+        ),
+        Message(
+            id="msg_t1",
+            role="tool",
+            content="results",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+            tool_call_id="call_1",
+        ),
+    )
+    composed = PromptComposer().build(session)
+    wire = serialize_messages(composed, session, _entry())
+    assistants = [m for m in wire if m.get("role") == "assistant"]
+    assert assistants[0]["reasoning_content"] == "plan before tool"
+    assert assistants[1]["reasoning_content"] == "tool step thought"
+
+
+def test_serialize_replays_empty_reasoning_for_tool_assistant_without_thinking() -> None:
+    """Tool rows in thinking mode must send reasoning_content even when empty."""
+    session = _session(
+        Message(
+            id="msg_u",
+            role="user",
+            content="research",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+        ),
+        Message(
+            id="msg_a1",
+            role="assistant",
+            content="",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+            tool_calls=[
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "web_search", "arguments": "{}"},
+                }
+            ],
+            reasoning_text="",
+        ),
+        Message(
+            id="msg_t1",
+            role="tool",
+            content="results",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+            tool_call_id="call_1",
+        ),
+    )
+    composed = PromptComposer().build(session)
+    wire = serialize_messages(composed, session, _entry())
+    tool_assistants = [m for m in wire if m.get("role") == "assistant" and m.get("tool_calls")]
+    assert len(tool_assistants) == 1
+    assert tool_assistants[0]["reasoning_content"] == ""
+
+
+def test_serialize_replays_empty_reasoning_when_tool_assistant_reasoning_null() -> None:
+    """Legacy rows with NULL reasoning still replay an empty field on the wire."""
+    session = _session(
+        Message(
+            id="msg_u",
+            role="user",
+            content="research",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+        ),
+        Message(
+            id="msg_a1",
+            role="assistant",
+            content="",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+            tool_calls=[
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "fetch_url", "arguments": "{}"},
+                }
+            ],
+            reasoning_text=None,
+        ),
+        Message(
+            id="msg_t1",
+            role="tool",
+            content="results",
+            created_at=datetime(2026, 1, 1, tzinfo=UTC),
+            session_id="ses_x",
+            tool_call_id="call_1",
+        ),
+    )
+    composed = PromptComposer().build(session)
+    wire = serialize_messages(composed, session, _entry())
+    tool_assistants = [m for m in wire if m.get("role") == "assistant" and m.get("tool_calls")]
+    assert tool_assistants[0]["reasoning_content"] == ""
+
+
 def test_parse_response_final_with_reasoning() -> None:
     turn = parse_response(
         {

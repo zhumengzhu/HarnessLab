@@ -102,6 +102,12 @@ Fields:
   otherwise)
 - `title`: short human label derived from the goal at `start()`
   time and used by `harnesslab session ls`
+- `model_backend` (optional): per-session provider backend override;
+  when `null`, the operator default from `~/.config/harnesslab/config.json`
+  applies (Web UI session model picker)
+- `model_id` (optional): catalog model id pinned for this session
+- `model_effort` (optional): reasoning/thinking level for the session
+  override (provider-specific semantics; see Web API)
 - `budget_usage`: cumulative budget counters persisted with the
   session:
   - `llm_calls_total`
@@ -192,8 +198,9 @@ shapes are what `harnesslab metrics` aggregates.
 | --- | --- |
 | `session_started` | `goal: str` |
 | `user_input_received` | `turn_index: int`, `user_input: str` |
+| `user_steer_received` | `turn_index: int`, `step_index: int`, `user_input: str`, `steer_index: int` |
+| `sub_agent_spawned` | `child_session_id: str`, `parent_session_id: str`, `goal: str`, `max_steps: int` |
 | `step_started` | `step_index: int`, `reason: "initial" \| "after_<prev_outcome>"` |
-| `user_input_received` | `turn_index`, `user_input` |
 | `model_call_started` | `step_index`, optional `thinking_likely: bool` |
 | `model_call` | `decision_kind`, `latency_ms`, `context: ContextSnapshot`, optional: `model_name`, `provider`, `request_tokens`, `response_tokens`, `total_tokens`, `reasoning_text`, `prompt_blocks[]`, `api_messages[]` |
 | `decision_made` | `kind: "assistant" \| "plan" \| "tool" \| "final" \| "ask_user"`, `tool_name: str \| null`, `tool_args: dict`, `assistant_message: str \| null`, optional `reasoning_text` |
@@ -306,6 +313,10 @@ ALTER TABLE sessions ADD COLUMN last_step_at TEXT;
 ALTER TABLE sessions ADD COLUMN parent_session_id TEXT
     REFERENCES sessions(id) ON DELETE SET NULL;
 ALTER TABLE sessions ADD COLUMN title TEXT;
+-- v9 (Web UI — per-session model override)
+ALTER TABLE sessions ADD COLUMN model_backend TEXT;
+ALTER TABLE sessions ADD COLUMN model_id TEXT;
+ALTER TABLE sessions ADD COLUMN model_effort TEXT;
 CREATE INDEX idx_sessions_status_created ON sessions(status, created_at DESC);
 CREATE INDEX idx_sessions_parent ON sessions(parent_session_id);
 

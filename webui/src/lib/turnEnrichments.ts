@@ -2,7 +2,6 @@ import type { MessageItem, ToolCard, TraceEventItem } from "./schemas";
 import { toolCardFromTraceEvent } from "./toolCardFromTrace";
 import type { ThoughtEntry } from "../features/live-turn/liveTurnReducer";
 import {
-  applyReasoningText,
   mergeMessageReasoningIntoThoughts,
   thoughtsWithText,
 } from "./thoughtUtils";
@@ -97,6 +96,8 @@ function traceEventsForTurn(
 }
 
 function thoughtsFromTraceEvents(events: TraceEventItem[]): ThoughtEntry[] {
+  // Reasoning is owned by model_call (+ SSE reasoning_delta during live turns).
+  // decision_made repeats the same reasoning_text and must not be merged here.
   let thoughts: ThoughtEntry[] = [];
   let stepIndex = 0;
   for (const evt of events) {
@@ -135,13 +136,6 @@ function thoughtsFromTraceEvents(events: TraceEventItem[]): ThoughtEntry[] {
         });
       }
       continue;
-    }
-    if (evt.event_type === "decision_made") {
-      const reasoning =
-        typeof evt.payload.reasoning_text === "string" ? evt.payload.reasoning_text : undefined;
-      if (reasoning?.trim()) {
-        thoughts = applyReasoningText(thoughts, reasoning, stepIndex);
-      }
     }
   }
   return thoughtsWithText(

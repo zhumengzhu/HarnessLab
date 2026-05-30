@@ -20,7 +20,7 @@ def replay_policy(session: Session, entry: CatalogEntry) -> ReplayPolicy:
             drop_reasoning_on_new_user_turn=True,
         )
     in_tool_loop = bool(session.messages and session.messages[-1].role == "tool")
-    has_persisted = _session_has_tool_call_reasoning(session)
+    has_persisted = _session_has_assistant_reasoning(session)
     return ReplayPolicy(
         include_reasoning_in_tool_loop=in_tool_loop or has_persisted,
         drop_reasoning_on_new_user_turn=not has_persisted,
@@ -34,10 +34,11 @@ def serialize_messages(
 ) -> list[dict[str, Any]]:
     """Build OpenAI-style messages, applying replay policy for reasoning."""
 
-    wire = composed.as_openai_messages()
     if entry.reasoning_support == "none":
-        return wire
-    return _inject_reasoning_for_tool_assistants(wire, session)
+        return composed.as_openai_messages()
+    return composed.as_openai_messages(
+        reasoning_by_message_id=_reasoning_by_message_id(session, entry),
+    )
 
 
 def parse_response(
@@ -139,37 +140,29 @@ def parse_response(
     )
 
 
-def _session_has_tool_call_reasoning(session: Session) -> bool:
+def _session_has_assistant_reasoning(session: Session) -> bool:
     return any(
-        m.role == "assistant" and m.tool_calls and m.reasoning_text for m in session.messages
+        m.role == "assistant" and m.reasoning_text and m.reasoning_text.strip()
+        for m in session.messages
     )
 
 
-def _ordered_tool_assistant_reasonings(session: Session) -> list[str]:
-    return [
-        m.reasoning_text  # type: ignore[misc]
-        for m in session.messages
-        if m.role == "assistant" and m.tool_calls and m.reasoning_text
-    ]
+def _reasoning_by_message_id(session: Session, entry: CatalogEntry) -> dict[str, str]:
+    """Map assistant message ids to wire ``reasoning_content``.
 
+    In thinking mode, tool assistants without captured reasoning still get an
+    empty string so DeepSeek receives the required field on replay.
+    """
 
-def _inject_reasoning_for_tool_assistants(
-    wire: list[dict[str, Any]],
-    session: Session,
-) -> list[dict[str, Any]]:
-    """Attach ``reasoning_content`` to every assistant message with tool_calls."""
-
-    reasonings = _ordered_tool_assistant_reasonings(session)
-    if not reasonings:
-        return wire
-    idx = 0
-    out: list[dict[str, Any]] = []
-    for msg in wire:
-        if msg.get("role") == "assistant" and msg.get("tool_calls") and idx < len(reasonings):
-            updated = dict(msg)
-            updated["reasoning_content"] = reasonings[idx]
-            idx += 1
-            out.append(updated)
+    out: dict[str, str] = {}
+    thinking_replay = entry.reasoning_support != "none"
+    for message in session.messages:
+        if message.role != "assistant":
             continue
-        out.append(msg)
+        text = message.reasoning_text
+        if isinstance(text, str) and text.strip():
+            out[message.id] = text.strip()
+            continue
+        if thinking_replay and message.tool_calls:
+            out[message.id] = ""
     return out

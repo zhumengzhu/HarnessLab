@@ -1,25 +1,44 @@
 import { useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { apiGet, apiPost } from "./lib/api-client";
-import { ChatTopBar } from "./features/chat/ChatTopBar";
+import { apiGet, apiPatch, apiPost } from "./lib/api-client";
+import { ActivityPanel } from "./features/activity/ActivityPanel";
+import { ChildSessionsPanel } from "./features/sessions/ChildSessionsPanel";
+import { buildActivityFeed } from "./features/activity/activityFeed";
 import { ComposerPanel } from "./features/composer/ComposerPanel";
 import { useComposerController } from "./features/composer/useComposerController";
 import type { LiveTurnState } from "./features/live-turn/liveTurnReducer";
 import { ProposalPanel } from "./features/proposals/ProposalPanel";
 import { SessionWorkspace } from "./features/sessions/SessionWorkspace";
+import { AppSidebar } from "./features/shell/AppSidebar";
 import { SettingsPanel } from "./features/settings/SettingsPanel";
 import { SkillBrowserPanel } from "./features/settings/SkillBrowserPanel";
+import { TracePanel } from "./features/trace/TracePanel";
+import { CheckpointPanel } from "./features/sessions/CheckpointPanel";
+import {
+  modelsForSessionPicker,
+  resolveEffectiveModel,
+} from "./lib/sessionModel";
 import type { TurnEnrichment } from "./lib/turnEnrichments";
 import {
   buildTurnEnrichmentsFromTrace,
   mergeTurnEnrichments,
 } from "./lib/turnEnrichments";
 import {
+  loadStoredActivityDisplay,
+  loadStoredChatTextSize,
   loadStoredSessionId,
   loadStoredUiMode,
+  loadStoredUiTheme,
+  saveStoredActivityDisplay,
+  saveStoredChatTextSize,
   saveStoredSessionId,
   saveStoredUiMode,
+  saveStoredUiTheme,
 } from "./lib/uiPreferences";
+import { applyUiTheme } from "./features/shell/theme";
+import type { UiTheme } from "./features/shell/theme";
+import { ChatDisplayProvider } from "./features/chat/chatDisplayPreferences";
+import type { ActivityDisplayMode, ChatTextSize } from "./features/chat/chatDisplay";
 import type { AgentMode } from "./features/chat/AgentModeSelector";
 import type {
   ContextResponse,
@@ -30,6 +49,7 @@ import type {
   ModelInfo,
   ModelSwitchRequest,
   ModelsResponse,
+  PatchSessionResponse,
   SessionDetailResponse,
   SessionsResponse,
   SettingsResponse,
@@ -38,10 +58,21 @@ import type {
 
 type MainView = "chat" | "proposals" | "settings" | "skills";
 
+function isSessionNotFoundError(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return message.includes("404") || /not found/i.test(message);
+}
+
 export function App() {
   const queryClient = useQueryClient();
   const [uiMode, setUiMode] = useState<"simple" | "advanced">(
     () => loadStoredUiMode() ?? "simple"
+  );
+  const [activityDisplay, setActivityDisplay] = useState<ActivityDisplayMode>(
+    () => loadStoredActivityDisplay() ?? "detailed"
+  );
+  const [chatTextSize, setChatTextSize] = useState<ChatTextSize>(
+    () => loadStoredChatTextSize() ?? "md"
   );
   const [mainView, setMainView] = useState<MainView>("chat");
   const [selectedSessionId, setSelectedSessionId] = useState<string | null>(
@@ -59,16 +90,38 @@ export function App() {
   const [agentMode, setAgentMode] = useState<AgentMode>("agent");
   const [modelSwitching, setModelSwitching] = useState(false);
   const [modelSwitchError, setModelSwitchError] = useState<string | null>(null);
+  const [composerChromeCollapsed, setComposerChromeCollapsed] = useState(false);
+  const [activityCleared, setActivityCleared] = useState(false);
+  const [uiTheme, setUiTheme] = useState<UiTheme>(() => loadStoredUiTheme() ?? "dark");
+
+  useEffect(() => {
+    applyUiTheme(uiTheme);
+    saveStoredUiTheme(uiTheme);
+  }, [uiTheme]);
 
   function selectSession(id: string | null) {
+    const switchingSession = id !== selectedSessionId;
     setSelectedSessionId(id);
     saveStoredSessionId(id);
     setSessionActionError(null);
-    setStreamTrace([]);
-    setStreamMessages(null);
-    setLiveContextSnapshot(null);
-    setLiveTurn(null);
-    setClientTurnEnrichments({});
+    if (switchingSession) {
+      setStreamTrace([]);
+      setStreamMessages(null);
+      setLiveContextSnapshot(null);
+      setLiveTurn(null);
+      setClientTurnEnrichments({});
+      setComposerChromeCollapsed(false);
+      setActivityCleared(false);
+    }
+    setMainView("chat");
+  }
+
+  /** Bind UI to a session created mid-turn without wiping streamed messages. */
+  function adoptSessionId(id: string) {
+    if (id === selectedSessionId) return;
+    setSelectedSessionId(id);
+    saveStoredSessionId(id);
+    setSessionActionError(null);
     setMainView("chat");
   }
 
@@ -94,7 +147,7 @@ export function App() {
       setSessionActionError(null);
       setStreamTrace([]);
     },
-    onSelectSession: (id) => selectSession(id),
+    onAdoptSession: (id) => adoptSessionId(id),
     onAppendTraceEvent: (evt) => {
       setStreamTrace((prev) => [...prev, evt]);
       if (evt.event_type === "model_call") {
@@ -102,6 +155,9 @@ export function App() {
         if (ctx && typeof ctx === "object") {
           setLiveContextSnapshot(ctx as ContextSnapshot);
         }
+      }
+      if (evt.event_type === "sub_agent_spawned") {
+        void queryClient.invalidateQueries({ queryKey: ["sessions"] });
       }
     },
     onSetStreamMessages: setStreamMessages,
@@ -137,18 +193,15 @@ export function App() {
     enabled: uiMode === "advanced" && mainView === "settings",
   });
   const sessions = useQuery({
-    queryKey: ["sessions"],
-    queryFn: () => apiGet<SessionsResponse>("/api/sessions?limit=50"),
+    queryKey: ["sessions", selectedSessionId],
+    queryFn: () => {
+      const params = new URLSearchParams({ limit: "50" });
+      if (selectedSessionId) {
+        params.set("include_id", selectedSessionId);
+      }
+      return apiGet<SessionsResponse>(`/api/sessions?${params.toString()}`);
+    },
   });
-
-  useEffect(() => {
-    if (!sessions.data || selectedSessionId === null) return;
-    const exists = sessions.data.sessions.some((s) => s.id === selectedSessionId);
-    if (!exists) {
-      setSelectedSessionId(null);
-      saveStoredSessionId(null);
-    }
-  }, [sessions.data, selectedSessionId]);
 
   const modelsQuery = useQuery({
     queryKey: ["models"],
@@ -158,7 +211,8 @@ export function App() {
     queryKey: ["session", selectedSessionId],
     queryFn: () =>
       apiGet<SessionDetailResponse>(`/api/sessions/${encodeURIComponent(selectedSessionId || "")}`),
-    enabled: Boolean(selectedSessionId) && mainView === "chat",
+    enabled: Boolean(selectedSessionId),
+    retry: (failureCount, error) => !isSessionNotFoundError(error) && failureCount < 2,
   });
   const sessionTrace = useQuery({
     queryKey: ["trace", selectedSessionId],
@@ -167,10 +221,28 @@ export function App() {
     enabled: Boolean(selectedSessionId) && mainView === "chat",
   });
 
+  useEffect(() => {
+    if (!selectedSessionId || sessionDetail.isLoading || !sessionDetail.isError) return;
+    if (isSessionNotFoundError(sessionDetail.error)) {
+      setSelectedSessionId(null);
+      saveStoredSessionId(null);
+    }
+  }, [
+    selectedSessionId,
+    sessionDetail.isLoading,
+    sessionDetail.isError,
+    sessionDetail.error,
+  ]);
+
   const traceRows = useMemo(() => {
     const base = sessionTrace.data?.events || [];
     return [...base, ...streamTrace];
   }, [sessionTrace.data?.events, streamTrace]);
+
+  const activityEntries = useMemo(() => {
+    const source = activityCleared ? streamTrace : traceRows;
+    return buildActivityFeed(source);
+  }, [activityCleared, streamTrace, traceRows]);
 
   const allMessages = streamMessages ?? sessionDetail.data?.messages ?? [];
   const traceDerivedEnrichments = useMemo(
@@ -219,17 +291,54 @@ export function App() {
     );
   }, [selectedSessionId, sessions.data?.sessions]);
 
-  const currentModelId = health.data?.model_id ?? null;
-  const currentLabel = health.data?.model_label ?? health.data?.model ?? "–";
-  const models: ModelInfo[] = modelsQuery.data?.models ?? [];
+  const parentSession = useMemo(() => {
+    const parentId = sessionDetail.data?.session.parent_session_id;
+    if (!parentId) return null;
+    return (sessions.data?.sessions ?? []).find((s) => s.id === parentId) ?? null;
+  }, [sessionDetail.data?.session.parent_session_id, sessions.data?.sessions]);
+
+  const effectiveModel = useMemo(
+    () =>
+      resolveEffectiveModel(
+        sessionDetail.data?.session,
+        health.data,
+        modelsQuery.data?.models ?? []
+      ),
+    [sessionDetail.data?.session, health.data, modelsQuery.data?.models]
+  );
+  const models: ModelInfo[] = useMemo(
+    () =>
+      modelsForSessionPicker(
+        modelsQuery.data?.models ?? [],
+        effectiveModel.modelId,
+        effectiveModel.effort,
+        effectiveModel.backend
+      ),
+    [modelsQuery.data?.models, effectiveModel]
+  );
+  const currentModelId = effectiveModel.modelId;
+  const currentLabel = effectiveModel.label;
 
   async function handleModelSwitch(req: ModelSwitchRequest) {
     setModelSwitching(true);
     setModelSwitchError(null);
     try {
-      await apiPost("/api/model", req as unknown as Record<string, unknown>);
-      await queryClient.invalidateQueries({ queryKey: ["health"] });
-      await queryClient.invalidateQueries({ queryKey: ["models"] });
+      if (selectedSessionId) {
+        await apiPatch<PatchSessionResponse>(
+          `/api/sessions/${encodeURIComponent(selectedSessionId)}`,
+          {
+            model_backend: req.backend ?? null,
+            model_id: req.model_id ?? null,
+            effort: req.effort ?? null,
+          }
+        );
+        await queryClient.invalidateQueries({ queryKey: ["session", selectedSessionId] });
+        await queryClient.invalidateQueries({ queryKey: ["sessions"] });
+      } else {
+        await apiPost("/api/model", req as unknown as Record<string, unknown>);
+        await queryClient.invalidateQueries({ queryKey: ["health"] });
+        await queryClient.invalidateQueries({ queryKey: ["models"] });
+      }
     } catch (err) {
       setModelSwitchError((err as Error).message);
     } finally {
@@ -245,144 +354,163 @@ export function App() {
     }
   }
 
+  function switchActivityDisplay(mode: ActivityDisplayMode) {
+    setActivityDisplay(mode);
+    saveStoredActivityDisplay(mode);
+  }
+
+  function switchChatTextSize(size: ChatTextSize) {
+    setChatTextSize(size);
+    saveStoredChatTextSize(size);
+  }
+
+  const chatDisplayValue = useMemo(
+    () => ({
+      activityDisplay,
+      setActivityDisplay: switchActivityDisplay,
+      chatTextSize,
+      setChatTextSize: switchChatTextSize,
+    }),
+    [activityDisplay, chatTextSize]
+  );
+
   return (
-    <main className="page">
-      <header className="header">
-        <div>
-          <h1>HarnessLab</h1>
-          <p>
-            {uiMode === "simple"
-              ? "Simple Chat — 聚焦对话。"
-              : "Advanced — 诊断、Proposals 与 Settings 独立页面。"}
-          </p>
-        </div>
-        <div className="header-meta">
-          {uiMode === "advanced" ? (
-            <nav className="main-nav" aria-label="Main">
-              <button
-                type="button"
-                className={mainView === "chat" ? "active" : ""}
-                onClick={() => setMainView("chat")}
-              >
-                Chat
-              </button>
-              <button
-                type="button"
-                className={mainView === "proposals" ? "active" : ""}
-                onClick={() => setMainView("proposals")}
-              >
-                Proposals
-              </button>
-              <button
-                type="button"
-                className={mainView === "skills" ? "active" : ""}
-                onClick={() => setMainView("skills")}
-              >
-                Skills
-              </button>
-              <button
-                type="button"
-                className={mainView === "settings" ? "active" : ""}
-                onClick={() => setMainView("settings")}
-              >
-                Settings
-              </button>
-            </nav>
-          ) : null}
-          <div className="mode-switch">
-            <button
-              type="button"
-              className={uiMode === "simple" ? "active" : ""}
-              onClick={() => switchUiMode("simple")}
-            >
-              Simple
-            </button>
-            <button
-              type="button"
-              className={uiMode === "advanced" ? "active" : ""}
-              onClick={() => switchUiMode("advanced")}
-            >
-              Advanced
-            </button>
+    <ChatDisplayProvider value={chatDisplayValue}>
+    <div
+      className={`app-shell${uiMode === "advanced" && mainView === "chat" ? " app-shell-with-trace" : ""}`}
+    >
+      <AppSidebar
+        sessions={sessions.data?.sessions ?? []}
+        selectedSessionId={selectedSessionId}
+        sending={composerCtrl.sending}
+        sessionsLoading={sessions.isLoading}
+        sessionsError={sessions.isError ? (sessions.error as Error).message : null}
+        sessionActionError={sessionActionError}
+        uiMode={uiMode}
+        mainView={mainView}
+        healthOk={Boolean(health.data?.ok)}
+        onSelectSession={selectSession}
+        onForkCurrentSession={() => forkCurrentSession(composerCtrl.sending)}
+        onUiModeChange={switchUiMode}
+        onMainViewChange={setMainView}
+        uiTheme={uiTheme}
+        onUiThemeChange={setUiTheme}
+      />
+
+      <div className={`app-main chat-text-${chatTextSize}`}>
+        {mainView === "chat" ? (
+          <div className="app-chat-stack">
+            <SessionWorkspace
+              uiMode={uiMode}
+              selectedSessionId={selectedSessionId}
+              sending={composerCtrl.sending}
+              sessionDetailLoading={sessionDetail.isLoading}
+              sessionDetailError={
+                sessionDetail.isError ? (sessionDetail.error as Error).message : null
+              }
+              sessionDetailData={sessionDetail.data}
+              visibleMessages={chatRows}
+              toolMessages={toolMessages}
+              turnEnrichments={turnEnrichments}
+              liveTurn={liveTurn}
+              budgetEvents={budgetEvents}
+              hasStreamMessages={(streamMessages?.length ?? 0) > 0}
+              onComposerChromeChange={setComposerChromeCollapsed}
+            />
+
+            <ChildSessionsPanel
+              parentSession={parentSession}
+              childSessions={childSessions}
+              selectedSessionId={selectedSessionId}
+              onSelectSession={(id) => selectSession(id)}
+            />
+
+            <ActivityPanel
+              entries={activityEntries}
+              live={composerCtrl.sending}
+              onClear={() => setActivityCleared(true)}
+            />
+
+            <div className="app-composer-dock">
+              <ComposerPanel
+                composer={composerCtrl.composer}
+                sending={composerCtrl.sending}
+                sendError={composerCtrl.sendError}
+                queuedMessages={composerCtrl.queuedMessages}
+                steeredMessages={composerCtrl.steeredMessages}
+                rememberMode={composerCtrl.rememberMode}
+                slashMenu={composerCtrl.slashMenu}
+                agentMode={agentMode}
+                onAgentModeChange={setAgentMode}
+                currentModelId={currentModelId}
+                currentLabel={currentLabel}
+                models={models}
+                modelSwitching={modelSwitching}
+                modelSwitchError={modelSwitchError}
+                contextSnapshot={displayedContext}
+                onModelSwitch={handleModelSwitch}
+                onDismissModelError={() => setModelSwitchError(null)}
+                onSubmit={composerCtrl.onSubmit}
+                onSend={composerCtrl.onSend}
+                onStop={composerCtrl.onStop}
+                onComposerChange={composerCtrl.setComposer}
+                onToggleRememberMode={composerCtrl.toggleRememberMode}
+                onPickSlashItem={composerCtrl.pickSlashItem}
+                onComposerKeyDown={composerCtrl.onComposerKeyDown}
+                onCompositionStart={composerCtrl.onCompositionStart}
+                onCompositionEnd={composerCtrl.onCompositionEnd}
+                selectedSessionId={selectedSessionId}
+                onCompact={() => composerCtrl.sendCommand("/compact")}
+                chromeCollapsed={composerChromeCollapsed}
+              />
+            </div>
           </div>
-          <span>{health.data?.ok ? "health: ok" : "health: –"}</span>
-        </div>
-      </header>
+        ) : null}
 
-      {mainView === "chat" ? (
-        <>
-          <ChatTopBar
-            sessions={sessions.data?.sessions ?? []}
-            selectedSessionId={selectedSessionId}
-            sending={composerCtrl.sending}
-            sessionsLoading={sessions.isLoading}
-            sessionsError={sessions.isError ? (sessions.error as Error).message : null}
-            sessionActionError={sessionActionError}
-            onSelectSession={selectSession}
-            onForkCurrentSession={() => forkCurrentSession(composerCtrl.sending)}
+        {mainView === "proposals" && uiMode === "advanced" ? (
+          <div className="app-page-content">
+            <ProposalPanel />
+          </div>
+        ) : null}
+
+        {mainView === "settings" && uiMode === "advanced" ? (
+          <div className="app-page-content">
+            <SettingsPanel
+              loading={settings.isLoading}
+              error={settings.isError ? (settings.error as Error).message : null}
+              data={settings.data}
+            />
+          </div>
+        ) : null}
+
+        {mainView === "skills" && uiMode === "advanced" ? (
+          <div className="app-page-content">
+            <SkillBrowserPanel />
+          </div>
+        ) : null}
+      </div>
+
+      {uiMode === "advanced" && mainView === "chat" ? (
+        <aside className="app-trace-column">
+          <CheckpointPanel
+            sessionId={selectedSessionId}
+            onRewindSuccess={() => {
+              if (!selectedSessionId) return;
+              void queryClient.invalidateQueries({ queryKey: ["session", selectedSessionId] });
+              void queryClient.invalidateQueries({ queryKey: ["trace", selectedSessionId] });
+            }}
           />
-
-          <SessionWorkspace
-            uiMode={uiMode}
+          <TracePanel
             selectedSessionId={selectedSessionId}
-            sending={composerCtrl.sending}
-            sessionDetailLoading={sessionDetail.isLoading}
-            sessionDetailError={sessionDetail.isError ? (sessionDetail.error as Error).message : null}
-            sessionDetailData={sessionDetail.data}
-            sessionTraceLoading={sessionTrace.isLoading}
-            sessionTraceError={sessionTrace.isError ? (sessionTrace.error as Error).message : null}
-            traceRows={traceRows}
-            visibleMessages={chatRows}
-            toolMessages={toolMessages}
-            turnEnrichments={turnEnrichments}
-            liveTurn={liveTurn}
-            budgetEvents={budgetEvents}
-            childSessions={childSessions}
+            loading={sessionTrace.isLoading}
+            error={sessionTrace.isError ? (sessionTrace.error as Error).message : null}
+            rows={traceRows}
             hasStreamTrace={streamTrace.length > 0}
             onClearStreamTrace={() => setStreamTrace([])}
           />
-
-          <ComposerPanel
-            composer={composerCtrl.composer}
-            sending={composerCtrl.sending}
-            sendError={composerCtrl.sendError}
-            queuedMessages={composerCtrl.queuedMessages}
-            rememberMode={composerCtrl.rememberMode}
-            slashMenu={composerCtrl.slashMenu}
-            agentMode={agentMode}
-            onAgentModeChange={setAgentMode}
-            currentModelId={currentModelId}
-            currentLabel={currentLabel}
-            models={models}
-            modelSwitching={modelSwitching}
-            modelSwitchError={modelSwitchError}
-            contextSnapshot={displayedContext}
-            onModelSwitch={handleModelSwitch}
-            onDismissModelError={() => setModelSwitchError(null)}
-            onSubmit={composerCtrl.onSubmit}
-            onSend={composerCtrl.onSend}
-            onStop={composerCtrl.onStop}
-            onComposerChange={composerCtrl.setComposer}
-            onToggleRememberMode={composerCtrl.toggleRememberMode}
-            onPickSlashItem={composerCtrl.pickSlashItem}
-            onComposerKeyDown={composerCtrl.onComposerKeyDown}
-            onCompositionStart={composerCtrl.onCompositionStart}
-            onCompositionEnd={composerCtrl.onCompositionEnd}
-          />
-        </>
+        </aside>
       ) : null}
-
-      {mainView === "proposals" && uiMode === "advanced" ? <ProposalPanel /> : null}
-
-      {mainView === "settings" && uiMode === "advanced" ? (
-        <SettingsPanel
-          loading={settings.isLoading}
-          error={settings.isError ? (settings.error as Error).message : null}
-          data={settings.data}
-        />
-      ) : null}
-
-      {mainView === "skills" && uiMode === "advanced" ? <SkillBrowserPanel /> : null}
-    </main>
+    </div>
+    </ChatDisplayProvider>
   );
 }

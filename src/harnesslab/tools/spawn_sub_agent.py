@@ -92,6 +92,16 @@ class SpawnSubAgentTool:
         self._spawn_counts[parent_id] = count + 1
 
         child = loop.start_child(goal=goal, parent_session_id=parent_id)
+        loop._record(  # noqa: SLF001 — parent-session lineage for trace fan-in
+            session=loop._sessions.get(parent_id),
+            event_type="sub_agent_spawned",
+            payload={
+                "child_session_id": child.id,
+                "parent_session_id": parent_id,
+                "goal": goal,
+                "max_steps": max_steps,
+            },
+        )
         final = loop.run_session(child.id, goal, max_steps=max_steps)
         payload = {
             "child_session_id": child.id,

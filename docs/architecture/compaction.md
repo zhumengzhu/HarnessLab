@@ -87,9 +87,11 @@ thinking context is not silently dropped from the summary input.
 | **Compacted prefix** | Removed from timeline | Summary may mention clipped thinking via summarizer input only |
 
 DeepSeek and similar APIs require `reasoning_content` on **every**
-historical assistant message that issued `tool_calls`, even across user
-turns — the OpenAI-chat transform replays all stored `reasoning_text`
-values in order.
+historical assistant message that still has persisted thinking in the kept
+tail, including tool-loop assistants across later user turns — the
+OpenAI-chat transform replays `Message.reasoning_text` by message id.
+See [`provider-expansion.md`](provider-expansion.md) §6.6.1 and
+[`guides/deepseek-thinking-troubleshooting.md`](../guides/deepseek-thinking-troubleshooting.md).
 
 **Operator rule:** durable decisions belong in `/remember`, not in thinking
 blocks that compaction may summarize away.

@@ -119,6 +119,7 @@ class HarnessLoop:
         budget_limits: BudgetLimits | None = None,
         hook_runner: ToolHookRunner | None = None,
         stream_sink: Any | None = None,
+        turn_steer: Any | None = None,
     ) -> None:
         self._model = model
         self._policy = policy
@@ -143,6 +144,7 @@ class HarnessLoop:
         self._budget_limits = budget_limits or BudgetLimits(enabled=False)
         self._hook_runner = hook_runner
         self._stream_sink = stream_sink
+        self._turn_steer = turn_steer
         self._last_stream_reasoning: str | None = None
 
     def start(self, goal: str) -> Session:
@@ -211,6 +213,9 @@ class HarnessLoop:
             created_at=self._clock.now(),
             title=derive_title_from_text(goal or parent.goal),
             parent_session_id=parent.id,
+            model_backend=parent.model_backend,
+            model_id=parent.model_id,
+            model_effort=parent.model_effort,
             messages=copied_messages,
         )
         self._sessions.create(forked)
@@ -322,6 +327,9 @@ class HarnessLoop:
                 step_index,
                 "initial" if step_index == 0 else f"after_{prev_terminal}",
             )
+
+            if step_index > 0:
+                self._apply_pending_steer(session, step_index=step_index)
 
             self._maybe_compact(session, trigger="threshold")
             if self._enforce_budget(
@@ -720,6 +728,28 @@ class HarnessLoop:
         self._sessions.save(session)
         return reply
 
+    def _apply_pending_steer(self, session: Session, *, step_index: int) -> None:
+        """Inject queued steer messages before the next model call in this turn."""
+
+        buffer = self._turn_steer
+        if buffer is None:
+            return
+        pending = buffer.drain(session.id)
+        for steer_index, text in enumerate(pending):
+            self._record(
+                session=session,
+                event_type="user_steer_received",
+                payload={
+                    "turn_index": session.turn_count,
+                    "step_index": step_index,
+                    "user_input": text,
+                    "steer_index": steer_index,
+                },
+            )
+            session.messages.append(
+                self._make_message(role="user", content=text, session=session)
+            )
+
     def _inject_workspace_memory(self, session: Session) -> None:
         """Load workspace-scoped notes into the message list for this turn."""
 
@@ -938,13 +968,13 @@ class HarnessLoop:
         stream_reasoning_parts: list[str] = []
         sink = self._stream_sink
 
-        def _stream_sink(kind: str, text: str, step_idx: int) -> None:
+        def _stream_collector(kind: str, text: str, step_idx: int) -> None:
             if kind == "reasoning" and text:
                 stream_reasoning_parts.append(text)
             if sink is not None:
                 sink(kind, text, step_idx)
 
-        token = bind_stream_sink(_stream_sink if sink is not None else None, step_index=step_index)
+        token = bind_stream_sink(_stream_collector, step_index=step_index)
         try:
             set_stream_step_index(step_index)
             decision = self._model.decide(session, user_input)
@@ -1029,10 +1059,27 @@ class HarnessLoop:
             }
             for block in composed.blocks
         ]
+        wire_getter = getattr(self._model, "last_api_messages", None)
+        api_messages: list[dict]
+        if callable(wire_getter):
+            wire = wire_getter()
+            api_messages = wire if isinstance(wire, list) else composed.as_openai_messages()
+        else:
+            api_messages = composed.as_openai_messages()
         return {
             "prompt_blocks": blocks,
-            "api_messages": composed.as_openai_messages(),
+            "api_messages": api_messages,
         }
+
+    def _reasoning_for_tool_persist(self) -> str | None:
+        """Reasoning to store on a tool assistant row."""
+
+        reasoning = self._model_reasoning_text()
+        if reasoning is not None:
+            return reasoning
+        if self._model_thinking_likely():
+            return ""
+        return None
 
     def _model_thinking_likely(self) -> bool:
         """Best-effort hint for UI before the model returns."""
@@ -1521,7 +1568,7 @@ class HarnessLoop:
                 content="",
                 session=session,
                 tool_calls=_tool_calls_payload(call),
-                reasoning_text=self._model_reasoning_text(),
+                reasoning_text=self._reasoning_for_tool_persist(),
                 provider_extra=self._model_provider_extra(),
             )
         )

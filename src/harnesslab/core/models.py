@@ -86,6 +86,9 @@ class Session(BaseModel):
     last_step_at: datetime | None = None
     parent_session_id: str | None = None
     title: str | None = None
+    model_backend: str | None = None
+    model_id: str | None = None
+    model_effort: str | None = None
     budget_usage: BudgetUsage = Field(default_factory=BudgetUsage)
 
 

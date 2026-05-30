@@ -96,6 +96,20 @@
   font-size: 12px;
 }
 
+.thinking-block-compact {
+  padding: 6px 10px;
+  font-size: 11px;
+}
+
+.thinking-block-compact.thinking-block-active {
+  padding: 6px 10px;
+}
+
+.thinking-block-static {
+  display: block;
+  color: #8b949e;
+}
+
 .assistant-turn {
   border: 1px solid #30363d;
   border-radius: 10px;

@@ -38,6 +38,12 @@ Re-check vendor docs when adding a model or upgrading SDK majors.
 
 **Docs:** [Thinking Mode](https://api-docs.deepseek.com/guides/thinking_mode), [Pricing / models](https://api-docs.deepseek.com/quick_start/pricing)
 
+**Troubleshooting:** If you see HTTP 400 with
+`The reasoning_content in the thinking mode must be passed back to the API`,
+see [`guides/deepseek-thinking-troubleshooting.md`](../guides/deepseek-thinking-troubleshooting.md).
+This error has recurred in long tool+thinking sessions when replay regressed
+or session history lost `reasoning_text`.
+
 ---
 
 ### DeepSeek V4 Pro (`deepseek-v4-pro`)

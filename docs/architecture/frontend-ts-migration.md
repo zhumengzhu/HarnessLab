@@ -42,6 +42,13 @@ documented in [`webui-design.md`](webui-design.md).
 - Phase E partial:
   - TS bundle is default when built; legacy remains as fallback
   - **Exit remaining:** delete `web/static/` after one stable release window
+- **UI-1** (visual shell): design tokens; `app-shell` layout (sidebar + main + trace); composer dock — **shipped** — see [`webui-design.md`](webui-design.md) Visual evolution
+- **UI-2** (sidebar): session search/filter; removed legacy `SessionPicker` / `ChatTopBar` — **shipped**
+- **UI-3** (tool/thought): compact/detailed activity toggle + chat text size — **shipped**
+- **UI-4a** (compact button + sidebar rename) — **shipped**
+- **UI-4b** (activity panel + scroll-collapse composer) — **shipped**
+- **UI-4c** (light/dark theme) — **shipped**
+- **UI-5** (steer queue, per-session model) — **done** (`POST /api/sessions/{id}/steer`, `TurnSteerBuffer`)
 
 ## Scope and non-goals
 
@@ -95,7 +102,7 @@ Composer, SSE streaming, fork, slash commands, tool cards, model picker persiste
 | Budget usage / budget events in session workspace | Done |
 | MCP health in Settings | Done (needs `tools.mcp_servers` in config) |
 | Hook event visualization in trace | Partial (trace labels exist) |
-| Session checkpoints list + rewind confirm + file diff preview | **Next** |
+| Session checkpoints list + rewind confirm + file diff preview | **Done** — Advanced trace column |
 | Provider failover surfacing | Planned |
 
 **Exit:** Phase 5 Web surfaces fully hosted in TS frontend.

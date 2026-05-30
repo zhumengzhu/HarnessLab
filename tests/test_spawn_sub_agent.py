@@ -46,6 +46,39 @@ def test_spawn_sub_agent_creates_child(tmp_path: Path) -> None:
     assert child_events
 
 
+def test_spawn_sub_agent_emits_parent_trace_event(tmp_path: Path) -> None:
+    tools = ToolRegistry()
+    loop_holder: list[HarnessLoop] = []
+    trace_path = tmp_path / "trace.jsonl"
+    recorder = JsonlTraceRecorder(trace_path)
+    loop = HarnessLoop(
+        model=SimpleModel(),
+        policy=DefaultPolicy(tmp_path, enable_spawn_sub_agent=True),
+        sessions=InMemorySessionStore(),
+        tools=tools,
+        trace=recorder,
+        clock=SystemClock(),
+        ids=UuidIdProvider(),
+        workspace_root=tmp_path,
+    )
+    loop_holder.append(loop)
+    tools.register(SpawnSubAgentTool(lambda: loop_holder[0]))
+    parent = loop.start(goal="supervisor")
+    loop.run_session(
+        parent.id,
+        '/tool spawn_sub_agent {"goal": "child task", "max_steps": 1}',
+        max_steps=2,
+    )
+    spawned = [
+        e
+        for e in read_trace(trace_path)
+        if e.event_type == "sub_agent_spawned" and e.session_id == parent.id
+    ]
+    assert len(spawned) == 1
+    assert spawned[0].payload["parent_session_id"] == parent.id
+    assert spawned[0].payload["goal"] == "child task"
+
+
 def test_spawn_sub_agent_depth_limit(tmp_path: Path) -> None:
     tools = ToolRegistry()
     loop_holder: list[HarnessLoop] = []

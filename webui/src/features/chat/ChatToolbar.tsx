@@ -2,6 +2,7 @@ import type { ContextSnapshot, ModelInfo, ModelSwitchRequest } from "../../lib/s
 import { ComposerActionButton } from "../composer/ComposerActionButton";
 import { AgentModeSelector, type AgentMode } from "./AgentModeSelector";
 import { ContextRing } from "./ContextRing";
+import { shouldSuggestCompaction } from "./contextCompaction";
 import { ModelSelector } from "./ModelSelector";
 
 type ChatToolbarProps = {
@@ -19,6 +20,9 @@ type ChatToolbarProps = {
   onDismissModelError: () => void;
   onSend: () => void;
   onStop: () => void;
+  onCompact?: () => void;
+  compactSuggested?: boolean;
+  compactDisabled?: boolean;
 };
 
 export function ChatToolbar(props: ChatToolbarProps) {
@@ -37,7 +41,14 @@ export function ChatToolbar(props: ChatToolbarProps) {
     onDismissModelError,
     onSend,
     onStop,
+    onCompact,
+    compactSuggested,
+    compactDisabled,
   } = props;
+
+  const showCompact =
+    Boolean(onCompact) &&
+    (compactSuggested ?? shouldSuggestCompaction(contextSnapshot));
 
   return (
     <div className="chat-toolbar">
@@ -54,6 +65,17 @@ export function ChatToolbar(props: ChatToolbarProps) {
         />
       </div>
       <div className="chat-toolbar-right">
+        {showCompact ? (
+          <button
+            type="button"
+            className="chat-compact-btn"
+            title="压缩上下文（/compact）"
+            disabled={compactDisabled}
+            onClick={onCompact}
+          >
+            Compact
+          </button>
+        ) : null}
         <ContextRing snapshot={contextSnapshot} />
         <ComposerActionButton
           sending={sending}

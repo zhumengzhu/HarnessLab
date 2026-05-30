@@ -1,5 +1,4 @@
 import type { MessageItem, ToolCard, TraceEventItem } from "../../lib/schemas";
-import { applyReasoningText } from "../../lib/thoughtUtils";
 import { toolCardFromTraceEvent } from "../../lib/toolCardFromTrace";
 
 export type ThoughtEntry = {
@@ -146,21 +145,14 @@ export function reduceLiveTurn(
     const kind = String(payload.kind || "");
     const assistantMessage =
       typeof payload.assistant_message === "string" ? payload.assistant_message : "";
-    const reasoning =
-      typeof payload.reasoning_text === "string" ? payload.reasoning_text : undefined;
-    let thoughts = state.thoughts;
-    if (reasoning?.trim()) {
-      thoughts = applyReasoningText(state.thoughts, reasoning, state.stepIndex);
-    }
     if (kind === "final" || kind === "ask_user" || kind === "assistant" || kind === "plan") {
       return {
         ...state,
-        thoughts,
         assistantText: assistantMessage,
         phase: "answering",
       };
     }
-    return { ...state, thoughts, phase: "running" };
+    return { ...state, phase: "running" };
   }
 
   if (evt.event_type === "session_finished") {

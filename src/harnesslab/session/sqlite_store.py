@@ -21,7 +21,8 @@ from harnesslab.storage.sqlite import apply_migrations, connect
 
 _SESSION_COLUMNS = (
     "id, goal, status, turn_count, step_count, created_at, "
-    "last_step_at, parent_session_id, title, budget_usage"
+    "last_step_at, parent_session_id, title, budget_usage, "
+    "model_backend, model_id, model_effort"
 )
 
 
@@ -39,7 +40,7 @@ class SqliteSessionStore:
             self._conn.execute(
                 f"""
                 INSERT INTO sessions({_SESSION_COLUMNS})
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                 """,
                 _session_row(session),
             )
@@ -72,7 +73,7 @@ class SqliteSessionStore:
                 f"""
                 SELECT {_SESSION_COLUMNS}
                 FROM sessions
-                ORDER BY created_at DESC
+                ORDER BY COALESCE(last_step_at, created_at) DESC
                 LIMIT ?;
                 """,
                 (limit,),
@@ -83,19 +84,34 @@ class SqliteSessionStore:
                 SELECT {_SESSION_COLUMNS}
                 FROM sessions
                 WHERE status = ?
-                ORDER BY created_at DESC
+                ORDER BY COALESCE(last_step_at, created_at) DESC
                 LIMIT ?;
                 """,
                 (status, limit),
             ).fetchall()
         return [_session_from_row(r, messages=[]) for r in rows]
 
+    def message_counts(self, session_ids: list[str]) -> dict[str, int]:
+        if not session_ids:
+            return {}
+        placeholders = ",".join("?" * len(session_ids))
+        rows = self._conn.execute(
+            f"""
+            SELECT session_id, COUNT(*) AS message_count
+            FROM messages
+            WHERE session_id IN ({placeholders})
+            GROUP BY session_id;
+            """,
+            session_ids,
+        ).fetchall()
+        return {row["session_id"]: int(row["message_count"]) for row in rows}
+
     def save(self, session: Session) -> None:
         with self._conn:
             self._conn.execute(
                 f"""
                 INSERT INTO sessions({_SESSION_COLUMNS})
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(id) DO UPDATE SET
                     goal = excluded.goal,
                     status = excluded.status,
@@ -105,7 +121,10 @@ class SqliteSessionStore:
                     last_step_at = excluded.last_step_at,
                     parent_session_id = excluded.parent_session_id,
                     title = excluded.title,
-                    budget_usage = excluded.budget_usage;
+                    budget_usage = excluded.budget_usage,
+                    model_backend = excluded.model_backend,
+                    model_id = excluded.model_id,
+                    model_effort = excluded.model_effort;
                 """,
                 _session_row(session),
             )
@@ -181,6 +200,9 @@ def _session_row(session: Session) -> tuple:
         session.parent_session_id,
         session.title,
         _encode_budget_usage(session.budget_usage),
+        session.model_backend,
+        session.model_id,
+        session.model_effort,
     )
 
 
@@ -199,6 +221,9 @@ def _session_from_row(row: sqlite3.Row, messages: list[Message]) -> Session:
         parent_session_id=row["parent_session_id"],
         title=row["title"],
         budget_usage=_decode_budget_usage(row["budget_usage"]),
+        model_backend=row["model_backend"],
+        model_id=row["model_id"],
+        model_effort=row["model_effort"],
         messages=messages,
     )
 

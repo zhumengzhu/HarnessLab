@@ -1,5 +1,7 @@
 import type { LiveTurnState } from "./liveTurnReducer";
 import { MarkdownView } from "../../lib/MarkdownView";
+import { useChatDisplay } from "../chat/chatDisplayPreferences";
+import { ToolCardRow } from "../chat/ToolCardRow";
 import { ThinkingBlock } from "./ThinkingBlock";
 
 type AssistantTurnCardProps = {
@@ -7,6 +9,7 @@ type AssistantTurnCardProps = {
 };
 
 export function AssistantTurnCard({ turn }: AssistantTurnCardProps) {
+  const { activityDisplay } = useChatDisplay();
   const showThinkingPlaceholder =
     turn.phase === "running" &&
     turn.thinkingLikely &&
@@ -29,26 +32,32 @@ export function AssistantTurnCard({ turn }: AssistantTurnCardProps) {
 
       <div className="assistant-turn-body">
         {showThinkingPlaceholder ? (
-          <div className="thinking-block thinking-block-active" aria-live="polite">
+          <div
+            className={`thinking-block thinking-block-active${activityDisplay === "compact" ? " thinking-block-compact" : ""}`}
+            aria-live="polite"
+          >
             <span className="thinking-pulse" aria-hidden />
             Thinking…
           </div>
         ) : null}
 
         {turn.thoughts.map((thought, idx) => (
-          <ThinkingBlock key={`${thought.stepIndex}-${idx}`} thought={thought} />
+          <ThinkingBlock
+            key={`${thought.stepIndex}-${idx}`}
+            thought={thought}
+            displayMode={activityDisplay}
+          />
         ))}
 
         {turn.tools.length > 0 ? (
           <div className="chat-msg-tools">
             {turn.tools.map((card, idx) => (
-              <details key={`${card.tool}-${idx}`} className="chat-msg-tool" open={idx === turn.tools.length - 1}>
-                <summary>
-                  {card.tool || "tool"} · {card.ok ? "ok" : "error"}
-                  {card.duration_ms != null ? ` · ${card.duration_ms}ms` : ""}
-                </summary>
-                <pre>{card.error || card.output_preview || ""}</pre>
-              </details>
+              <ToolCardRow
+                key={`${card.tool}-${idx}`}
+                card={card}
+                displayMode={activityDisplay}
+                defaultOpen={activityDisplay === "detailed" && idx === turn.tools.length - 1}
+              />
             ))}
           </div>
         ) : null}

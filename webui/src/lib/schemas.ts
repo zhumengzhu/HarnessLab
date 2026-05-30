@@ -47,6 +47,9 @@ export type SessionSummary = {
   created_at: string;
   last_step_at: string | null;
   parent_session_id: string | null;
+  model_backend?: string | null;
+  model_id?: string | null;
+  model_effort?: string | null;
   message_count: number;
   budget_usage?: {
     llm_calls_total: number;
@@ -139,6 +142,37 @@ export type ModelSwitchRequest = {
 
 export type ForkResponse = {
   session: SessionSummary;
+};
+
+export type PatchSessionResponse = {
+  session: SessionSummary;
+};
+
+export type CheckpointSummary = {
+  id: string;
+  session_id: string;
+  tool_name: string;
+  created_at: string;
+};
+
+export type CheckpointsResponse = {
+  session_id: string;
+  checkpoints: CheckpointSummary[];
+};
+
+export type CheckpointPreviewResponse = {
+  session_id: string;
+  checkpoint: {
+    id: string;
+    tool_name: string;
+    tool_args: Record<string, unknown>;
+    created_at: string;
+  };
+  changes: Array<{
+    path: string;
+    current: string | null;
+    restore_to: string | null;
+  }>;
 };
 
 export type TraceEventItem = {

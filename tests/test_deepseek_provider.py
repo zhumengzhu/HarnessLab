@@ -202,6 +202,75 @@ def test_request_body_replays_reasoning_in_open_tool_loop() -> None:
     assert assistant_msgs[-1]["reasoning_content"] == "plan: grep foo"
 
 
+def test_request_body_replays_empty_reasoning_for_tool_assistant_without_capture() -> None:
+    """Missing captured reasoning must still round-trip as an empty field."""
+    captured: dict = {}
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        captured.update(json.loads(request.content.decode("utf-8")))
+        return httpx.Response(
+            200,
+            json={"choices": [{"message": {"content": "done after tool"}}]},
+        )
+
+    session = Session(
+        id="ses_tool_loop",
+        goal="demo",
+        created_at=datetime(2026, 1, 1, tzinfo=UTC),
+        messages=[
+            Message(
+                id="msg_u",
+                role="user",
+                content="run grep",
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
+                session_id="ses_tool_loop",
+            ),
+            Message(
+                id="msg_a",
+                role="assistant",
+                content="",
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
+                session_id="ses_tool_loop",
+                tool_calls=[
+                    {
+                        "id": "call_1",
+                        "type": "function",
+                        "function": {
+                            "name": "grep",
+                            "arguments": json.dumps({"pattern": "foo"}),
+                        },
+                    }
+                ],
+                reasoning_text=None,
+            ),
+            Message(
+                id="msg_t",
+                role="tool",
+                content="[tool:grep] matches",
+                created_at=datetime(2026, 1, 1, tzinfo=UTC),
+                session_id="ses_tool_loop",
+                tool_call_id="call_1",
+            ),
+        ],
+    )
+
+    model = DeepSeekModel(
+        tool_specs_provider=lambda: [],
+        api_key="x",
+        thinking_mode="enabled",
+        transport=httpx.MockTransport(handler),
+    )
+    model.decide(session, "run grep")
+
+    assistant_msgs = [
+        m
+        for m in captured["messages"]
+        if m.get("role") == "assistant" and m.get("tool_calls")
+    ]
+    assert assistant_msgs
+    assert assistant_msgs[-1]["reasoning_content"] == ""
+
+
 def test_request_body_replays_reasoning_after_new_user_turn() -> None:
     """Turn 2 must still include turn-1 tool-loop reasoning on the wire."""
     captured: dict = {}

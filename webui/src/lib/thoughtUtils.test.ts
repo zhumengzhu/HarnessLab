@@ -24,4 +24,19 @@ describe("thoughtUtils", () => {
     );
     expect(merged[0].text).toBe("from message api");
   });
+
+  it("does not duplicate reasoning already captured on a step", () => {
+    const thoughts: ThoughtEntry[] = [
+      {
+        stepIndex: 0,
+        status: "done",
+        text: "already here",
+        startedAt: Date.now() - 3500,
+        durationMs: 3500,
+      },
+    ];
+    const updated = applyReasoningText(thoughts, "already here", 0);
+    expect(updated).toHaveLength(1);
+    expect(updated[0].durationMs).toBe(3500);
+  });
 });

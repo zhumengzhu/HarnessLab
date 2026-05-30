@@ -139,6 +139,15 @@ MIGRATIONS: list[tuple[int, str]] = [
         );
         """,
     ),
+    (
+        9,
+        # Web UI: per-session model/thinking override (falls back to operator config).
+        """
+        ALTER TABLE sessions ADD COLUMN model_backend TEXT;
+        ALTER TABLE sessions ADD COLUMN model_id TEXT;
+        ALTER TABLE sessions ADD COLUMN model_effort TEXT;
+        """,
+    ),
 ]
 
 

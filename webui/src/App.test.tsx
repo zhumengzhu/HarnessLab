@@ -56,25 +56,23 @@ describe("App ui mode", () => {
   it("defaults to simple mode and hides advanced panels", async () => {
     renderApp();
 
-    expect(await screen.findByText("Simple Chat — 聚焦对话。")).toBeTruthy();
+    expect(await screen.findByText("HarnessLab")).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "Proposals" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "Settings" })).toBeNull();
     expect(screen.queryByRole("heading", { name: "Trace" })).toBeNull();
     expect(screen.getByTitle("新对话")).toBeTruthy();
-    expect(screen.getByTitle("历史会话")).toBeTruthy();
   });
 
   it("shows advanced nav and separate views after switching mode", async () => {
     renderApp();
-    await screen.findByText("Simple Chat — 聚焦对话。");
+    await screen.findByText("HarnessLab");
 
     fireEvent.click(screen.getByRole("button", { name: "Advanced" }));
 
     await waitFor(() => {
-      expect(screen.getByText("Advanced — 诊断、Proposals 与 Settings 独立页面。")).toBeTruthy();
+      expect(screen.getByRole("navigation", { name: "Advanced" })).toBeTruthy();
     });
 
-    expect(screen.getByRole("navigation", { name: "Main" })).toBeTruthy();
     expect(screen.queryByRole("heading", { name: "Proposals" })).toBeNull();
 
     fireEvent.click(screen.getByRole("button", { name: "Proposals" }));

@@ -9,6 +9,13 @@ export function applyReasoningText(
   const text = reasoning.trim();
   if (!text) return thoughts;
 
+  if (thoughts.some((t) => t.text?.trim() === text)) {
+    return thoughts;
+  }
+  if (thoughts.some((t) => t.stepIndex === stepIndex && t.text?.trim())) {
+    return thoughts;
+  }
+
   let applied = false;
   const updated = thoughts.map((t) => {
     if (applied) return t;
@@ -40,7 +47,20 @@ export function applyReasoningText(
 }
 
 export function thoughtsWithText(thoughts: ThoughtEntry[]): ThoughtEntry[] {
-  return thoughts.filter((t) => Boolean(t.text?.trim()));
+  const out: ThoughtEntry[] = [];
+  for (const thought of thoughts) {
+    const text = thought.text?.trim();
+    if (!text) continue;
+    const idx = out.findIndex((t) => t.text?.trim() === text);
+    if (idx === -1) {
+      out.push(thought);
+      continue;
+    }
+    if (!out[idx].durationMs && thought.durationMs) {
+      out[idx] = thought;
+    }
+  }
+  return out;
 }
 
 export function mergeMessageReasoningIntoThoughts(

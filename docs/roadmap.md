@@ -1009,7 +1009,7 @@ more than incremental provider polish.
 | Item | Why | Notes |
 | --- | --- | --- |
 | **Supervisor loop hardening** | Safe, observable child runs | Trace fan-in; budget isolation |
-| **Web UI: child session panel** | spawn → child activity → result | Sidebar or nested turn card |
+| **Web UI: child session panel** | spawn → child activity → result | **Done** — `ChildSessionsPanel` + Activity spawn |
 | **Streaming / LiveTurn for children** | Parent turn shows progress | Nested Thinking/Tool rows |
 | **Eval tasks for spawn** | Deterministic regression | `supervisor_research_then_write` |
 | **Depth & concurrency limits** | Prevent runaway trees | `max_sub_agent_depth`, caps |
@@ -1031,9 +1031,9 @@ more than incremental provider polish.
 | --- | --- | --- |
 | **5.10 cost budgets** | USD guardrails incomplete | Price table; `max_session_cost_usd_total` |
 | **5.10 eval tasks** | Pin budget crossings | YAML + `ReplayModel` |
-| **5.9 Web UI rewind** | CLI only today | Confirm + file diff in Advanced mode |
+| **5.9 Web UI rewind** | CLI only today | **Done** — Advanced trace column + diff modal |
 | **`research_summary` eval** | Phase 5.1 deliverable | **DONE** — `16_research_summary.yaml` |
-| **TS migration Phase D** | Advanced controls in TS only | MCP health **DONE**; rewind UI **next** |
+| **TS migration Phase D** | Advanced controls in TS only | MCP health **DONE**; rewind UI **DONE** |
 | **TS migration Phase E** | Remove legacy `web/static/` | Deprecated; delete after stable window |
 | **SSE stream integration tests** | Guard event ordering | **Started** — `sse-client.test.ts`; optional Python SSE test next |
 | **Optional Playwright smoke** | E2E chat workflow | Non-blocking |

@@ -100,6 +100,7 @@ class DeepSeekModel:
             "model_name": self._model_name,
         }
         self._last_prompt: ComposedPrompt | None = None
+        self._last_api_messages: list[dict[str, Any]] | None = None
 
     def decide(self, session: Session, user_input: str) -> Decision:
         body = self._request_body(session)
@@ -185,6 +186,13 @@ class DeepSeekModel:
 
         return self._last_prompt
 
+    def last_api_messages(self) -> list[dict[str, Any]] | None:
+        """Wire messages from the most recent :meth:`decide` call."""
+
+        if self._last_api_messages is None:
+            return None
+        return [dict(m) for m in self._last_api_messages]
+
     def _request_body(self, session: Session) -> dict[str, Any]:
         composed = self._composer.build(
             session,
@@ -200,6 +208,7 @@ class DeepSeekModel:
             "model": self._model_name,
             "messages": serialize_messages(composed, session, entry),
         }
+        self._last_api_messages = list(body["messages"])
         if self._thinking_mode == "disabled":
             body["thinking"] = {"type": "disabled"}
         else:

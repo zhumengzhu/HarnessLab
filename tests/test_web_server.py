@@ -93,6 +93,25 @@ def _post_error(url: str, payload: dict) -> tuple[int, str]:
         return (int(exc.code), body)
 
 
+def _patch(url: str, payload: dict, *, retries: int = 20) -> dict:
+    data = json.dumps(payload).encode("utf-8")
+    last_err: Exception | None = None
+    for _ in range(retries):
+        try:
+            req = urllib.request.Request(  # noqa: S310
+                url,
+                data=data,
+                headers={"Content-Type": "application/json"},
+                method="PATCH",
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
+                return json.loads(resp.read().decode("utf-8"))
+        except (urllib.error.URLError, ConnectionResetError) as exc:
+            last_err = exc
+            time.sleep(0.05)
+    raise last_err  # type: ignore[misc]
+
+
 def _web_runtime(tmp_path: Path, *, max_steps: int = 1) -> WebRuntime:
     (tmp_path / ".harnesslab").mkdir(parents=True, exist_ok=True)
     trace_path = tmp_path / ".harnesslab" / "trace.jsonl"
@@ -176,6 +195,39 @@ def test_web_api_create_session_and_list(tmp_path: Path) -> None:
     assert continued["session"]["turn_count"] >= 1
 
 
+def test_web_sessions_list_pins_include_id(tmp_path: Path) -> None:
+    port = _free_port()
+    runtime = _web_runtime(tmp_path)
+    _start_server(runtime, port)
+    base = f"http://127.0.0.1:{port}"
+
+    older = _post(f"{base}/api/sessions", {"message": "older session"})
+    older_id = older["session"]["id"]
+    newer = _post(f"{base}/api/sessions", {"message": "newer session"})
+    newer_id = newer["session"]["id"]
+
+    listed = _get(f"{base}/api/sessions?limit=1")
+    assert listed["sessions"][0]["id"] == newer_id
+
+    pinned = _get(f"{base}/api/sessions?limit=1&include_id={older_id}")
+    assert [s["id"] for s in pinned["sessions"]] == [older_id]
+
+
+def test_web_sessions_list_reports_persisted_message_count(tmp_path: Path) -> None:
+    port = _free_port()
+    runtime = _web_runtime(tmp_path)
+    _start_server(runtime, port)
+    base = f"http://127.0.0.1:{port}"
+
+    created = _post(f"{base}/api/sessions", {"message": "hello"})
+    session_id = created["session"]["id"]
+    _post(f"{base}/api/sessions/{session_id}/messages", {"message": "again"})
+
+    listed = _get(f"{base}/api/sessions?limit=5")
+    row = next(item for item in listed["sessions"] if item["id"] == session_id)
+    assert row["message_count"] > 0
+
+
 def test_web_remember_and_memory_notes(tmp_path: Path) -> None:
     port = _free_port()
     runtime = _web_runtime(tmp_path)
@@ -232,6 +284,121 @@ def test_web_fork_session(tmp_path: Path) -> None:
     forked = _post(f"{base}/api/sessions/{parent_id}/fork", {})
     assert forked["session"]["id"] != parent_id
     assert forked["session"]["parent_session_id"] == parent_id
+
+
+def test_web_patch_session_title(tmp_path: Path) -> None:
+    port = _free_port()
+    runtime = _web_runtime(tmp_path)
+    _start_server(runtime, port)
+    base = f"http://127.0.0.1:{port}"
+
+    created = _post(f"{base}/api/sessions", {"message": "rename me"})
+    session_id = created["session"]["id"]
+    updated = _patch(
+        f"{base}/api/sessions/{session_id}",
+        {"title": "Research thread"},
+    )
+    assert updated["session"]["title"] == "Research thread"
+
+    listed = _get(f"{base}/api/sessions?limit=5")
+    match = next(row for row in listed["sessions"] if row["id"] == session_id)
+    assert match["title"] == "Research thread"
+
+
+def test_web_patch_session_model_override(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "model": {
+                    "default_backend": "simple",
+                    "deepseek": {"model_name": "deepseek-v4-flash", "thinking": "disabled"},
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("HARNESSLAB_CONFIG", str(config_path))
+
+    port = _free_port()
+    runtime = _web_runtime(tmp_path)
+    runtime.operator_config = load_operator_config(config_path)
+    _start_server(runtime, port)
+    base = f"http://127.0.0.1:{port}"
+
+    created = _post(f"{base}/api/sessions", {"message": "model probe"})
+    session_id = created["session"]["id"]
+    updated = _patch(
+        f"{base}/api/sessions/{session_id}",
+        {
+            "model_backend": "deepseek",
+            "model_id": "deepseek-v4-pro",
+            "effort": "max",
+        },
+    )
+    assert updated["session"]["model_backend"] == "deepseek"
+    assert updated["session"]["model_id"] == "deepseek-v4-pro"
+    assert updated["session"]["model_effort"] == "max"
+
+    reloaded = load_operator_config(config_path)
+    assert reloaded.model_backend == "simple"
+    assert reloaded.deepseek_model_name == "deepseek-v4-flash"
+
+    cleared = _patch(f"{base}/api/sessions/{session_id}", {"model_backend": None})
+    assert cleared["session"]["model_backend"] is None
+    assert cleared["session"]["model_id"] is None
+    assert cleared["session"]["model_effort"] is None
+
+
+def test_web_fork_session_copies_model_override(tmp_path: Path) -> None:
+    port = _free_port()
+    runtime = _web_runtime(tmp_path)
+    _start_server(runtime, port)
+    base = f"http://127.0.0.1:{port}"
+
+    created = _post(f"{base}/api/sessions", {"message": "parent"})
+    parent_id = created["session"]["id"]
+    _patch(
+        f"{base}/api/sessions/{parent_id}",
+        {"model_backend": "deepseek", "model_id": "deepseek-v4-pro", "effort": "high"},
+    )
+    forked = _post(f"{base}/api/sessions/{parent_id}/fork", {})
+    assert forked["session"]["model_backend"] == "deepseek"
+    assert forked["session"]["model_id"] == "deepseek-v4-pro"
+    assert forked["session"]["model_effort"] == "high"
+
+
+def test_web_steer_requires_active_turn(tmp_path: Path) -> None:
+    port = _free_port()
+    runtime = _web_runtime(tmp_path)
+    _start_server(runtime, port)
+    base = f"http://127.0.0.1:{port}"
+
+    created = _post(f"{base}/api/sessions", {"message": "idle session"})
+    session_id = created["session"]["id"]
+    status, body = _post_error(
+        f"{base}/api/sessions/{session_id}/steer",
+        {"message": "steer while idle"},
+    )
+    assert status == 409
+    assert "no active turn" in body
+
+
+def test_web_runtime_submit_steer_while_active(tmp_path: Path) -> None:
+    runtime = _web_runtime(tmp_path)
+    session = runtime.loop.start(goal="active")
+    with pytest.raises(ValueError, match="no active turn"):
+        runtime.submit_steer(session.id, "too early")
+
+    runtime.begin_turn(session.id)
+    try:
+        result = runtime.submit_steer(session.id, "mid-turn steer")
+        assert result == {"ok": True, "queued": 1}
+        assert runtime.turn_steer.pending_count(session.id) == 1
+    finally:
+        runtime.end_turn(session.id)
+    assert runtime.turn_steer.pending_count(session.id) == 0
 
 
 def test_web_sse_stream_returns_done_event(tmp_path: Path) -> None:

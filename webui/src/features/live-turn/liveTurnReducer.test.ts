@@ -59,22 +59,26 @@ describe("liveTurnReducer", () => {
     expect(turn.tools[0].tool).toBe("read_file");
   });
 
-  it("sets assistant text on final decision", () => {
+  it("sets assistant text on final decision without duplicating model reasoning", () => {
     let turn = createLiveTurn("question");
     turn = reduceLiveTurn(
       turn,
-      traceEvt("model_call", { latency_ms: 900 })
+      traceEvt("model_call", {
+        latency_ms: 900,
+        reasoning_text: "plan answer",
+      })
     )!;
     turn = reduceLiveTurn(
       turn,
       traceEvt("decision_made", {
         kind: "final",
         assistant_message: "Here is the answer.",
-        reasoning_text: "late reasoning",
+        reasoning_text: "plan answer",
       })
     )!;
     expect(turn.phase).toBe("answering");
     expect(turn.assistantText).toBe("Here is the answer.");
-    expect(turn.thoughts[0].text).toBe("late reasoning");
+    expect(turn.thoughts).toHaveLength(1);
+    expect(turn.thoughts[0].text).toBe("plan answer");
   });
 });

@@ -327,22 +327,42 @@ an async API; trace JSONL remains the source of truth for replay.
 
 ### 6.6.1 Thinking replay policy (OpenAI-chat / DeepSeek)
 
-DeepSeek returns HTTP 400 when an assistant message with `tool_calls` is
-resent without matching `reasoning_content`. HarnessLab persists thinking
-as `Message.reasoning_text` and the `openai_chat` transform replays it on
-**every** historical assistant+tool_calls row in the wire transcript — not
-only when the last message is `tool`.
+DeepSeek returns HTTP **400** when thinking mode is on and the reserialized
+request omits `reasoning_content` on a historical assistant message that
+originally had thinking — especially in **tool loops** and long multi-step
+turns (deep research).
+
+**Operator runbook:** [`guides/deepseek-thinking-troubleshooting.md`](../guides/deepseek-thinking-troubleshooting.md)
+(symptoms, SQLite checks, recovery, recurring failure modes).
+
+HarnessLab persists thinking as `Message.reasoning_text`. On each DeepSeek
+call, `serialize_messages()` builds `reasoning_by_message_id` from the
+session and passes it to
+`ComposedPrompt.as_openai_messages(reasoning_by_message_id=…)`. Each
+conversation block with origin `session:<msg_id>` gets `reasoning_content`
+on the wire when that message has stored reasoning.
+
+Replay applies to **every assistant message with `reasoning_text`**, not
+only rows with `tool_calls` (plan / intermediate assistant steps count too).
+Matching is by **message id**, not by sequential index — index-based replay
+was a recurring source of 400s when one step lacked stored reasoning.
+
+When thinking is on, **tool assistants without captured reasoning** still
+replay `reasoning_content: ""` on the wire (HarnessLab persists
+`reasoning_text=""` on append). DeepSeek requires the field to be present
+even when the model returned a bare tool call.
 
 | Scenario | Required wire behavior |
 | --- | --- |
-| Open tool loop (last message `tool`) | Inject `reasoning_content` on matching assistant |
-| New user turn after prior tool loop | Same — historical tool assistants still need reasoning |
+| Open tool loop (last message `tool`) | Inject `reasoning_content` on assistants that have `reasoning_text` |
+| Multi-step same turn (tool → plan/assistant → tool) | Same — all thinking assistants in history |
+| New user turn after prior tool loop | Historical thinking assistants still replayed |
 | Compacted-away turns | Raw reasoning dropped; tail messages retain `reasoning_text` |
 | `reasoning_support: none` | No injection |
 
 Golden tests: `tests/test_openai_chat_transform.py`,
 `tests/test_deepseek_provider.py`. When vendor semantics change, update
-transform + tests before catalog entries.
+transform + tests + the troubleshooting guide before catalog entries.
 
 Other API families (Anthropic thinking blocks, Gemini thought signatures)
 use family-specific `replay_policy` hooks — audit each when adding multi-turn

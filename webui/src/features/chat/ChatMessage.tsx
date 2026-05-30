@@ -2,6 +2,8 @@ import { useMemo } from "react";
 import type { MessageItem, ToolCard } from "../../lib/schemas";
 import { MarkdownView } from "../../lib/MarkdownView";
 import { mergeMessageReasoningIntoThoughts } from "../../lib/thoughtUtils";
+import { useChatDisplay } from "./chatDisplayPreferences";
+import { ToolCardRow } from "./ToolCardRow";
 import { ThinkingBlock } from "../live-turn/ThinkingBlock";
 import type { ThoughtEntry } from "../live-turn/liveTurnReducer";
 
@@ -35,28 +37,29 @@ function MessageBody({
   fallbackContent,
   persistedThoughts,
   toolCards,
+  activityDisplay,
 }: {
   displayBody: string;
   fallbackContent: string;
   persistedThoughts: ThoughtEntry[];
   toolCards: ToolCard[];
+  activityDisplay: "compact" | "detailed";
 }) {
   return (
     <div className="chat-msg-body">
       {persistedThoughts.map((thought, idx) => (
-        <ThinkingBlock key={idx} thought={thought} showWhenIdle />
+        <ThinkingBlock
+          key={idx}
+          thought={thought}
+          showWhenIdle
+          displayMode={activityDisplay}
+        />
       ))}
 
       {toolCards.length > 0 ? (
         <div className="chat-msg-tools">
           {toolCards.map((card, idx) => (
-            <details key={`${card.tool}-${idx}`} className="chat-msg-tool">
-              <summary>
-                {card.tool || "tool"} · {card.ok ? "ok" : "error"}
-                {card.duration_ms != null ? ` · ${card.duration_ms}ms` : ""}
-              </summary>
-              <pre>{card.error || card.output_preview || ""}</pre>
-            </details>
+            <ToolCardRow key={`${card.tool}-${idx}`} card={card} displayMode={activityDisplay} />
           ))}
         </div>
       ) : null}
@@ -72,6 +75,7 @@ export function ChatMessage({
   defaultCollapsed,
   thoughtEntries,
 }: ChatMessageProps) {
+  const { activityDisplay } = useChatDisplay();
   const { thought: inlineThought, body } = useMemo(
     () =>
       message.role === "assistant"
@@ -115,6 +119,7 @@ export function ChatMessage({
     fallbackContent: message.content,
     persistedThoughts,
     toolCards,
+    activityDisplay,
   };
 
   if (defaultCollapsed) {

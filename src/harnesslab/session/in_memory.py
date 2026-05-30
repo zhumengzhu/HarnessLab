@@ -24,9 +24,16 @@ class InMemorySessionStore:
     ) -> list[Session]:
         sessions = sorted(
             self._data.values(),
-            key=lambda s: s.created_at,
+            key=lambda s: s.last_step_at or s.created_at,
             reverse=True,
         )
         if status is not None:
             sessions = [s for s in sessions if s.status == status]
         return sessions[:limit]
+
+    def message_counts(self, session_ids: list[str]) -> dict[str, int]:
+        return {
+            session_id: len(self._data[session_id].messages)
+            for session_id in session_ids
+            if session_id in self._data
+        }

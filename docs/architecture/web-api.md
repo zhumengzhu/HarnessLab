@@ -146,6 +146,35 @@ Session metadata + full message list + `memory_notes`.
 Internal `tool` / `system` rows are included for model continuity; Simple
 Chat UI may hide them visually.
 
+### `PATCH /api/sessions/{id}`
+
+Update session metadata (sidebar rename, per-session model override).
+
+**Rename:**
+
+```json
+{ "title": "My research thread" }
+```
+
+- `title`: trimmed, max **60** characters (`TITLE_MAX_LEN`).
+
+**Per-session model** (Web UI model picker when a session is selected):
+
+```json
+{
+  "model_backend": "deepseek",
+  "model_id": "deepseek-v4-pro",
+  "effort": "max"
+}
+```
+
+- Does **not** write `~/.config/harnesslab/config.json`; override is stored on the session row.
+- Clear override (revert to global default): `{ "model_backend": null }`.
+- At least one of `title` or model fields is required per request.
+- Before each turn the runtime binds `loop._model` from the effective config (global or session overlay).
+
+Response: `{ "session": { ...SessionSummary fields including model_backend, model_id, model_effort... } }`
+
 ### `GET /api/sessions/{id}/trace`
 
 Filtered trace events for the Advanced trace panel (tool/step subset).
@@ -197,6 +226,21 @@ Response (non-stream): turn payload (see **Turn response shape**).
 Continue an existing session.
 
 Body: same as `POST /api/sessions`.
+
+### `POST /api/sessions/{id}/steer`
+
+Inject a user message into the **current inner turn** (Web UI Steer). The message
+is queued in `TurnSteerBuffer` and appended to `session.messages` before the
+next model call in the active `run_session` loop (step index ≥ 1).
+
+```json
+{ "message": "Stop searching — summarize what you have." }
+```
+
+- Returns `{ "ok": true, "queued": 1 }` when a turn is active for the session.
+- Returns **409** `{ "error": "no active turn for session" }` when idle (client
+  may fall back to queuing the next turn).
+- Emits trace event `user_steer_received`.
 
 ### `POST /api/sessions/{id}/fork`
 

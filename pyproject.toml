@@ -41,7 +41,6 @@ packages = ["src/harnesslab"]
 [tool.hatch.build.targets.wheel.force-include]
 "src/harnesslab/core/prompt/blocks" = "harnesslab/core/prompt/blocks"
 "src/harnesslab/providers/catalog" = "harnesslab/providers/catalog"
-"src/harnesslab/web/static" = "harnesslab/web/static"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

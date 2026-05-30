@@ -25,7 +25,7 @@ payload shape, update the relevant file and tests in the same PR.
 | [`architecture/tool-runtime.md`](architecture/tool-runtime.md) | Tool registry, policy, audit events |
 | [`architecture/compaction.md`](architecture/compaction.md) | Auto/manual compaction, thinking after compact |
 | [`architecture/web-api.md`](architecture/web-api.md) | Localhost HTTP + SSE contract |
-| [`architecture/webui-design.md`](architecture/webui-design.md) | Chat UX, SSE, Thinking/Thought, composer slash commands |
+| [`architecture/webui-design.md`](architecture/webui-design.md) | Chat UX, SSE, Thinking/Thought, composer slash commands; OpenClaw layout reference & UI phases |
 | [`architecture/provider-expansion.md`](architecture/provider-expansion.md) | ModelPort adapters, catalog, transforms |
 | [`architecture/model-parameters.md`](architecture/model-parameters.md) | Thinking / effort operator controls |
 | [`architecture/frontend-ts-migration.md`](architecture/frontend-ts-migration.md) | TS WebUI migration phases and status |
@@ -40,6 +40,7 @@ payload shape, update the relevant file and tests in the same PR.
 | [`research/claude-code-monitor.md`](research/claude-code-monitor.md) | External agent observation notes |
 | [`guides/deep-research-landscape.md`](guides/deep-research-landscape.md) | Deep research skills vs tools (DeerFlow, OpenCode, HarnessLab design) |
 | [`guides/web-research-providers.md`](guides/web-research-providers.md) | Search/fetch providers, pricing, proxy |
+| [`guides/deepseek-thinking-troubleshooting.md`](guides/deepseek-thinking-troubleshooting.md) | DeepSeek thinking 400s, `reasoning_content` replay, session recovery |
 
 ## Other repo docs
 
@@ -79,7 +80,8 @@ payload shape, update the relevant file and tests in the same PR.
 
 1. [`architecture/provider-expansion.md`](architecture/provider-expansion.md)
 2. [`architecture/model-parameters.md`](architecture/model-parameters.md)
-3. Inspect `providers/transforms/` replay policies and `Message.reasoning_text`
+3. [`guides/deepseek-thinking-troubleshooting.md`](guides/deepseek-thinking-troubleshooting.md) — if DeepSeek 400 / thinking replay issues
+4. Inspect `providers/transforms/` replay policies and `Message.reasoning_text`
 
 ## Maintenance rules
 

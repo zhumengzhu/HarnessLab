@@ -1,10 +1,12 @@
 import { useEffect, useState } from "react";
 import { MarkdownView } from "../../lib/MarkdownView";
+import type { ActivityDisplayMode } from "../chat/chatDisplay";
 import type { ThoughtEntry } from "./liveTurnReducer";
 
 type ThinkingBlockProps = {
   thought: ThoughtEntry;
   showWhenIdle?: boolean;
+  displayMode?: ActivityDisplayMode;
 };
 
 function formatDuration(ms: number): string {
@@ -12,7 +14,7 @@ function formatDuration(ms: number): string {
   return `${(ms / 1000).toFixed(1)}s`;
 }
 
-export function ThinkingBlock({ thought, showWhenIdle }: ThinkingBlockProps) {
+export function ThinkingBlock({ thought, showWhenIdle, displayMode = "detailed" }: ThinkingBlockProps) {
   const [elapsedMs, setElapsedMs] = useState(0);
 
   useEffect(() => {
@@ -24,7 +26,7 @@ export function ThinkingBlock({ thought, showWhenIdle }: ThinkingBlockProps) {
   }, [thought.startedAt, thought.status]);
 
   if (thought.status === "thinking") {
-    if (thought.text?.trim()) {
+    if (thought.text?.trim() && displayMode === "detailed") {
       return (
         <details className="thinking-block thinking-block-active" open>
           <summary aria-live="polite">
@@ -39,7 +41,10 @@ export function ThinkingBlock({ thought, showWhenIdle }: ThinkingBlockProps) {
       );
     }
     return (
-      <div className="thinking-block thinking-block-active" aria-live="polite">
+      <div
+        className={`thinking-block thinking-block-active${displayMode === "compact" ? " thinking-block-compact" : ""}`}
+        aria-live="polite"
+      >
         <span className="thinking-pulse" aria-hidden />
         Thinking…
         <span className="thinking-elapsed">{formatDuration(elapsedMs)}</span>
@@ -57,6 +62,17 @@ export function ThinkingBlock({ thought, showWhenIdle }: ThinkingBlockProps) {
 
   if (!showWhenIdle && duration <= 0) {
     return null;
+  }
+
+  if (displayMode === "compact") {
+    return (
+      <details className="thinking-block thinking-block-done thinking-block-compact">
+        <summary>{durationLabel}</summary>
+        <div className="thinking-block-body">
+          <MarkdownView markdown={thought.text} />
+        </div>
+      </details>
+    );
   }
 
   return (

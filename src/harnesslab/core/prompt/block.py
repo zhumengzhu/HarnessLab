@@ -27,13 +27,19 @@ def _assistant_tool_call_ids(tool_calls: list[dict[str, Any]] | None) -> set[str
     return ids
 
 
-def _openai_message_from_block(block: PromptBlock) -> dict[str, Any]:
+def _openai_message_from_block(
+    block: PromptBlock,
+    *,
+    reasoning_text: str | None = None,
+) -> dict[str, Any]:
     if block.role == "assistant" and block.tool_calls:
         payload: dict[str, Any] = {
             "role": "assistant",
             "tool_calls": block.tool_calls,
             "content": block.content or None,
         }
+        if reasoning_text is not None:
+            payload["reasoning_content"] = reasoning_text
         return payload
     if block.role == "tool":
         return {
@@ -41,7 +47,34 @@ def _openai_message_from_block(block: PromptBlock) -> dict[str, Any]:
             "tool_call_id": block.tool_call_id or "",
             "content": block.content,
         }
+    if block.role == "assistant" and reasoning_text is not None:
+        return {
+            "role": "assistant",
+            "content": block.content,
+            "reasoning_content": reasoning_text,
+        }
     return {"role": block.role, "content": block.content}
+
+
+def _reasoning_for_block(
+    block: PromptBlock,
+    reasoning_by_message_id: dict[str, str] | None,
+) -> str | None:
+    if not reasoning_by_message_id or block.role != "assistant":
+        return None
+    if not block.origin.startswith("session:"):
+        return None
+    msg_id = block.origin.split(":", 1)[1]
+    text = reasoning_by_message_id.get(msg_id)
+    if not isinstance(text, str):
+        return None
+    stripped = text.strip()
+    if stripped:
+        return stripped
+    # Empty placeholder is valid for tool assistants in thinking replay.
+    if block.tool_calls:
+        return ""
+    return None
 
 
 def _should_emit_conversation_block(
@@ -106,15 +139,17 @@ class ComposedPrompt:
 
         return "\n\n".join(b.content for b in self.blocks if b.content)
 
-    def as_openai_messages(self) -> list[dict[str, Any]]:
+    def as_openai_messages(
+        self,
+        *,
+        reasoning_by_message_id: dict[str, str] | None = None,
+    ) -> list[dict[str, Any]]:
         """Group consecutive ``system`` blocks into a single system
         message, then append non-system blocks in order.
 
-        Collapsing the system blocks matches how OpenAI / DeepSeek
-        chat completions treat the system slot: one (long) message
-        rather than many short ones. Conversation blocks keep their
-        original roles so tool/assistant/user turns round-trip
-        unchanged.
+        When ``reasoning_by_message_id`` is set, assistant rows whose
+        block origin is ``session:<msg_id>`` receive ``reasoning_content``
+        for DeepSeek-style thinking replay.
         """
 
         messages: list[dict[str, Any]] = []
@@ -132,7 +167,8 @@ class ComposedPrompt:
                 system_parts = []
             if not _should_emit_conversation_block(block, messages):
                 continue
-            messages.append(_openai_message_from_block(block))
+            reasoning = _reasoning_for_block(block, reasoning_by_message_id)
+            messages.append(_openai_message_from_block(block, reasoning_text=reasoning))
 
         if system_parts:
             # No non-system block appeared; emit the system message at

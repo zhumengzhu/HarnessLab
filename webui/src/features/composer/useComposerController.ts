@@ -1,6 +1,7 @@
 import type { CompositionEvent, FormEvent, KeyboardEvent } from "react";
 import { useRef, useState } from "react";
 import type { QueryClient } from "@tanstack/react-query";
+import { apiPost } from "../../lib/api-client";
 import { shouldSubmitComposerOnEnter } from "../../lib/composerEnter";
 import { postSse } from "../../lib/sse-client";
 import type {
@@ -29,7 +30,7 @@ type UseComposerControllerArgs = {
   selectedSessionId: string | null;
   queryClient: QueryClient;
   onBeforeSend: () => void;
-  onSelectSession: (id: string) => void;
+  onAdoptSession: (id: string) => void;
   onAppendTraceEvent: (evt: TraceEventItem) => void;
   onSetStreamMessages: (messages: MessageItem[] | null) => void;
   onSetStreamToolCards: (cards: ToolCard[]) => void;
@@ -49,6 +50,7 @@ type UseComposerControllerResult = {
   rememberMode: boolean;
   slashMenu: ReturnType<typeof useComposerSlashMenu>;
   queuedMessages: string[];
+  steeredMessages: string[];
   onSubmit: (e: FormEvent<HTMLFormElement>) => void;
   onSend: () => void;
   onStop: () => void;
@@ -57,6 +59,7 @@ type UseComposerControllerResult = {
   onCompositionEnd: (e: CompositionEvent<HTMLTextAreaElement>) => void;
   toggleRememberMode: () => void;
   pickSlashItem: (insert: string) => void;
+  sendCommand: (command: string) => void;
 };
 
 export function useComposerController(
@@ -66,7 +69,7 @@ export function useComposerController(
     selectedSessionId,
     queryClient,
     onBeforeSend,
-    onSelectSession,
+    onAdoptSession,
     onAppendTraceEvent,
     onSetStreamMessages,
     onSetStreamToolCards,
@@ -83,6 +86,7 @@ export function useComposerController(
   const [sendError, setSendError] = useState<string | null>(null);
   const [rememberMode, setRememberMode] = useState(false);
   const [queuedMessages, setQueuedMessages] = useState<string[]>([]);
+  const [steeredMessages, setSteeredMessages] = useState<string[]>([]);
   const slashMenu = useComposerSlashMenu(composer);
 
   const queueRef = useRef<string[]>([]);
@@ -126,6 +130,7 @@ export function useComposerController(
   async function executeTurn(outgoing: string) {
     onBeforeSend();
     onSetStreamToolCards([]);
+    const sessionAtStart = selectedSessionRef.current;
     const turn = createLiveTurn(outgoing);
     liveTurnRef.current = turn;
     onLiveTurnStart?.(turn);
@@ -195,9 +200,11 @@ export function useComposerController(
       if (liveTurnRef.current && onLiveTurnEvent) {
         onLiveTurnEvent({ ...liveTurnRef.current });
       }
-      onSelectSession(finalPayload.session.id);
       onSetStreamMessages(finalPayload.messages);
       onSetStreamToolCards(finalPayload.tool_cards || []);
+      if (!sessionAtStart && finalPayload.session.id) {
+        onAdoptSession(finalPayload.session.id);
+      }
       if (onContextSnapshot && finalPayload.context_snapshot !== undefined) {
         onContextSnapshot(finalPayload.context_snapshot ?? null);
       }
@@ -222,6 +229,7 @@ export function useComposerController(
     }
     onLiveTurnEnd?.();
     liveTurnRef.current = null;
+    setSteeredMessages([]);
   }
 
   async function worker() {
@@ -254,6 +262,28 @@ export function useComposerController(
     }
   }
 
+  async function submitSteer(outgoing: string) {
+    const sessionId = selectedSessionRef.current;
+    if (!sessionId) {
+      enqueueOutgoing(outgoing);
+      return;
+    }
+    try {
+      await apiPost<{ ok: boolean; queued: number }>(
+        `/api/sessions/${encodeURIComponent(sessionId)}/steer`,
+        { message: outgoing }
+      );
+      setSteeredMessages((prev) => [...prev, outgoing]);
+    } catch (err) {
+      const message = (err as Error).message;
+      if (message.includes("409") || /no active turn/i.test(message)) {
+        enqueueOutgoing(outgoing);
+        return;
+      }
+      setSendError(message);
+    }
+  }
+
   function enqueueOutgoing(outgoing: string) {
     queueRef.current.push(outgoing);
     syncQueueView();
@@ -263,6 +293,10 @@ export function useComposerController(
   function submitOutgoing(outgoing: string) {
     if (!outgoing) return;
     setComposerState("");
+    if (sending) {
+      void submitSteer(outgoing);
+      return;
+    }
     enqueueOutgoing(outgoing);
   }
 
@@ -275,9 +309,20 @@ export function useComposerController(
     submitOutgoing(prepareOutgoingText(composer));
   }
 
+  function sendCommand(command: string) {
+    const outgoing = command.trim();
+    if (!outgoing) return;
+    if (sending) {
+      void submitSteer(outgoing);
+      return;
+    }
+    enqueueOutgoing(outgoing);
+  }
+
   function onStop() {
     abortRef.current?.abort();
     queueRef.current = [];
+    setSteeredMessages([]);
     syncQueueView();
   }
 
@@ -349,6 +394,7 @@ export function useComposerController(
     rememberMode,
     slashMenu,
     queuedMessages,
+    steeredMessages,
     onSubmit,
     onSend,
     onStop,
@@ -357,6 +403,7 @@ export function useComposerController(
     onCompositionEnd,
     toggleRememberMode,
     pickSlashItem,
+    sendCommand,
   };
 }
 

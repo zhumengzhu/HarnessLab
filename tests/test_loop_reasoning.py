@@ -57,3 +57,46 @@ def test_loop_persists_reasoning_on_tool_assistant_message(tmp_path: Path) -> No
     ]
     assert len(assistant_tool_msgs) == 1
     assert assistant_tool_msgs[0].reasoning_text == "internal chain-of-thought"
+
+
+class _ThinkingToolWithoutReasoningModel:
+    """Thinking-enabled stub that returns a tool call without reasoning."""
+
+    _thinking_mode = "enabled"
+
+    def decide(self, session: Session, user_input: str) -> Decision:
+        _ = session, user_input
+        return Decision(
+            kind="tool",
+            tool_name="write_file",
+            tool_args={"path": "out.txt", "content": "x"},
+        )
+
+    def last_call_meta(self) -> dict[str, str]:
+        return {}
+
+
+def test_loop_persists_empty_reasoning_for_thinking_tool_without_capture(
+    tmp_path: Path,
+) -> None:
+    limits = RuntimeLimits()
+    tools = ToolRegistry()
+    tools.register(WriteFileTool(tmp_path, limits=limits))
+    model = _ThinkingToolWithoutReasoningModel()
+    store = InMemorySessionStore()
+    loop = HarnessLoop(
+        model=model,
+        policy=DefaultPolicy(workspace_root=tmp_path),
+        sessions=store,
+        tools=tools,
+        trace=ReplayTraceRecorder(),
+    )
+    session = loop.start(goal="thinking tool without reasoning")
+    loop.run_turn(session.id, "write out.txt")
+
+    loaded = store.get(session.id)
+    assistant_tool_msgs = [
+        m for m in loaded.messages if m.role == "assistant" and m.tool_calls
+    ]
+    assert len(assistant_tool_msgs) == 1
+    assert assistant_tool_msgs[0].reasoning_text == ""

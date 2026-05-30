@@ -10,6 +10,7 @@ type ComposerPanelProps = {
   sending: boolean;
   sendError: string | null;
   queuedMessages: string[];
+  steeredMessages: string[];
   rememberMode: boolean;
   slashMenu: ReturnType<typeof useComposerSlashMenu>;
   agentMode: AgentMode;
@@ -31,6 +32,9 @@ type ComposerPanelProps = {
   onComposerKeyDown: (e: KeyboardEvent<HTMLTextAreaElement>) => void;
   onCompositionStart: (e: CompositionEvent<HTMLTextAreaElement>) => void;
   onCompositionEnd: (e: CompositionEvent<HTMLTextAreaElement>) => void;
+  selectedSessionId: string | null;
+  onCompact: () => void;
+  chromeCollapsed?: boolean;
 };
 
 function queuePreview(text: string, max = 48): string {
@@ -45,6 +49,7 @@ export function ComposerPanel(props: ComposerPanelProps) {
     sending,
     sendError,
     queuedMessages,
+    steeredMessages,
     rememberMode,
     slashMenu,
     agentMode,
@@ -66,10 +71,13 @@ export function ComposerPanel(props: ComposerPanelProps) {
     onComposerKeyDown,
     onCompositionStart,
     onCompositionEnd,
+    selectedSessionId,
+    onCompact,
+    chromeCollapsed = false,
   } = props;
 
   return (
-    <section className="panel composer-panel">
+    <section className={`panel composer-panel${chromeCollapsed ? " composer-panel-compact" : ""}`}>
       <form onSubmit={onSubmit} className="composer-form">
         <div className="composer-quick-actions">
           <button
@@ -82,9 +90,20 @@ export function ComposerPanel(props: ComposerPanelProps) {
           {rememberMode ? <span className="mode-chip">remember</span> : null}
         </div>
 
+        {steeredMessages.length > 0 ? (
+          <div className="composer-queue composer-steer-queue" aria-live="polite">
+            <span className="composer-queue-label">Steer {steeredMessages.length}</span>
+            <ul className="composer-queue-list">
+              {steeredMessages.map((msg, idx) => (
+                <li key={`steer-${idx}-${msg.slice(0, 12)}`}>{queuePreview(msg)}</li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+
         {queuedMessages.length > 0 ? (
           <div className="composer-queue" aria-live="polite">
-            <span className="composer-queue-label">队列 {queuedMessages.length}</span>
+            <span className="composer-queue-label">下一回合 {queuedMessages.length}</span>
             <ul className="composer-queue-list">
               {queuedMessages.map((msg, idx) => (
                 <li key={`${idx}-${msg.slice(0, 12)}`}>{queuePreview(msg)}</li>
@@ -109,7 +128,7 @@ export function ComposerPanel(props: ComposerPanelProps) {
             rows={3}
             placeholder={
               sending
-                ? "Agent 运行中 — Enter 将消息加入队列"
+                ? "Agent 运行中 — Enter 注入 steer（当前 turn），Shift+Enter 换行"
                 : "Plan, Build, / 唤起命令或技能…（Enter 发送，Shift+Enter 换行）"
             }
           />
@@ -132,6 +151,8 @@ export function ComposerPanel(props: ComposerPanelProps) {
           onDismissModelError={onDismissModelError}
           onSend={onSend}
           onStop={onStop}
+          onCompact={selectedSessionId ? onCompact : undefined}
+          compactDisabled={sending}
         />
       </form>
     </section>

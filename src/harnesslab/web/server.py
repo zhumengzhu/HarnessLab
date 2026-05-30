@@ -20,6 +20,8 @@ from harnesslab.checkpoint.store import preview_restore, restore_snapshots
 from harnesslab.core.loop import DEFAULT_MAX_STEPS, HarnessLoop
 from harnesslab.core.memory_policy import session_memory_key
 from harnesslab.core.models import Session, TraceEvent
+from harnesslab.core.title import TITLE_MAX_LEN
+from harnesslab.core.turn_steer import TurnSteerBuffer
 from harnesslab.providers.context_limits import (
     align_runtime_limits_with_model,
     format_context_window,
@@ -27,11 +29,16 @@ from harnesslab.providers.context_limits import (
 )
 from harnesslab.providers.deepseek_config import (
     DEEPSEEK_UI_EFFORTS,
-    apply_deepseek_ui_effort,
     deepseek_ui_effort,
 )
 from harnesslab.replay.trace_reader import read_trace
 from harnesslab.telemetry.log import get_logger
+from harnesslab.web.session_model import (
+    apply_session_model_patch,
+    config_changes_for_model_selection,
+    effective_operator_config_for_session,
+    resolve_target_backend,
+)
 from harnesslab.web.trace_hub import TraceHub
 
 _TS_STATIC_DIR = Path(__file__).resolve().parent / "static_ts"
@@ -56,6 +63,8 @@ TOOL_PANEL_EVENT_TYPES = frozenset(
         "compaction_started",
         "compaction_completed",
         "session_titled",
+        "user_steer_received",
+        "sub_agent_spawned",
         "hook_invoked",
         "hook_blocked",
         "hook_failed",
@@ -117,9 +126,34 @@ class WebRuntime:
     trace_path: Path | None = None
     settings: dict[str, Any] = field(default_factory=dict)
     operator_config: Any | None = None  # OperatorConfig, typed as Any to avoid import cycle
+    turn_steer: TurnSteerBuffer = field(default_factory=TurnSteerBuffer)
     _locks: dict[str, threading.Lock] = field(default_factory=dict)
     _global: threading.Lock = field(default_factory=threading.Lock)
     _model_lock: threading.Lock = field(default_factory=threading.Lock)
+    _active_turns: set[str] = field(default_factory=set)
+    _turn_state_lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def __post_init__(self) -> None:
+        self.loop._turn_steer = self.turn_steer  # noqa: SLF001
+
+    def begin_turn(self, session_id: str) -> None:
+        with self._turn_state_lock:
+            self._active_turns.add(session_id)
+
+    def end_turn(self, session_id: str) -> None:
+        with self._turn_state_lock:
+            self._active_turns.discard(session_id)
+        self.turn_steer.clear(session_id)
+
+    def submit_steer(self, session_id: str, message: str) -> dict[str, Any]:
+        text = str(message).strip()
+        if not text:
+            raise ValueError("message is required")
+        with self._turn_state_lock:
+            if session_id not in self._active_turns:
+                raise ValueError("no active turn for session")
+        queued = self.turn_steer.push(session_id, text)
+        return {"ok": True, "queued": queued}
 
     def lock_for(self, session_id: str) -> threading.Lock:
         with self._global:
@@ -249,85 +283,83 @@ class WebRuntime:
 
         from dataclasses import replace  # noqa: PLC0415
 
-        from harnesslab.cli import _make_dynamic_blocks_provider  # noqa: PLC0415
         from harnesslab.core.operator_config import save_operator_config  # noqa: PLC0415
-        from harnesslab.providers.deepseek import tool_specs_from_registry  # noqa: PLC0415
-        from harnesslab.providers.registry import create_model, normalize_backend  # noqa: PLC0415
 
-        # Resolve target backend either explicitly or via model_id → provider.
-        if backend:
-            norm = normalize_backend(backend)
-        elif model_id:
-            try:
-                from harnesslab.providers.catalog import ModelCatalog  # noqa: PLC0415
-
-                entry = ModelCatalog().get(model_id)
-                norm = _PROVIDER_TO_BACKEND.get(entry.provider, entry.provider)
-            except KeyError:
-                raise ValueError(f"unknown model: {model_id}") from None
-        else:
-            raise ValueError("either 'backend' or 'model_id' must be provided")
+        norm = resolve_target_backend(backend=backend, model_id=model_id)
 
         with self._model_lock:
-            # Apply config tweaks before constructing the new model.
             if self.operator_config is not None:
                 cfg = self.operator_config
-                changes: dict[str, Any] = {"model_backend": norm}
-                if norm == "deepseek":
-                    if model_id:
-                        changes["deepseek_model_name"] = model_id
-                    if effort:
-                        thinking, reasoning = apply_deepseek_ui_effort(effort)
-                        changes["deepseek_thinking"] = thinking
-                        changes["deepseek_reasoning_effort"] = reasoning
-                elif norm == "anthropic":
-                    if model_id:
-                        changes["anthropic_model_name"] = model_id
-                    if effort:
-                        changes["anthropic_thinking_effort"] = effort
-                        changes["anthropic_thinking"] = "enabled"
-                elif norm == "openai":
-                    if model_id:
-                        changes["openai_model_name"] = model_id
-                    if effort:
-                        changes["openai_reasoning_effort"] = effort
-                elif norm == "gemini":
-                    if model_id:
-                        changes["gemini_model_name"] = model_id
-                    if effort:
-                        changes["gemini_thinking_level"] = effort
+                changes = config_changes_for_model_selection(
+                    norm, model_id=model_id, effort=effort
+                )
                 if changes:
                     self.operator_config = replace(cfg, **changes)
                     save_operator_config(self.operator_config)
 
-            model = create_model(
-                norm,
-                config=self.operator_config,
-                tool_specs_provider=lambda: tool_specs_from_registry(
-                    self.loop._tools.list()  # noqa: SLF001
-                ),
-                dynamic_blocks_provider=_make_dynamic_blocks_provider(
-                    self.workspace_root,
-                    self.loop._tools,  # noqa: SLF001
-                    skill_selection_mode="heuristic",
-                    planning_mode="off",
-                ),
-            )
-            self.loop._model = model  # noqa: SLF001
+            self._install_loop_model(norm, model_id=model_id, config=self.operator_config)
             self.model_backend = norm
             self.settings["model_backend"] = norm
-            resolved_model_id = model_id or model_id_for_backend(
-                norm, config=self.operator_config
-            )
-            self.loop._limits = align_runtime_limits_with_model(  # noqa: SLF001
-                self.loop._limits,
-                backend=norm,
-                config=self.operator_config,
-                model_id=resolved_model_id,
+
+    def bind_model_for_session(self, session_id: str) -> None:
+        """Bind ``loop._model`` to global or session override without persisting config."""
+
+        session = self.loop._sessions.get(session_id)  # noqa: SLF001
+        with self._model_lock:
+            if session.model_backend is None:
+                norm = self.model_backend
+                effective_cfg = self.operator_config
+            else:
+                norm = session.model_backend
+                effective_cfg = effective_operator_config_for_session(
+                    self.operator_config, session
+                )
+            self._install_loop_model(
+                norm,
+                model_id=session.model_id,
+                config=effective_cfg,
             )
 
+    def _install_loop_model(
+        self,
+        norm: str,
+        *,
+        model_id: str | None,
+        config: Any | None,
+    ) -> None:
+        from harnesslab.cli import _make_dynamic_blocks_provider  # noqa: PLC0415
+        from harnesslab.providers.deepseek import tool_specs_from_registry  # noqa: PLC0415
+        from harnesslab.providers.registry import create_model  # noqa: PLC0415
 
-def _session_json(session: Session, *, memory_notes: str | None = None) -> dict[str, Any]:
+        model = create_model(
+            norm,
+            config=config,
+            tool_specs_provider=lambda: tool_specs_from_registry(
+                self.loop._tools.list()  # noqa: SLF001
+            ),
+            dynamic_blocks_provider=_make_dynamic_blocks_provider(
+                self.workspace_root,
+                self.loop._tools,  # noqa: SLF001
+                skill_selection_mode="heuristic",
+                planning_mode="off",
+            ),
+        )
+        self.loop._model = model  # noqa: SLF001
+        resolved_model_id = model_id or model_id_for_backend(norm, config=config)
+        self.loop._limits = align_runtime_limits_with_model(  # noqa: SLF001
+            self.loop._limits,
+            backend=norm,
+            config=config,
+            model_id=resolved_model_id,
+        )
+
+
+def _session_json(
+    session: Session,
+    *,
+    memory_notes: str | None = None,
+    message_count: int | None = None,
+) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "id": session.id,
         "goal": session.goal,
@@ -338,12 +370,103 @@ def _session_json(session: Session, *, memory_notes: str | None = None) -> dict[
         "created_at": session.created_at.isoformat(),
         "last_step_at": session.last_step_at.isoformat() if session.last_step_at else None,
         "parent_session_id": session.parent_session_id,
-        "message_count": len(session.messages),
+        "model_backend": session.model_backend,
+        "model_id": session.model_id,
+        "model_effort": session.model_effort,
+        "message_count": (
+            message_count if message_count is not None else len(session.messages)
+        ),
         "budget_usage": session.budget_usage.model_dump(mode="json"),
     }
     if memory_notes is not None:
         payload["memory_notes"] = memory_notes
     return payload
+
+
+def _list_sessions(
+    runtime: WebRuntime,
+    *,
+    limit: int,
+    status: str | None,
+    include_id: str | None,
+) -> list[Session]:
+    """Return recent sessions, optionally pinning ``include_id`` for active UI."""
+    store = runtime.loop._sessions  # noqa: SLF001
+    rows = store.list(limit=limit, status=status)
+    if not include_id or any(session.id == include_id for session in rows):
+        return rows
+    try:
+        pinned = store.get(include_id)
+    except KeyError:
+        return rows
+    return [pinned, *rows[: max(0, limit - 1)]]
+
+
+def _message_counts_for_sessions(
+    runtime: WebRuntime,
+    sessions: list[Session],
+) -> dict[str, int]:
+    """Return persisted message counts for list views (messages may be unloaded)."""
+
+    if not sessions:
+        return {}
+    store = runtime.loop._sessions  # noqa: SLF001
+    counter = getattr(store, "message_counts", None)
+    if callable(counter):
+        return counter([session.id for session in sessions])
+    return {session.id: len(session.messages) for session in sessions}
+
+
+def _patch_session(runtime: WebRuntime, session_id: str, body: dict[str, Any]) -> Session:
+    """Update session metadata (title, per-session model override)."""
+
+    has_title = "title" in body
+    has_model = any(
+        key in body for key in ("model_backend", "model_id", "effort", "model_effort")
+    )
+    if not has_title and not has_model:
+        raise ValueError("at least one of title or model fields is required")
+
+    lock = runtime.lock_for(session_id)
+    with lock:
+        store = runtime.loop._sessions  # noqa: SLF001
+        session = store.get(session_id)
+        if has_title:
+            raw = body.get("title")
+            if raw is None:
+                raise ValueError("title must not be null")
+            title = str(raw).strip()
+            if not title:
+                raise ValueError("title must not be empty")
+            if len(title) > TITLE_MAX_LEN:
+                raise ValueError(f"title must be at most {TITLE_MAX_LEN} characters")
+            session.title = title
+        if has_model:
+            apply_session_model_patch(session, body)
+        store.save(session)
+    return session
+
+
+def _run_turn_locked(
+    runtime: WebRuntime,
+    session_id: str,
+    message: str,
+    *,
+    max_steps: int,
+) -> tuple[Session, str]:
+    """Run one user turn under the session lock with steer lifecycle hooks."""
+
+    lock = runtime.lock_for(session_id)
+    with lock:
+        runtime.loop._sessions.get(session_id)  # noqa: SLF001
+        runtime.bind_model_for_session(session_id)
+        runtime.begin_turn(session_id)
+        try:
+            reply = runtime.loop.run_session(session_id, message, max_steps=max_steps)
+            session = runtime.loop._sessions.get(session_id)  # noqa: SLF001
+            return session, reply
+        finally:
+            runtime.end_turn(session_id)
 
 
 def _message_json(msg) -> dict[str, Any]:  # type: ignore[no-untyped-def]
@@ -593,6 +716,14 @@ class _Handler(BaseHTTPRequestHandler):
         except KeyError as exc:
             self._json_error(HTTPStatus.NOT_FOUND, str(exc))
 
+    def do_PATCH(self) -> None:  # noqa: N802
+        try:
+            self._dispatch_patch()
+        except ValueError as exc:
+            self._json_error(HTTPStatus.BAD_REQUEST, str(exc))
+        except KeyError as exc:
+            self._json_error(HTTPStatus.NOT_FOUND, str(exc))
+
     def _dispatch_get(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path
@@ -709,8 +840,22 @@ class _Handler(BaseHTTPRequestHandler):
             qs = parse_qs(parsed.query)
             limit = int(qs.get("limit", ["50"])[0])
             status = qs.get("status", [None])[0]
-            rows = self.runtime.loop._sessions.list(limit=limit, status=status)  # noqa: SLF001
-            return self._json_ok({"sessions": [_session_json(s) for s in rows]})
+            include_id = qs.get("include_id", [None])[0]
+            rows = _list_sessions(
+                self.runtime,
+                limit=limit,
+                status=status,
+                include_id=include_id,
+            )
+            counts = _message_counts_for_sessions(self.runtime, rows)
+            return self._json_ok(
+                {
+                    "sessions": [
+                        _session_json(s, message_count=counts.get(s.id, 0))
+                        for s in rows
+                    ]
+                }
+            )
 
         if path.startswith("/api/sessions/"):
             remainder = path[len("/api/sessions/") :].strip("/")
@@ -749,6 +894,19 @@ class _Handler(BaseHTTPRequestHandler):
                     )
                 )
             raise ValueError("invalid session path")
+
+        self._json_error(HTTPStatus.NOT_FOUND, "not found")
+
+    def _dispatch_patch(self) -> None:
+        parsed = urlparse(self.path)
+        path = parsed.path
+        body = _read_json(self)
+
+        if path.startswith("/api/sessions/"):
+            remainder = path[len("/api/sessions/") :].strip("/")
+            if remainder and "/" not in remainder:
+                session = _patch_session(self.runtime, remainder, body)
+                return self._json_ok({"session": _session_json(session)})
 
         self._json_error(HTTPStatus.NOT_FOUND, "not found")
 
@@ -795,10 +953,12 @@ class _Handler(BaseHTTPRequestHandler):
                     max_steps=max_steps,
                     is_new=True,
                 )
-            lock = self.runtime.lock_for(session.id)
-            with lock:
-                reply = self.runtime.loop.run_session(session.id, message, max_steps=max_steps)
-                session = self.runtime.loop._sessions.get(session.id)  # noqa: SLF001
+            session, reply = _run_turn_locked(
+                self.runtime,
+                session.id,
+                message,
+                max_steps=max_steps,
+            )
             return self._json_ok(self._turn_payload(session, reply))
 
         if path.startswith("/api/sessions/"):
@@ -818,14 +978,28 @@ class _Handler(BaseHTTPRequestHandler):
                         max_steps=max_steps,
                         is_new=False,
                     )
-                lock = self.runtime.lock_for(session_id)
-                with lock:
-                    self.runtime.loop._sessions.get(session_id)  # noqa: SLF001
-                    reply = self.runtime.loop.run_session(
-                        session_id, message, max_steps=max_steps
-                    )
-                    session = self.runtime.loop._sessions.get(session_id)  # noqa: SLF001
+                session, reply = _run_turn_locked(
+                    self.runtime,
+                    session_id,
+                    message,
+                    max_steps=max_steps,
+                )
                 return self._json_ok(self._turn_payload(session, reply))
+
+            if remainder.endswith("/steer"):
+                session_id = remainder[: -len("/steer")].strip("/")
+                if not session_id:
+                    raise ValueError("session id required")
+                message = str(body.get("message", "")).strip()
+                self.runtime.loop._sessions.get(session_id)  # noqa: SLF001
+                try:
+                    result = self.runtime.submit_steer(session_id, message)
+                except ValueError as exc:
+                    if "no active turn" in str(exc):
+                        self._json_error(HTTPStatus.CONFLICT, str(exc))
+                        return
+                    raise
+                return self._json_ok(result)
 
             if remainder.endswith("/fork"):
                 session_id = remainder[: -len("/fork")].strip("/")
@@ -978,8 +1152,13 @@ class _Handler(BaseHTTPRequestHandler):
             with lock:
                 if not is_new:
                     loop._sessions.get(session_id)  # noqa: SLF001
-                reply = loop.run_session(session_id, message, max_steps=max_steps)
-                session = loop._sessions.get(session_id)  # noqa: SLF001
+                self.runtime.bind_model_for_session(session_id)
+                self.runtime.begin_turn(session_id)
+                try:
+                    reply = loop.run_session(session_id, message, max_steps=max_steps)
+                    session = loop._sessions.get(session_id)  # noqa: SLF001
+                finally:
+                    self.runtime.end_turn(session_id)
             write("done", self._turn_payload(session, reply))
         except Exception as exc:  # noqa: BLE001 — surface to browser
             write("error", {"message": str(exc)})
