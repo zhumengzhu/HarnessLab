@@ -1,0 +1,85 @@
+# HarnessLab CI — packaging, Python quality gate, and Web UI build/tests.
+#
+# Runs on push/PR to main. Complements eval.yml (eval regression on PRs).
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install dependencies
+        run: uv sync --frozen
+
+      - name: Package layout check
+        run: uv run python scripts/check_package_layout.py
+
+      - name: Ruff
+        run: uv run ruff check
+
+      - name: Unit tests
+        run: uv run pytest -m "not network"
+
+      - name: Build wheel (hatch force-include sanity)
+        run: uv build
+
+  webui:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: webui
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run check
+
+      - name: Unit tests
+        run: bun run test
+
+      - name: Production build
+        run: bun run build
+
+      - name: Set up Python (E2E serve)
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+
+      - name: Install Python deps
+        run: uv sync --frozen
+
+      - name: Install Playwright Chromium
+        run: bunx playwright install chromium
+
+      - name: Playwright E2E smoke
+        run: bun run test:e2e

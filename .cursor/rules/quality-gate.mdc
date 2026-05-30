@@ -5,21 +5,26 @@ alwaysApply: true
 
 # HarnessLab Quality Gate
 
-Before creating ANY git commit in this repository, the agent MUST run both:
+Before creating ANY git commit in this repository, the agent MUST run:
 
 ```bash
+uv run python scripts/check_package_layout.py
 uv run pytest
 uv run ruff check
 ```
 
-Only proceed with `git commit` if both succeed. If either fails, fix the
+Only proceed with `git commit` if all succeed. If any fails, fix the
 issue first and re-run the gate.
 
 This is also enforced by the local pre-commit hook
 (`.pre-commit-config.yaml`), but the agent should never rely on the hook
 alone — running the gate explicitly produces clearer error context and
-matches the workflow defined in `AGENTS.md` ("Before completing non-trivial
-changes, run: uv run pytest, uv run ruff check").
+matches the workflow defined in `AGENTS.md`.
+
+The `package-check` hook validates `[tool.hatch.build.targets.wheel]`
+`packages` and `force-include` paths so deleted assets (e.g. legacy
+`web/static/`) cannot drift from `pyproject.toml`. CI runs `uv build` for
+the same reason on every push/PR (`/.github/workflows/ci.yml`).
 
 ## On contract changes
 

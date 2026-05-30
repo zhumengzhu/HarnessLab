@@ -237,8 +237,10 @@ uv run harnesslab propose --trace .harnesslab/trace.jsonl --eval-report eval/rep
 HarnessLab welcomes PRs that keep the harness **readable and testable**.
 
 1. Read [`AGENTS.md`](AGENTS.md) — architecture rules, proposal policy, quality gate.
-2. Before commit: `uv run pytest` and `uv run ruff check` (also enforced by
-   pre-commit).
+2. Before commit: `uv run python scripts/check_package_layout.py`,
+   `uv run pytest`, and `uv run ruff check` (also enforced by pre-commit).
+   CI (`.github/workflows/ci.yml`) additionally runs `uv build` and Web UI
+   tests on push/PR to `main`.
 3. Behavior or **Port** contract changes → update `docs/architecture/*` and
    tests in the same PR.
 4. Intentional eval baseline changes → `uv run harnesslab eval --update-baseline`

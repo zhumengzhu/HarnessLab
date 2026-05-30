@@ -172,7 +172,7 @@ def resolve_bun_executable() -> Path | None:
 
 
 def build_web_ui() -> int:
-    """Run ``bun run build`` in ``webui/`` (Vite → ``static_ts/``)."""
+    """Run ``bun run check`` then ``bun run build`` in ``webui/`` (Vite → ``static_ts/``)."""
 
     if not WEBUI_DIR.is_dir():
         print(f"webui directory not found: {WEBUI_DIR}", file=sys.stderr)
@@ -186,15 +186,16 @@ def build_web_ui() -> int:
         )
         return 1
 
-    print(f"Building TS web UI ({bun} run build in webui/)...")
-    proc = subprocess.run(
-        [str(bun), "run", "build"],
-        cwd=WEBUI_DIR,
-        check=False,
-    )
-    if proc.returncode != 0:
-        print("Web UI build failed", file=sys.stderr)
-        return proc.returncode
+    for step in ("check", "build"):
+        print(f"TS web UI ({bun} run {step} in webui/)...")
+        proc = subprocess.run(
+            [str(bun), "run", step],
+            cwd=WEBUI_DIR,
+            check=False,
+        )
+        if proc.returncode != 0:
+            print(f"Web UI {step} failed", file=sys.stderr)
+            return proc.returncode
 
     print(f"Web UI build ok — output: {STATIC_TS_DIR.relative_to(ROOT)}/")
     return 0

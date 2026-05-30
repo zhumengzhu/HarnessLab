@@ -8,12 +8,26 @@ repos:
         pass_filenames: false
         always_run: true
         stages: [pre-commit]
+      - id: package-check
+        name: package layout check
+        entry: uv run python scripts/check_package_layout.py
+        language: system
+        pass_filenames: false
+        always_run: true
+        stages: [pre-commit]
       - id: pytest
         name: pytest
         entry: uv run pytest
         language: system
         pass_filenames: false
         always_run: true
+        stages: [pre-commit]
+      - id: webui-typecheck
+        name: webui typecheck
+        entry: bash -c 'cd webui && bun run check'
+        language: system
+        files: ^webui/
+        pass_filenames: false
         stages: [pre-commit]
       - id: eval
         name: harnesslab eval (manual)

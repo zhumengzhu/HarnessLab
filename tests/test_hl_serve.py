@@ -87,7 +87,7 @@ def test_build_web_ui_runs_bun_build(monkeypatch, tmp_path: Path) -> None:
 
     monkeypatch.setattr(_HL_SERVE.subprocess, "run", fake_run)
     assert _HL_SERVE.build_web_ui() == 0
-    assert calls == [[str(bun), "run", "build"]]
+    assert calls == [[str(bun), "run", "check"], [str(bun), "run", "build"]]
 
 
 def test_build_flag_without_restart_errors(capsys) -> None:

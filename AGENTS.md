@@ -151,6 +151,7 @@ Never bypass policy checks for convenience.
 Before completing non-trivial changes, run:
 
 ```bash
+uv run python scripts/check_package_layout.py
 uv run pytest
 uv run ruff check
 ```
