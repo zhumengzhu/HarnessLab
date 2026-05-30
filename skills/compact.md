@@ -15,8 +15,8 @@ without waiting for the automatic threshold.
 1. Older messages are summarized into one `<system-reminder>` block.
 2. The last **K** messages are kept verbatim (`compaction_keep_last_messages`
    in operator config; default 20).
-3. Trace events: `compaction_started` / `compaction_completed` with
-   `trigger: manual`.
+3. A **`context.compact`** span is recorded with `harnesslab.compaction.trigger:
+   manual` (and before/after message counts).
 
 ## Thinking / reasoning after compact
 

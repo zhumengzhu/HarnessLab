@@ -175,14 +175,14 @@ Suggested fields:
 - `output`: normalized output text
 - `error` (optional): failure reason
 
-## TraceEvent
+## TraceEvent (legacy — v1 only)
 
-> **Status:** Current runtime contract (v1). Target replacement:
-> [`SpanRecord`](#spanrecord-v2--design-approved-not-shipped) per
-> [`observability-v2.md`](observability-v2.md). Retired at cutover — no
-> prolonged dual-write.
+> **Legacy reference.** New runs emit **`SpanRecord`** rows to `.harnesslab/spans.jsonl`
+> only ([`observability-v2.md`](observability-v2.md)). The flat `TraceEvent` shape
+> below documents v1 JSONL for reading old files and migration tables — not current
+> runtime behavior.
 
-Represents one telemetry event for replay and debugging.
+Represents one v1 flat telemetry event (historical).
 
 Top-level fields:
 
@@ -245,12 +245,13 @@ outputs that embed workspace paths.
 
 The Web UI may receive **non-trace** SSE events during a turn:
 ``reasoning_delta`` and ``assistant_delta`` (token streaming). These are
-ephemeral UI payloads — not appended to ``trace.jsonl`` — and are excluded
+ephemeral UI payloads — not appended to ``spans.jsonl`` — and are excluded
 from replay. See ``docs/architecture/webui-design.md`` § SSE.
 
 ### ContextSnapshot payload shape (Phase 2.6)
 
-Attached to every `model_call.payload.context`:
+Attached to every **`llm.generate`** span as `metrics.context` (v1:
+`model_call.payload.context`):
 
 | Field | Source |
 | --- | --- |

@@ -18,7 +18,7 @@ the smallest PoC that would yield a real product signal.
 The current loop is fundamentally **one agent, one session, one trace**.
 That has been the right default through Phase 5 because it keeps:
 
-- a single source of truth for what happened (`trace.jsonl`)
+- a single source of truth for what happened (`.harnesslab/spans.jsonl`)
 - a single replayable contract (`ReplayModel` + `FrozenClock`)
 - a single policy boundary (`PolicyPort` between loop and tools)
 
@@ -130,7 +130,7 @@ We deliberately **reject**:
 | Identity of a sub-agent | `Session` row | A spawned sub-agent is a child `Session` with `parent_session_id` set (already supported by `fork`). |
 | Communication | `Session.messages` + a new `assistant` message kind tag | Parent reads the child's `final` message via `SessionStorePort.get(child_id)`. |
 | Policy isolation | `PolicyPort` + shell profiles | Child session created with its own `policy_profile` and tool allowlist. |
-| Tracing | One `TraceRecorderPort` per process | Same recorder; events carry `session_id` already; add `parent_session_id` to `session_started` payload. |
+| Tracing | One `SpanRecorderPort` per process | Same recorder; spans carry `session_id`; child turns link via `sub_agent.run` + span links (shipped Phase 6). |
 | Replay | `ReplayModel` + `FrozenClock` | Replay the parent and each child independently; an integration replay step (Phase 6.x) cross-links them by ID. |
 | Memory | `MemoryStorePort` (KV) | Child gets a scoped namespace (`session:{child_id}:notes`); parent can read child notes after completion. |
 | Artifacts (Phase 5.2) | `ArtifactStorePort` | Refs are valid across parent + child sessions in the same workspace. |
@@ -145,7 +145,7 @@ signal we picked a shape that the rest of HarnessLab already accommodates.
 1. **Spawn API surface.** Does the parent issue a tool call
    (`tool_name: spawn_sub_agent`) or a new `Decision.kind: spawn`?
    - *Recommendation:* a built-in tool, behind policy, so existing
-     `tool_executed` / `tool_denied` event types cover it. Avoids a new
+     **`tool.spawn_sub_agent`** (or policy deny) span semantics cover it. Avoids a new
      decision kind.
 2. **Synchronous vs. async sub-agents.** Does the parent block on the
    child, or does the child run in the background and post results
@@ -165,8 +165,8 @@ signal we picked a shape that the rest of HarnessLab already accommodates.
 5. **Determinism.** A supervisor that picks "which sub-agent" can
    diverge on rerun.
    - *Recommendation:* sub-agent spawn arguments must be a deterministic
-     function of the parent's `Decision`. Trace replay drives the same
-     spawn from the same recorded `tool_executed`.
+     function of the parent's `Decision`. Span replay drives the same
+     spawn from the same recorded **`tool.spawn_sub_agent`** span attrs.
 6. **Failure model.** What does the parent see if the child crashes,
    exceeds `max_steps`, or returns `ask_user`?
    - *Recommendation:* the parent's `spawn_sub_agent` tool returns a

@@ -400,7 +400,8 @@ Local rebuild after Web UI edits:
 ## 相关文档
 
 - `docs/architecture/overview.md` — Web Chat 架构与端点
-- `docs/architecture/data-model.md` — Message / TraceEvent 契约
+- `docs/architecture/data-model.md` — Message / SpanRecord 契约（legacy TraceEvent 见同文件）
+- `docs/architecture/observability-v2.md` — span 生命周期与 replay
 - `docs/architecture/frontend-ts-migration.md` — TS WebUI 目录与 SSE 抽象
 - `docs/architecture/model-parameters.md` — thinking / effort 控件
 - [`docs/README.md`](../README.md) — full documentation index

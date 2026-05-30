@@ -22,13 +22,14 @@ Related docs:
 
 ---
 
-## Background
+## Background (v1 pain — resolved at cutover)
 
-HarnessLab today records **flat audit events** (`step_started`, `model_call`,
-`tool_executed`, …) via `TraceRecorderPort.record(TraceEvent)`. Each row has
-no `parent_span_id`. The Web UI reconstructs a Jaeger-style tree in the
-browser (`buildTraceSpanTree.ts`) by guessing parentage from event order and
-type — an approximation documented in [`webui-design.md`](webui-design.md).
+Before Observability v2 shipped, HarnessLab recorded **flat audit events**
+(`step_started`, `model_call`, `tool_executed`, …) via
+`TraceRecorderPort.record(TraceEvent)`. Each row had no `parent_span_id`. The
+Web UI reconstructed a Jaeger-style tree in the browser (`buildTraceSpanTree.ts`)
+by guessing parentage from event order and type — an approximation documented in
+[`webui-design.md`](webui-design.md).
 
 Post-MVP P7 added an optional **OTel fan-out** (`OtelTraceRecorder`) that
 maps each flat event to a **zero-duration, sibling span**. That proves OTLP

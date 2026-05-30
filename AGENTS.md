@@ -43,7 +43,8 @@ Must include (current):
 - Session as first-class citizen (persist, list, resume, fork)
 - Session- and workspace-scoped memory (`/remember`, `/remember-global`)
 - Manual context compaction (`/compact`; auto threshold + overflow recovery)
-- Per-call context observability (`ContextSnapshot` on `model_call`)
+- Per-call context observability (`ContextSnapshot` on **`llm.generate`**
+  span `metrics.context`)
 - Local Web chat UI (`harnesslab serve`, `./hl-serve`) — TS default when built;
   SSE step + token streaming, slash command palette, settings panel, tool cards
 - Optional LLM session auto-titles after first turn (DeepSeek only)
@@ -77,9 +78,8 @@ Must NOT include yet:
  `assistant`, and `plan` continue until `max_steps` or a terminal
  decision.
 - Before each model call the loop may compact older messages
-  (`compaction_started` / `compaction_completed` trace events). Adapters
-  raise `ModelOverflowError` on context overflow; the loop compacts once
-  and retries.
+  ( **`context.compact`** spans). Adapters raise `ModelOverflowError` on
+  context overflow; the loop compacts once and retries.
 - Provider adapters consume `PromptComposer` output — do not hardcode system
   prompts in `providers/` except via composer blocks.
 - Session lifecycle fields (`status`, `step_count`, `last_step_at`,
@@ -99,7 +99,7 @@ Must NOT include yet:
 - `src/harnesslab/telemetry`: trace recording and metrics aggregation
 - `src/harnesslab/providers`: external `ModelPort` adapters (e.g. DeepSeek)
 - `src/harnesslab/eval`: YAML task suite and regression runner
-- `src/harnesslab/replay`: trace reader, replayer, divergence detector
+- `src/harnesslab/replay`: span reader, replayer, divergence detector
 - `src/harnesslab/improve`: advisory proposal generator
 - `src/harnesslab/web`: localhost Web UI (`harnesslab serve`); lifecycle
   helper `./hl-serve` (`scripts/hl_serve.py`)
@@ -112,7 +112,8 @@ Must NOT include yet:
 2. Prefer ports-and-adapters over direct coupling.
 3. Enforce policy checks before all tool execution.
 4. Keep loop behavior deterministic where practical.
-5. Record key runtime actions with trace events.
+5. Record key runtime actions as completed spans (see
+   [`docs/architecture/observability-v2.md`](docs/architecture/observability-v2.md)).
 
 Stable contract names:
 
@@ -171,6 +172,7 @@ Core docs:
 - `docs/architecture/overview.md`
 - `docs/architecture/tool-runtime.md`
 - `docs/architecture/data-model.md`
+- `docs/architecture/observability-v2.md`
 - `docs/architecture/diagram-conventions.md`
 
 Mermaid diagrams must follow `docs/architecture/diagram-conventions.md`.
@@ -199,9 +201,9 @@ Rules:
    or key-like fixtures.
 4. Provider failures must degrade to normalized assistant responses, not
    unhandled exceptions that break the loop.
-5. Provider telemetry and `ContextSnapshot` belong in `model_call` trace
-   payload; treat token counters, model names, and `context` as volatile
-   in semantic replay compare.
+5. Provider telemetry and `ContextSnapshot` belong in **`llm.generate`**
+   span `metrics`; treat token counters, model names, and `metrics.context`
+   as volatile in semantic replay compare.
 
 ## Proposal Handling
 

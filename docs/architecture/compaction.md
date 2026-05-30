@@ -6,7 +6,7 @@ within the configured context budget. Compaction is **loop-owned**
 `ModelOverflowError`.
 
 See also: [`skills/compact.md`](../../skills/compact.md) (operator guide),
-[`data-model.md`](data-model.md) (trace payloads),
+[`data-model.md`](data-model.md) (`context.compact` spans),
 [`overview.md`](overview.md) (loop integration).
 
 ## Why compaction exists
@@ -35,7 +35,7 @@ flowchart TD
     Emergency --> Retry[Retry model call once]
     Overflow -->|no| Continue[Continue loop]
     AutoCompact --> ModelCall
-    ManualCompact --> Done[session_finished reason=compact]
+    ManualCompact --> Done[turn ends after compact — no model call]
 ```
 
 | Trigger | When | `keep_last` | Model call? |
@@ -44,8 +44,9 @@ flowchart TD
 | `overflow` | Adapter raises `ModelOverflowError` | `max(1, configured // 2)` | Yes — one retry |
 | `manual` | User sends `/compact` (Web UI or CLI) | configured `keep_last` | **No** — compaction only |
 
-Trace events: `compaction_started` (with `trigger`) → `compaction_completed`.
-Manual compaction ends the turn with `session_finished` reason `compact`.
+Telemetry: each compaction opens a **`context.compact`** span with
+`harnesslab.compaction.trigger` (`threshold` | `overflow` | `manual`) and
+before/after message counts. Manual `/compact` ends the turn without a model call.
 
 ## Algorithm
 
@@ -60,13 +61,14 @@ Manual compaction ends the turn with `session_finished` reason `compact`.
    </system-reminder>
    ```
 
-4. Recompute token estimate for trace payload.
+4. Recompute token estimate for the next **`llm.generate`** span metrics.
 
 ### Token estimation
 
 `estimate_tokens(text) = max(1, len(text) // 4)` — intentionally
 model-agnostic so the loop can decide **whether** to compact without a
-vendor tokenizer. Adapters may report finer counts in `model_call.context`.
+vendor tokenizer. Adapters may report finer counts in **`llm.generate`**
+`metrics.context`.
 
 ### Summarizers
 

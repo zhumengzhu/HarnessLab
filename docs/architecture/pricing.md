@@ -14,7 +14,7 @@ trace and budget ledger.
 | --- | --- |
 | **Multi-vendor** | One `CanonicalUsage` shape; per-provider `normalize_usage` branches |
 | **Cache-aware** | Separate `cache_read`, `cache_write`, optional TTL tiers |
-| **Observable** | `usage_breakdown` + `cost_estimate` on every `model_call` trace |
+| **Observable** | `usage_breakdown` + `cost_estimate` on every `llm.generate` span (`SpanRecord.metrics`) |
 | **Budget-safe** | Session `budget_usage.cost_usd_total` uses the same estimator |
 | **Simple to extend** | JSON catalog + small Python package; no runtime network fetch (P0–P1) |
 | **Migration-friendly** | Legacy `request_tokens` / `response_tokens` preserved for replay |
@@ -63,7 +63,7 @@ flowchart LR
     subgraph runtime [Runtime]
         META[usage_meta_from_response]
         LOOP[HarnessLoop]
-        TRACE[model_call trace]
+        TRACE[llm.generate span]
         BUDGET[session.budget_usage]
         USAGE[/api/usage]
     end
@@ -124,7 +124,7 @@ All providers map into fixed **billing dimensions**:
 | `cache_write_1h` | Anthropic 1-hour cache write tier (P2) |
 | `reasoning` | Reasoning / thinking tokens when billed separately |
 
-Aggregates (for budget counters and legacy traces):
+Aggregates (for budget counters and span metrics):
 
 - `prompt_tokens` = input + all cache_* buckets
 - `response_tokens` (legacy field) = output + reasoning
@@ -244,7 +244,7 @@ Legacy key `fx_to_usd` is still accepted as an alias for `usd_per_unit`.
 cost = sum(tokens[d] * rates_per_million[d] for d in usage.to_breakdown()) / 1_000_000
 ```
 
-`CostResult` fields written to trace:
+`CostResult` fields written to **`llm.generate`** span metrics:
 
 | Field | Purpose |
 | --- | --- |
@@ -257,14 +257,18 @@ cost = sum(tokens[d] * rates_per_million[d] for d in usage.to_breakdown()) / 1_0
 
 ## Trace and budget integration
 
-### `model_call` payload (additive)
+Telemetry is **span-first** ([`observability-v2.md`](observability-v2.md)). Pricing
+fields live on completed **`llm.generate`** spans in `SpanRecord.metrics` (legacy
+v1 `TraceEvent` / `model_call` payloads are historical only).
+
+### `llm.generate` metrics (additive)
 
 Existing fields unchanged. New optional keys:
 
 | Key | Type | Description |
 | --- | --- | --- |
 | `usage_breakdown` | `dict[str, int]` | Canonical dimension counts |
-| `cost_estimate` | `object` | `CostResult.to_trace_dict()` |
+| `cost_estimate` | `object` | `CostResult.to_trace_dict()` (stored in span metrics) |
 
 After each model call, `HarnessLoop._accumulate_model_cost`:
 
@@ -277,10 +281,10 @@ Budget guardrails (Phase 5.10) continue to use USD totals; see
 
 ### Usage API
 
-`GET /api/usage` aggregates `model_call` events via `usage_aggregate.py`:
+`GET /api/usage` aggregates completed **`llm.generate`** spans via `usage_aggregate.py`:
 
 - Totals and buckets include `dimensions` (per canonical key)
-- Cost prefers trace `cost_estimate.amount_usd`, else re-estimates from breakdown
+- Cost prefers span `metrics.cost_estimate.amount_usd`, else re-estimates from breakdown
 
 ## Configuration
 
@@ -330,7 +334,7 @@ Usage UI shows `cost_display` when `display_currency` ≠ USD.
 | Phase | Scope | Status |
 | --- | --- | --- |
 | **P0** | Package split, catalog JSON, `normalize_usage`, `estimate_call_cost` | **Done** |
-| **P1** | Adapters → `usage_meta_from_response`; loop trace + budget; Usage API dimensions | **Done** |
+| **P1** | Adapters → `usage_meta_from_response`; loop span metrics + budget; Usage API dimensions | **Done** |
 | **P2** | User override file; CNY display; Anthropic 5m/1h cache_write split; Usage dimension legend | **Done** |
 | **P3** | Tiered pricing; `pricing audit` CLI; `estimate_call_cost_decimal` | **Done** |
 
@@ -396,6 +400,7 @@ in the same PR.
 ## Related docs
 
 - [`provider-expansion.md`](provider-expansion.md) — adapters and usage field shapes
-- [`data-model.md`](data-model.md) — `model_call` trace contract
+- [`data-model.md`](data-model.md) — `SpanRecord` / `llm.generate` metrics contract
+- [`observability-v2.md`](observability-v2.md) — span lifecycle and persistence
 - [`overview.md`](overview.md) — budget guardrails
 - [`../guides/web-research-providers.md`](../guides/web-research-providers.md) — non-LLM provider pricing

@@ -74,7 +74,7 @@ flowchart TD
    - YAML task suites, pass rate tracking, and regression gating
    - `harnesslab eval` CLI subcommand; baseline JSON in-repo
 8. `replay`
-   - Trace reader, deterministic session replayer, divergence detector
+   - Span reader, deterministic session replayer, divergence detector
    - `harnesslab replay` / `harnesslab metrics` CLI subcommands
 9. `improve`
    - Failure fingerprinting, clustering, advisory proposal generation
@@ -92,8 +92,9 @@ flowchart TD
    - `LiveSummarizer` (opt-in LLM summary) + `ModelOverflowError`
      contract between adapters and the loop
 13. `core/context` (Phase 2.6)
-   - `ContextSnapshot` published on every `model_call` event;
-     surfaced through `harnesslab context` and `harnesslab metrics`
+   - `ContextSnapshot` published on every **`llm.generate`** span
+     (`SpanRecord.metrics.context`); surfaced through `harnesslab context`
+     and `harnesslab metrics`
 14. `web` (Phase 3.2)
    - Localhost HTTP server + static chat UI (`harnesslab serve`)
    - Thin JSON API over the same `HarnessLoop` / SQLite sessions
@@ -104,24 +105,23 @@ flowchart TD
 ## Runtime Flow (Multi-step Session — Phase 2.1)
 
 `run_session(session_id, user_input, max_steps=N)` drives the
-inner agent loop. Each iteration emits `step_started`, calls the
-model, applies the decision, and emits `step_completed`. The loop
-exits on a terminal decision (`Decision.kind ∈ {final, ask_user}`)
-or when `max_steps` is reached.
+inner agent loop. Each iteration opens **`harnesslab.step`** spans, calls the
+model under **`llm.generate`**, runs tools under **`tool.{name}`**, and exits
+on a terminal decision (`Decision.kind ∈ {final, ask_user}`) or when
+`max_steps` is reached. See [`observability-v2.md`](observability-v2.md) for
+the normative span tree.
 
 1. `start(goal=...)` opens the session and derives a short
    `title` from the goal.
 2. `run_session` appends the user message, then enters the inner
    loop:
    - `_maybe_compact` runs against the session message list. When
-     `should_compact(messages, threshold) == True`, emit
-     `compaction_started(trigger=threshold)`, summarize older
-     messages, emit `compaction_completed`.
+     `should_compact(messages, threshold) == True`, open a
+     **`context.compact`** span, summarize older messages, end span.
    - `_call_model_with_overflow` calls the model. On
-     `ModelOverflowError`, emit
-     `compaction_started(trigger=overflow)`, compact more
-     aggressively (`keep_last = max(1, configured // 2)`), and
-     retry the call once.
+     `ModelOverflowError`, compact more aggressively
+     (`keep_last = max(1, configured // 2)`) under another
+     **`context.compact`** span, and retry once.
   - The model returns a `Decision` (`assistant | plan | tool | final |
     ask_user`).
    - For `tool`, policy validates; if allowed, the tool runs and
@@ -130,17 +130,17 @@ or when `max_steps` is reached.
   - For `assistant`, the assistant text is appended and the loop
     continues.
   - For `plan`, the assistant plan text is appended with
-    `provider_extra.is_plan=true`; trace emits `plan_emitted`.
+    `provider_extra.is_plan=true`; a **`plan_emitted`** span event records it.
     Optional `replan_after_steps` emits a system reminder
     (`plan_recheck_requested`) after N non-terminal steps.
    - For `final` / `ask_user`, the loop exits.
-3. `session_finished` is recorded with the terminal reason
+3. Turn completes; **`harnesslab.turn`** span ends with terminal reason
    (`final | ask_user | max_steps`).
 4. `session.status` is updated (`done | waiting_user | running`)
    and persisted.
 5. When a `MemoryStorePort` is wired (Phase 3.3), `/remember <text>`
    stores an explicit note; the next turn injects notes as a `system`
-   message (`memory_read` / `memory_written` trace events).
+   message (`memory_read` / `memory_written` span events).
 
 The single-turn `run_turn(session_id, user_input)` is a
 `run_session(..., max_steps=1)` wrapper kept for backward
@@ -163,12 +163,12 @@ Behavior:
 
 - After each model call the loop accumulates token totals and estimated
   USD cost (canonical `usage_breakdown` + `estimate_call_cost`) into
-  `session.budget_usage`. Trace `model_call` payloads include
+  `session.budget_usage`. **`llm.generate`** span `metrics` include
   `usage_breakdown` and `cost_estimate` when adapters supply them.
-- Soft threshold (`budget.soft_ratio`) emits `budget_soft_threshold` and continues.
-- Hard threshold emits `budget_hard_exceeded`, then applies
+- Soft threshold (`budget.soft_ratio`) emits a **`budget_soft_threshold`** span event and continues.
+- Hard threshold emits **`budget_hard_exceeded`**, then applies
   `budget.action_on_hard` (`ask_user`, `final`, or `error`).
-- The loop records `budget_enforcement_action` when hard limits are enforced.
+- The loop records **`budget_enforcement_action`** when hard limits are enforced.
 
 ```mermaid
 sequenceDiagram
@@ -184,30 +184,30 @@ sequenceDiagram
     User->>CoreLoop: user_input
     CoreLoop->>SessionStore: append user message
     loop inner steps until final, ask_user, or max_steps
-        CoreLoop->>TraceRecorder: step_started
+        CoreLoop->>TraceRecorder: start harnesslab.step
         CoreLoop->>Compaction: maybe compact messages
         CoreLoop->>ModelPort: decide(session, input)
         ModelPort-->>CoreLoop: Decision
-        CoreLoop->>TraceRecorder: model_call + decision_made
+        CoreLoop->>TraceRecorder: end llm.generate (decision attrs + metrics)
         alt tool call
             CoreLoop->>PolicyPort: allow_tool(call)
             alt denied
                 CoreLoop->>SessionStore: append tool message (denied)
-                CoreLoop->>TraceRecorder: tool_denied
+                CoreLoop->>TraceRecorder: tool.* span (policy deny event)
             else allowed
                 CoreLoop->>ToolRuntime: execute(call)
                 ToolRuntime-->>CoreLoop: tool result
                 CoreLoop->>SessionStore: append assistant tool_calls + tool message
-                CoreLoop->>TraceRecorder: tool_executed
+                CoreLoop->>TraceRecorder: end tool.* span
             end
         else assistant (continue)
             CoreLoop->>SessionStore: append assistant message
         else final or ask_user (terminal)
             CoreLoop->>SessionStore: append assistant message
         end
-        CoreLoop->>TraceRecorder: step_completed
+        CoreLoop->>TraceRecorder: end harnesslab.step
     end
-    CoreLoop->>TraceRecorder: session_finished
+    CoreLoop->>TraceRecorder: end harnesslab.turn
     CoreLoop-->>User: last visible response
 ```
 
@@ -268,13 +268,13 @@ at ``WARNING`` unless the app level is ``DEBUG``.
 - Tool lifecycle hooks are opt-in (Phase 5.8): ordered `pre_tool`/`post_tool`
   hook chains can annotate or block tool calls; hook failures are trace-visible
   and non-fatal by default
-- Trace is the source of truth for replay: `user_input_received` plus a
-  full `decision_made` payload (`kind`, `tool_name`, `tool_args`,
-  `assistant_message`) is sufficient to rebuild a `ReplayModel` without
-  consulting the original Session or model
-- Model invocation is now auditable via `model_call` trace events
-  (decision kind, latency, optional token counters/provider meta, and
-  a `ContextSnapshot`)
+- Trace is the source of truth for replay: per-turn **span forests**
+  with stable `harnesslab.decision.*` / tool attrs on **`llm.generate`**
+  and **`tool.{name}`** spans are sufficient to rebuild a `ReplayModel`
+  without consulting the original Session or model
+- Model invocation is auditable via **`llm.generate`** spans (decision kind,
+  latency, optional token counters/provider meta, and `ContextSnapshot`
+  under `metrics.context`)
 - The agent loop is autonomous (Phase 2.1): the model decides when to
   stop (`Decision.kind ∈ {final, ask_user}`); the loop never returns
   to the user mid-task on its own — only on a terminal decision or
@@ -293,9 +293,9 @@ at ``WARNING`` unless the app level is ``DEBUG``.
   `ModelOverflowError` from the adapter triggers emergency compaction
   with a retry. Summarization defaults to a deterministic fallback;
   `LiveSummarizer` is an opt-in LLM-backed wrapper
-- Context usage is observable per-call (Phase 2.6): every `model_call`
-  carries a `ContextSnapshot`, and `harnesslab context show/series`
-  surfaces it without requiring trace replay
+- Context usage is observable per-call (Phase 2.6): every **`llm.generate`**
+  span carries `metrics.context` (`ContextSnapshot`), and `harnesslab context show/series`
+  surfaces it without requiring span replay
 
 ## Replay & Divergence Model (Step 5)
 
@@ -365,9 +365,9 @@ Failure signal sources and their fingerprint shapes:
 
 | Source | Trigger | Fingerprint |
 | --- | --- | --- |
-| trace | `tool_executed.ok=false` | `tool_executed:<tool>:<short_error>` |
-| trace | `tool_denied` | `tool_denied:<tool>:<short_reason>` |
-| trace | `tool_invalid_args` | `tool_invalid_args:<tool>:<short_error>` |
+| spans | `tool.*` span with `harnesslab.tool.ok=false` | `tool_failure:tool_executed:<tool>:<short_error>` |
+| spans | `tool.*` span event `tool.policy_denied` | `policy_denial:tool_denied:<tool>:<short_reason>` |
+| spans | `tool.*` span event `tool.args_invalid` | `invalid_args:tool_invalid_args:<tool>:<short_error>` |
 | eval report | `TaskResult.passed=false` | `eval:<task_name>:<short_failure>` |
 
 `replay` divergences are intentionally **not** failure signals;
@@ -457,21 +457,20 @@ the same code path:
 
 - **Threshold trigger.** Before each model call, the loop runs
   `should_compact(messages, threshold_tokens)`. When
-  `estimate_messages_tokens(messages) > threshold`, the loop
-  emits `compaction_started(trigger=threshold)`, calls
-  `compact_messages(messages, keep_last=K, summarizer=…)`,
-  and emits `compaction_completed` with the resulting message
-  count and token estimate.
+  `estimate_messages_tokens(messages) > threshold`, the loop opens a
+  **`context.compact`** span (`trigger=threshold`), calls
+  `compact_messages(messages, keep_last=K, summarizer=…)`, and ends the span
+  with the resulting message count and token estimate.
 - **Overflow trigger.** Adapters raise `ModelOverflowError`
   when the provider rejects a request because the context window
   is full. `_call_model_with_overflow` catches it, runs an
-  emergency compaction (`keep_last = max(1, configured // 2)`,
-  trigger=`overflow`), retries the model call once, and falls back
+  emergency **`context.compact`** span (`keep_last = max(1, configured // 2)`,
+  `trigger=overflow`), retries the model call once, and falls back
   to a terminal `final` decision with an explanatory message if
   the second attempt also overflows.
 - **Manual trigger.** The slash command ``/compact`` (Web UI palette
-  or CLI) compacts immediately with the configured ``keep_last``,
-  emitting ``compaction_started(trigger=manual)``. See ``skills/compact.md``.
+  or CLI) compacts immediately with the configured ``keep_last`` via a
+  **`context.compact`** span (`trigger=manual`). See ``skills/compact.md``.
 
 Summarization is pluggable. The default `_fallback_summarizer` is
 deterministic and LLM-free (good for tests, eval, and offline
@@ -486,8 +485,8 @@ Durable facts should use ``/remember`` or ``/remember-global``.
 
 ## Context Observability (Phase 2.6)
 
-Every `model_call` event carries a `ContextSnapshot` produced by
-`core/context.py`:
+Every **`llm.generate`** span carries `metrics.context` — a
+`ContextSnapshot` produced by `core/context.py`:
 
 - **Loop-side fields** (always present): `conversation_tokens`,
   `message_count`, `limit_tokens`,
@@ -500,9 +499,9 @@ Every `model_call` event carries a `ContextSnapshot` produced by
 
 `Metrics` aggregates `max_conversation_tokens`,
 `peak_usage_ratio`, `compactions`, and `overflow_recoveries`
-across a trace; `harnesslab context show/series` surfaces the
+across a session's spans; `harnesslab context show/series` surfaces the
 per-call snapshots without needing to replay. The divergence
-detector treats the `context` field as informational (token
+detector treats `metrics.context` as informational (token
 estimates depend on tool outputs that embed workspace paths), so
 adding `ContextSnapshot` did not break eval/replay round-trips.
 
@@ -524,8 +523,8 @@ flowchart LR
     API --> Loop[HarnessLoop.run_session]
     Loop --> Store[SqliteSessionStore]
     Loop --> Spans[SpanHub → spans.jsonl]
-    Browser --> Panel[Tool trace panel]
-    Panel --> API
+    Browser --> TraceTab[Trace / Activity tabs]
+    TraceTab --> API
 ```
 
 See [`web-api.md`](web-api.md) for the full endpoint list. Highlights:
@@ -562,7 +561,7 @@ Initial `Session.title` is derived from the goal string
 `LiveTitleNamer` (enabled for DeepSeek) sends a **minimal** one-shot
 prompt (first user message + short assistant excerpt only) and replaces
 the title when the model returns a plain-text `final` reply. Failures
-are silent; a `session_titled` trace event records successful renames.
+are silent; a successful rename is recorded as an **`llm.title`** span.
 The `simple` model path skips LLM naming so eval/replay stay
 deterministic.
 
@@ -591,11 +590,11 @@ schema (see ``data-model.md``).
 Optional cross-session notes keyed by workspace root hash
 (``workspace:{sha16}:notes``):
 
-| Command | Scope | Trace events |
+| Command | Scope | Span events |
 | --- | --- | --- |
 | ``/remember <text>`` | Current session only | `memory_written` / `memory_read` |
 | ``/remember-global <text>`` | All sessions in workspace | `workspace_memory_written` / `workspace_memory_read` |
-| ``/compact`` | Force compaction now (``trigger=manual``); no model call | `compaction_started` / `compaction_completed` |
+| ``/compact`` | Force compaction now (``trigger=manual``); no model call | `context.compact` (manual) |
 
 Writes are explicit user commands only (no LLM extraction). The loop
 requires ``workspace_root`` on ``HarnessLoop`` for inject/write.

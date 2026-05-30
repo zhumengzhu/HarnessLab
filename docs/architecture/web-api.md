@@ -316,7 +316,7 @@ next model call in the active `run_session` loop (step index ≥ 1).
 - Returns `{ "ok": true, "queued": 1 }` when a turn is active for the session.
 - Returns **409** `{ "error": "no active turn for session" }` when idle (client
   may fall back to queuing the next turn).
-- Emits trace event `user_steer_received`.
+- Emits span event **`user.steer`** on the active step span (via `add_span_event`).
 
 ### `POST /api/sessions/{id}/fork`
 

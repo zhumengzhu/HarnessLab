@@ -144,14 +144,14 @@ out of scope by project charter.
 | Codebase index | 🔲 | Cursor, Cline, Roo Code, Continue, Claude Code all index the repo for ranked retrieval. HarnessLab relies on grep/glob (live, no index). For a *small* workspace this is fine; for a 100k-file monorepo this is the largest gap. |
 | Semantic / vector memory retrieval | 🔲 (deferred) | Roadmap "Deferred" — `SemanticMemoryStorePort` sketch, gated on Phase 5 producing real cross-session research need. |
 | Artifact / blob refs | 🔲 | Phase 5.2 (`ArtifactStorePort`). |
-| Context observability per call | ✅ | `ContextSnapshot` on every `model_call`; `harnesslab context show / series`. **More transparent than most competitors.** |
+| Context observability per call | ✅ | `ContextSnapshot` on every **`llm.generate`** span; `harnesslab context show / series`. **More transparent than most competitors.** |
 
 ### 3.5 Multi-agent & subagents
 
 | Capability | Status | Notes |
 |---|---|---|
-| Parent / child session model | 🟡 | `Session.parent_session_id` exists (used by `fork`); not yet used for spawn. |
-| Spawn sub-agent as a tool | 🔲 (Phase 6 PoC) | Claude Code Task tool, OpenAI Agents SDK Agent tool, LangGraph subgraphs, CrewAI hierarchical process are the four mainstream shapes. |
+| Parent / child session model | ✅ | `Session.parent_session_id` + `spawn_sub_agent` (Phase 6 shipped). |
+| Spawn sub-agent as a tool | ✅ | `tool.spawn_sub_agent` behind policy + span links to child turn traces. |
 | Advisor / executor pattern (small model triages, big model executes) | 🔲 | Claude Code "managed agents" (Code With Claude 2026) — interesting but premature for HarnessLab. |
 | Parallel sub-agents (fleet mode) | 🔲 | Devin's "parallel Devins", Cursor IDE multi-session, Aider+worktrees, GitHub Copilot Agent Tasks REST API. |
 | Worktree isolation per agent | 🔲 | Aider, Claude Code (auto mode + worktrees), GitHub Copilot desktop (per-task git worktrees) all converge here. |
@@ -161,10 +161,10 @@ out of scope by project charter.
 
 | Capability | Status | Notes |
 |---|---|---|
-| JSONL trace (per event) | ✅ | `TraceRecorderPort` + `JsonlTraceRecorder`. |
-| Per-call telemetry (`model_call`, `tool_executed`, `compaction_*`) | ✅ | Includes `ContextSnapshot`. |
-| OTel span fan-out | ✅ | P7 `OtelTraceRecorder`. |
-| OTel metrics histograms | 🟡 | Phase 5.6. |
+| JSONL spans (Observability v2) | ✅ | `SpanRecorderPort` + `LocalSpanRecorder` → `.harnesslab/spans.jsonl`. |
+| Per-call telemetry (`llm.generate`, `tool.*`, `context.compact`) | ✅ | Includes `ContextSnapshot` on `llm.generate` metrics. |
+| OTel span export | ✅ | `OtelSpanRecorder` lifecycle spans (P7 / O4). |
+| OTel metrics histograms | ✅ | Phase 5.6 / O4 — `OtelMetricsRecorder` on completed spans. |
 | Replay + divergence detector | ✅ | Semantic and strict modes; **rare** in this space. LangSmith records but does not re-run. |
 | Eval task suite + baseline gate | ✅ | 14 tasks + `baseline.json` + GH Actions. **Even rarer.** |
 | Checkpoints / `/rewind` | 🔲 | Claude Code snapshots files before each edit and offers a rewind menu (`Esc Esc`, `/rewind`). HarnessLab has none — `apply_patch` + `git` is the de-facto checkpoint. Real ergonomics gap. |

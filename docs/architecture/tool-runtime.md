@@ -199,7 +199,7 @@ HarnessLab 可将外部 [MCP](https://modelcontextprotocol.io/) 服务器的工�
 **与 eval / replay**
 
 - 未配置 MCP 时 runtime 不依赖 MCP SDK。
-- MCP 工具调用走相同 `tool_executed` trace；eval / replay 基线不强制包含 MCP（取决于任务是否启用 MCP config）。
+- MCP 工具调用走相同 **`tool.{name}`** span 语义；eval / replay 基线不强制包含 MCP（取决于任务是否启用 MCP config）。
 
 **浏览器自动化**
 
@@ -222,7 +222,7 @@ Payload fields:
 
 Failure policy:
 
-- Hook failure does not crash the turn; loop emits `hook_failed` and continues.
+- Hook failure does not crash the turn; loop records a **`hook.failed`** span event and continues.
 - `pre_tool` returning `block` yields a normalized tool denial reason.
 
 ### Shell allowlist profiles (Phase 3.4)
@@ -271,56 +271,52 @@ and safe defaults:
 
 ## Auditing and Observability
 
-Each tool call emits exactly one of the following trace events:
+Telemetry is **span-first** ([`observability-v2.md`](observability-v2.md)). Each tool
+invocation opens a **`tool.{name}`** span under the current `harnesslab.step`. Policy
+and schema outcomes are recorded as span **events** and **attributes** (not v1 flat
+`TraceEvent` rows).
 
-- `tool_invalid_args` — schema validation failed; policy and tool were not run
-- `tool_denied` — schema passed but policy denied; tool was not run
-- `tool_executed` — schema passed, policy allowed, tool ran (ok=true/false)
-- `hook_invoked` — a pre/post hook was called
-- `hook_blocked` — a pre hook explicitly blocked the tool
-- `hook_failed` — hook execution failed (non-fatal; loop continues)
+| Outcome | Span / event representation |
+| --- | --- |
+| Invalid args | `tool.{name}` span event `tool.args_invalid` (schema failed; tool not run) |
+| Policy denied | `tool.{name}` span event `tool.policy_denied` (policy blocked; tool not run) |
+| Executed | Completed `tool.{name}` span with `harnesslab.tool.ok` and metrics |
+| Hook invoked | Span event `hook.invoked` on the active step span |
+| Hook blocked | Span event `hook.blocked` (pre hook returned block) |
+| Hook failed | Span event `hook.failed` (non-fatal; loop continues) |
 
-`tool_executed` (and `tool_denied`) carry the following payload fields:
+Completed **`tool.{name}`** spans carry (in attributes / metrics):
 
-- `tool_call_id`: stable ID linking back to `ToolCall.id`
-- `tool`: tool name
-- `args`: invocation arguments
-- `policy_decision`: `allow:<reason>` or `deny:<reason>`
-- `started_at` / `ended_at`: ISO-8601 UTC timestamps (null when denied)
-- `duration_ms`: execution latency (null when denied)
-- `ok`: success boolean (denied events use a separate `tool_denied` event_type)
-- `error`: failure reason (null on success)
-- `output_size`: byte length of the full tool output
-- `output_preview`: first N bytes of `ToolResult.output` (current preview cap: 512)
-- `output_truncated`: whether `output_preview` is shorter than `output_size`
+- `harnesslab.tool_call.id`: stable ID linking back to `ToolCall.id`
+- `harnesslab.tool.name`: tool name
+- tool args (normalized in attributes as applicable)
+- `harnesslab.policy.decision`: `allow:<reason>` or `deny:<reason>`
+- `duration_ms`, `ok`, optional `error` in metrics
+- `output_preview`, `output_size`, `output_truncated` in metrics (volatile in replay compare)
 
-`tool_invalid_args` carries `tool_call_id`, `tool`, `args`, and `error`
-(the schema violation message).
+`tool.args_invalid` events carry the schema violation message on the span.
 
-Separately, the loop emits one `model_call` event per inner step
-before `decision_made`; this is outside tool runtime but often
-correlated in analysis. `model_call` includes:
+Separately, each inner step opens **`llm.generate`** before applying the decision.
+That span's `metrics` include:
 
-- `decision_kind`
-- `latency_ms`
-- `context`: a `ContextSnapshot` (see
-  `docs/architecture/data-model.md` for the field list)
-- optional provider metadata: `model_name`, `provider`,
-  `request_tokens`, `response_tokens`, `total_tokens`
+- `harnesslab.decision.kind` (also on attributes)
+- `latency_ms`, optional token counters / `usage_breakdown` / `cost_estimate`
+- `metrics.context`: a `ContextSnapshot` (see `docs/architecture/data-model.md`)
+- optional `prompt_blocks[]`, `api_messages[]`, `reasoning_text` for operator/debug surfaces
 
-The Phase 2.1 inner loop also wraps every step in
-`step_started` / `step_completed` events and ends each session
-with `session_finished`. Compactions are recorded as
-`compaction_started` (with `trigger: threshold | overflow | manual`) and
-`compaction_completed`. See `docs/architecture/data-model.md`
-for the payload shapes.
+Legacy v1 event names (`tool_executed`, `tool_denied`, `model_call`, …) appear only
+in historical docs and migration tables — see [`observability-v2.md`](observability-v2.md)
+§ v1 → v2 mapping.
 
-These records should be correlated by run/session IDs for replay
-and debugging. All timestamps must come from the injected
-`ClockPort` and IDs from `IdPort` so that replay runs can
-reproduce the exact same trace. `ContextSnapshot` is excluded
-from divergence comparison because its token estimates depend on
-tool outputs that embed workspace paths.
+The Phase 2.1 inner loop wraps each step in **`harnesslab.step`** spans inside a
+**`harnesslab.turn`** root. Compactions are **`context.compact`** spans (see
+[`compaction.md`](compaction.md)). See [`data-model.md`](data-model.md) § SpanRecord
+and legacy § TraceEvent for historical flat-event shapes.
+
+These records correlate by `session_id` + `trace_id` for replay and debugging.
+All timestamps must come from the injected `ClockPort` and IDs from `IdPort`.
+`metrics.context` is excluded from divergence comparison because token estimates
+depend on tool outputs that embed workspace paths.
 
 Diagram style and naming rules are defined in
 `docs/architecture/diagram-conventions.md`.

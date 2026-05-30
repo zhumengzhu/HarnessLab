@@ -130,7 +130,7 @@ Today `Message` has `content`, `tool_calls`, `tool_call_id` only. Post-MVP needs
 |------------------|---------|
 | `reasoning_text` or vendor-neutral `reasoning_blocks` | Persist CoT for replay when API requires it |
 | `provider_extra: dict` | Opaque round-trip blob (Anthropic thinking blocks, Gemini thought signatures) when normalization would lose data |
-| `api_family` on trace `model_call` | Which transform ran (for debugging) |
+| `api_family` on **`llm.generate`** span attrs / metrics | Which transform ran (for debugging) |
 
 **Replay policy** (when to inject reasoning on the next call) must be **per api_family + model**, not global:
 
@@ -144,8 +144,8 @@ OpenClaw encodes this as **ProviderReplayFamily** hooks; OpenCode as **ProviderT
 
 ### 3.3 Trace / eval implications
 
-- `model_call.payload` already treats token counts as volatile.
-- Reasoning **text** should be **volatile in semantic replay compare** (like `context` snapshot), but **structural presence** (e.g. “tool step had reasoning block”) may need contract tests.
+- **`llm.generate`** span `metrics` treat token counts as volatile.
+- Reasoning **text** should be **volatile in semantic replay compare** (like `metrics.context`), but **structural presence** (e.g. “tool step had reasoning block”) may need contract tests.
 - `eval` / `ReplayModel` path unchanged — no network, no thinking.
 
 ---
@@ -317,13 +317,14 @@ Secrets: unchanged — env var names in config only.
 
 ### 6.6 Streaming
 
-Web UI SSE streams **trace events** (step-level) and, for thinking models,
-**token deltas** (`reasoning_delta`, `assistant_delta`) via `stream_context`.
-DeepSeek OpenAI-chat transport implements token streaming first; Anthropic /
-OpenAI Responses / Gemini streaming remains incremental work.
+Web UI SSE streams **span lifecycle** events (`span.started` / `span.event` /
+`span.completed` / `span.link`) and, for thinking models, **token deltas**
+(`reasoning_delta`, `assistant_delta`) via `stream_context`. DeepSeek OpenAI-chat
+transport implements token streaming first; Anthropic / OpenAI Responses / Gemini
+streaming remains incremental work.
 
 Design rule: streaming callbacks stay adapter-internal until the loop grows
-an async API; trace JSONL remains the source of truth for replay.
+an async API; **`spans.jsonl`** (completed spans) remains the source of truth for replay.
 
 ### 6.6.1 Thinking replay policy (OpenAI-chat / DeepSeek)
 
@@ -401,7 +402,7 @@ not targets for parity. HarnessLab remains a single-process learning harness.
 | Message model | `reasoning_text` + `provider_extra` on `Message` | Extend when new replay families need persisted blobs |
 | Composer | `as_openai_messages()` + per-family transforms | Optional `as_wire_messages(api_family)` if transforms outgrow OpenAI pivot |
 | DeepSeek thinking | Multi-turn + tool-loop `reasoning_content` replay via transform | Extend replay tests when adding new thinking models |
-| Trace | JSONL + optional OTel fan-out + metrics histograms (Phase 5.6) | Grafana dashboard JSON optional |
+| Trace | `spans.jsonl` + optional OTLP lifecycle export + metrics histograms (Phase 5.6 / O4) | Grafana dashboard JSON optional |
 | Tests | Mocked SDK/transport per provider family | Optional `RUN_*_LIVE=1` live lanes; eval stays on `simple` / replay |
 
 ---

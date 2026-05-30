@@ -192,9 +192,9 @@ contracts.
 |---|---|---|
 | Tool dispatch | `ToolPort.execute(call) → ToolResult` is **synchronous**: one call, one normalized result. | Needs an async surface; the cleanest add is a sibling `StreamingToolPort.execute_stream(call) -> Iterator[ToolStreamEvent]`. |
 | Loop integration | Loop processes one `Decision`, one tool result, then re-calls model. | Loop would need an "interject" path: a streaming tool can deliver `ToolStreamEvent` items that *append* observations to the next model call's prompt, without re-running the model on every line. |
-| Trace | `tool_executed` records one `output_preview`. | A new `tool_stream_event` payload with `event_index`, `line`, `at` — treated as **volatile** by semantic replay (same family as `output_preview`). |
+| Trace | Completed **`tool.{name}`** span records `output_preview` in metrics. | Streaming could add volatile span events (same replay family as `output_preview`). |
 | Policy | `PolicyPort.allow_tool(call)` decides once. | Same call gate, plus a per-line size cap and a hard max-events-per-session bound to prevent log-flood DoS on the context. |
-| Replay | `ReplayModel` deterministically reproduces decisions from `decision_made`. | Streaming tools are non-deterministic by definition. Either: (a) record the stream and replay deterministically from trace, or (b) mark streaming-tool tasks as **excluded from semantic compare**. Option (a) is simpler and consistent with the project's "trace is source of truth" stance. |
+| Replay | `ReplayModel` deterministically reproduces decisions from **`llm.generate`** span attrs. | Streaming tools are non-deterministic by definition. Either: (a) record the stream as span events and replay from spans, or (b) mark streaming-tool tasks as **excluded from semantic compare**. Option (a) matches the project's "spans are source of truth" stance. |
 | Sandbox / shell allowlist | `run_shell_safe` allowlist + `dev`/`read_only`/`strict` profiles. | Reuse Claude Code's "Monitor inherits Bash rules" decision — a `run_shell_monitor` would inherit `run_shell_safe`'s policy, no new allowlist. |
 
 **Why this is non-trivial:** today our `ModelPort.decide(session,

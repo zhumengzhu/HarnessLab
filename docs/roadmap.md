@@ -133,8 +133,8 @@ Stable interfaces reduce migration risk from Python to TypeScript.
     rejection (`shell=False`, `shlex` parsing)
   - `ToolRegistry` that normalizes unknown-tool and exception cases into
     `ToolResult(ok=False)`
-  - Audit-grade `tool_executed` / `tool_denied` trace payloads
-  - JSONL trace recorder, CLI entry point
+  - Audit-grade **`tool.{name}`** span attrs / events (v1: `tool_executed` / `tool_denied`)
+  - JSONL span recorder (`spans.jsonl`), CLI entry point
   - Unit + contract tests (policy, registry, loop trace, determinism)
 - **Exit**: `uv run pytest` and `uv run ruff check` are green; two independent
   runs of a canonical scenario produce byte-identical JSONL traces under
@@ -145,8 +145,8 @@ Stable interfaces reduce migration risk from Python to TypeScript.
 - **Deliverables**:
   - Wire `ToolPort.args_schema` into runtime validation (reject malformed
     arguments before the policy layer) — `ToolRegistry.validate_args`
-    enforced in `HarnessLoop` before the policy check; emits a new
-    `tool_invalid_args` trace event.
+    enforced in `HarnessLoop` before the policy check; records
+    `tool.args_invalid` span event (v1: `tool_invalid_args`).
   - Add a shell-command denylist (e.g. `rm`, `sudo`, `curl`) layered on top
     of the existing allowlist — `DefaultPolicy.shell_denylist` consulted
     before the allowlist so destructive commands stay rejected even if
@@ -158,7 +158,7 @@ Stable interfaces reduce migration risk from Python to TypeScript.
   - Contract tests covering each stable Port (one minimal compliance test
     per Port) — `tests/test_port_contracts.py` exercises all 8 Ports
     against their production default implementations.
-  - `ReplayModel` and `ReplayTraceRecorder` stubs to unblock Step 4 —
+  - `ReplayModel` and in-memory span recorder stubs to unblock Step 4 —
     `core.replay` provides both, and the loop drives them end-to-end in
     `tests/test_replay.py`.
 - **Exit**: malformed args never reach a tool; shell denylist is enforced
@@ -223,20 +223,22 @@ Stable interfaces reduce migration risk from Python to TypeScript.
   (template-only in this step, wired up after the workflow stabilizes).
 
 ### Step 5 — Replay + Telemetry Metrics — DONE
+
+> **Current (Observability v2 / O5):** replay and metrics read **`spans.jsonl`**
+> (`SpanRecord` forests via `span_reader` / `span_divergence`). The bullets below
+> describe the original Step 5 ship; semantics are preserved on spans.
+
 - **Entry**: Step 4 exit criteria met.
 - **Deliverables**:
-  - Deterministic replay from JSONL trace using injected
+  - Deterministic replay from JSONL using injected
     `ClockPort` / `IdPort` — DONE. `src/harnesslab/replay/`:
-    - `trace_reader.read_trace` parses JSONL into `TraceEvent`s.
-    - `trace_reader.group_by_session` splits multi-session traces.
+    - `span_reader.read_spans` parses JSONL into `SpanRecord` rows.
+    - `span_reader.group_by_session` splits multi-session spans.
     - `replayer.replay_session` re-drives a single session through
       the production loop with `FrozenClock` + `SeqIdProvider` and a
-      `ReplayModel` built from the trace's `decision_made` payloads.
-      Refuses to proceed with `UnreplayableTraceError` when the trace
-      lacks `user_input_received` or has malformed `decision_made`.
-    - Trace was first enriched (Step 5.1) with `user_input_received`
-      and full `decision_made` payload (`tool_args`, `assistant_message`)
-      so this replay is feasible without a second source of truth.
+      `ReplayModel` built from **`llm.generate`** decision attrs. Refuses
+      to proceed with `UnreplayableTraceError` when spans lack replayable
+      decisions.
     - Promoted `FrozenClock` / `SeqIdProvider` / `DEFAULT_REPLAY_CLOCK_START`
       from the eval runner's private surface into `core.runtime` so
       eval and replay share the same deterministic primitives.
@@ -245,41 +247,37 @@ Stable interfaces reduce migration risk from Python to TypeScript.
     sessions, turns, tool_calls / successes / failures, denials,
     invalid_args, `tool_success_rate`, `denial_rate`, tool latency,
     model-call latency, and model token counters (`request` /
-    `response` / `total`) from the `model_call` event.
-    No "session pass rate" — production traces lack a pass/fail
+    `response` / `total`) from **`llm.generate`** span `metrics`.
+    No "session pass rate" — production spans lack a pass/fail
     signal; that lives in `harnesslab eval`.
   - Replay-vs-original divergence detector — DONE
-    (`replay/divergence.py::detect_divergence`). Semantic mode
-    (default) normalizes prefix ids (ses/msg/tool/run_<…> →
-    `<prefix>_001…`) and scrubs volatile fields (timestamps +
-    `output_preview` / `output_size` / `output_truncated`) so traces
+    (`replay/span_divergence.py::detect_divergence`). Semantic mode
+    (default) strips volatile span fields and normalizes ids so traces
     produced by `SystemClock` can still match a replay produced by
     `FrozenClock`. Strict mode compares byte-for-byte. Output is a
-    structured `DivergenceReport` with per-event `Divergence`
-    records.
-  - CLI surface — DONE. Two new subcommands:
-    - `harnesslab replay <trace.jsonl>
+    structured `DivergenceReport` with per-span diffs.
+  - CLI surface — DONE. Positional path is still named `trace` on the CLI
+    but accepts **`spans.jsonl`** (default `.harnesslab/spans.jsonl`):
+    - `harnesslab replay <spans.jsonl>
         [--session-id ID] [--workspace PATH] [--strict]`
       Exit codes: 0 match · 2 unreplayable · 4 diverged.
       `--workspace` lets operators re-use the original workspace when
       tools depend on cross-session filesystem state.
-    - `harnesslab metrics <trace.jsonl> [--json]`
+    - `harnesslab metrics <spans.jsonl> [--json]`
       Always exit 0 — observation, not a gate.
-- **Exit**: every shipped eval task's trace replays divergence-free
-  against itself (`tests/test_replay_module.py::test_replay_matches_eval_task_traces`);
-  a tampered trace yields a precise `DivergenceReport`
-  (`test_divergence_detects_tampered_decision`); the round-trip works
-  end-to-end through the CLI on real JSONL written by the production
-  loop (`tests/test_cli_replay_metrics.py::test_replay_with_shared_workspace_round_trips_across_sessions`).
+- **Exit**: every shipped eval task's spans replay divergence-free
+  against itself; tampered spans yield a precise `DivergenceReport`;
+  round-trip works through the CLI on JSONL written by the production
+  loop.
 
 ### Step 6 — Guarded Improvement Proposals — DONE
 - **Entry**: Step 5 exit criteria met.
 - **Deliverables**:
   - Failed-run clustering — DONE
     (`src/harnesslab/improve/{fingerprint,cluster}.py`). Failure
-    signals are mined from two sources: `tool_executed(ok=false)` /
-    `tool_denied` / `tool_invalid_args` events in JSONL traces, and
-    `failures` arrays from `eval/reports/latest.json`. Each is reduced
+    signals are mined from two sources: failed **`tool.*`** spans /
+    span events in `spans.jsonl`, and `failures` arrays from
+    `eval/reports/latest.json`. Each is reduced
     to a compact, human-readable signature
     (e.g. `tool_denied:run_shell_safe:command not in allowlist`) and
     grouped; clusters below `--min-occurrences` (default 2) are
@@ -304,15 +302,13 @@ Stable interfaces reduce migration risk from Python to TypeScript.
     Rollback is by design — proposals are never auto-applied, so
     "undo" is just `git revert` of the accepting commit (proposal
     file then needs its status edited back to `open`).
-  - CLI — DONE. `harnesslab propose [--trace TRACE]
+  - CLI — DONE. `harnesslab propose [--trace SPANS.jsonl]
     [--eval-report REPORT] [--out proposals/] [--min-occurrences N]
     [--format md|json]`. Idempotent across reruns via
     `dedupe_against_existing` against on-disk `open` proposals.
-- **Exit**: shipped fixture trace
-  (`tests/fixtures/sample_failure_trace.jsonl`) yields exactly the
-  expected two proposals (`tests/test_improve.py::test_generate_against_shipped_fixture`);
-  rerun on the same input yields zero new proposals
-  (`tests/test_cli_propose.py::test_propose_md_is_idempotent_across_runs`);
+- **Exit**: shipped fixture spans
+  (`tests/fixtures/sample_failure_spans.jsonl`) yields exactly the
+  expected proposals; rerun on the same input yields zero new proposals;
   every shipped proposal's Acceptance checklist requires
   `uv run harnesslab eval`, satisfying the "gated by the Step 4
   regression runner" Exit criterion.
@@ -327,10 +323,11 @@ without giving up the deterministic eval/replay surface.
 - Added `DeepSeekModel` (`src/harnesslab/providers/deepseek.py`) as a
   `ModelPort` implementation over DeepSeek's OpenAI-compatible API.
 - `harnesslab run` now accepts `--model {simple,deepseek}` (default:
-  `simple`). DeepSeek reads credentials from `DEEPSEEK_API_KEY`.
-- Added `model_call` trace event to record model latency and token
-  usage (`request_tokens`, `response_tokens`, `total_tokens`), and
-  wired telemetry aggregation to include those metrics.
+  `deepseek`). Each model call is recorded as an **`llm.generate`** span
+  with latency/token fields in `SpanRecord.metrics` (v1 `model_call`
+  events are legacy-only). DeepSeek reads credentials from `DEEPSEEK_API_KEY`.
+- Telemetry aggregation includes model latency and token usage from
+  **`llm.generate`** span `metrics`.
 
 ## Post-MVP Phase 2 — Real Agent (Current)
 
@@ -352,22 +349,26 @@ the other way around".
 
 ### Phase 2.1 — Real agent loop — DONE
 
+> **Current:** inner steps are **`harnesslab.step`** / **`llm.generate`** /
+> **`tool.*`** spans under **`harnesslab.turn`**. Bullets below name v1 events
+> as originally shipped.
+
 - `Decision.kind` extended with terminal kinds `final` and
   `ask_user`; `assistant` / `tool` are now intermediate steps.
 - `HarnessLoop.run_session(session_id, user_input, max_steps=N)`
   drives the inner loop: each iteration calls the model, applies
-  the decision (tool / text), emits `step_started` and
-  `step_completed`, and stops on a terminal decision or when
+  the decision (tool / text), records step boundaries (v1:
+  `step_started` / `step_completed`), and stops on a terminal decision or when
   `max_steps` is reached. `run_turn` is now a thin
   `max_steps=1` wrapper preserved for compatibility.
-- New trace events: `step_started`, `step_completed`,
+- v1 trace events at ship: `step_started`, `step_completed`,
   `session_finished` (with `reason` ∈ `{final, ask_user,
   max_steps, overflow}`).
 - `SimpleModel` extended with `/final <msg>` and `/ask <msg>`
   commands so the agent loop can be exercised deterministically
   from CLI without a live LLM.
-- Replay and eval adapted: `_extract_turns` collects every
-  `decision_made` between `user_input_received` events,
+- Replay and eval adapted: multi-step replay from decision attrs on
+  **`llm.generate`** spans (v1: `decision_made` between user turns), 
   `TaskTurn.max_steps` drives multi-step task replay, and a new
   `eval/tasks/06_multi_step_tool_then_final.yaml` covers the
   tool-then-final pattern.
@@ -445,8 +446,9 @@ the other way around".
     runs an emergency compaction (`keep_last = max(1, configured
     // 2)`), retries once, and surfaces a final decision with an
     explanatory message if overflow persists.
-  - New trace events `compaction_started` (with
-    `trigger: threshold|overflow`) and `compaction_completed`.
+  - New compaction telemetry: **`context.compact`** spans (v1 at ship:
+    `compaction_started` with `trigger: threshold|overflow` and
+    `compaction_completed`).
 - `DeepSeekModel` detects OpenAI/DeepSeek HTTP 400 context-length
   responses and raises `ModelOverflowError` so the loop can
   recover.
@@ -487,23 +489,22 @@ the other way around".
   usage ratios, with optional adapter-supplied prompt-side fields
   (`prompt_tokens_estimate`, `static_block_tokens`,
   `dynamic_block_tokens`, `prompt_block_names`).
-- `HarnessLoop._model_call_payload` attaches
-  `payload["context"]` to every `model_call` event. The replay
-  divergence detector ignores `context` (token estimates depend on
-  tool outputs that embed tmp workspace paths and are
-  informational, not behavioral).
+- `HarnessLoop` attaches `metrics.context` (`ContextSnapshot`) to every
+  **`llm.generate`** span. The replay divergence detector ignores
+  `metrics.context` (token estimates depend on tool outputs that embed
+  tmp workspace paths and are informational, not behavioral).
 - `DeepSeekModel` publishes prompt-side fields by walking the
   composed prompt blocks after each call.
-- New CLI: `harnesslab context <trace>`
+- New CLI: `harnesslab context <spans.jsonl>`
   - `show [--session-id ID] [--json]` — peak conversation
     tokens, peak usage ratio, full breakdown of the latest
     snapshot.
   - `series [--session-id ID] [--limit N]` — one row per
-    `model_call` so growth over time is visible.
+    **`llm.generate`** span so growth over time is visible.
 - `Metrics` (and `render_metrics`) gained
   `max_conversation_tokens`, `peak_usage_ratio`, `compactions`,
-  `overflow_recoveries`; pre-Phase-2.6 traces still aggregate
-  cleanly (missing fields default to `0` / `None`).
+  `overflow_recoveries`; older spans still aggregate cleanly (missing
+  fields default to `0` / `None`).
 
 ## Post-MVP Phase 3 — Usability & Production Feedback — DONE
 
@@ -558,8 +559,8 @@ workflow documented.
 - Prompt sends only the first user message + a short assistant
   excerpt (no full transcript, no tool output).
 - Expects a plain-text `final` reply; tool decisions fall back silently.
-- Output sanitized (single line, 60-char cap); emits `session_titled`
-  trace event on success.
+- Output sanitized (single line, 60-char cap); success recorded as
+  **`llm.title`** span (v1: `session_titled` event).
 - Wired automatically when `--model deepseek`; skipped for `simple`
   (deterministic eval/replay path unchanged).
 
@@ -576,7 +577,7 @@ workflow documented.
 **Deliverables (3.2.2 — Web UX polish)**
 
 - SSE streaming on `POST .../messages` (`Accept: text/event-stream`
-  or `"stream": true`); live `trace` events via `TraceHub`.
+  or `"stream": true`); live span lifecycle via **`SpanHub`**.
 - Tool/run inspector panel (`GET /api/sessions/{id}/trace`).
 - Fork button + `POST /api/sessions/{id}/fork`.
 - `/remember` affordance in composer; session detail exposes
@@ -701,7 +702,8 @@ Steps 1–6. Nothing starts until its Entry criteria are objectively true.
 
 - **Entry**: Phase 3.3 session memory stable; config loader exists.
 - **Deliverables**: optional workspace-scoped notes key (not vector RAG);
-  explicit write path (CLI or `/remember-global` TBD); trace events;
+  explicit write path (CLI or `/remember-global` TBD); **`memory_written`** /
+  **`memory_read`** span events;
   **no** LLM-extracted memory (AGENTS.md proposal rules unchanged).
 - **Exit**: eval task for read/inject across two sessions; docs updated;
   replay compare ignores volatile memory timestamps only.
@@ -791,8 +793,8 @@ Same **Entry / Deliverables / Exit** bar as previous phases.
     with hashed filenames, the table stores metadata + ref.
   - Tools opt in via `RuntimeLimits.artifact_threshold_bytes`: large
     `output` is stored, `ToolResult.output` carries a short preview
-    + `artifact_ref`; trace `tool_executed` payload includes
-    `artifact_ref` (treated as volatile by semantic compare).
+    + `artifact_ref`; **`tool.*`** span metrics include
+    `artifact_ref` (volatile in semantic compare).
   - CLI: `harnesslab artifact show REF` / `ls --session ID`.
 - **Exit**: trace size for a 50-step research task drops materially;
   `replay` still works (refs treated as volatile); contract tests for
@@ -804,7 +806,7 @@ Same **Entry / Deliverables / Exit** bar as previous phases.
 - **Deliverables**:
   - `Decision.kind` gains optional `plan`; loop appends the plan as a
     persisted assistant message with `provider_extra={"is_plan": true}`,
-    emits `plan_emitted` trace event, and continues to the next step.
+    records **`plan_emitted`** span event, and continues to the next step.
   - New static prompt block `05_planning.md` describing the "research
     plan → execute → re-check" pattern; opt-in via config
     `loop.planning_mode: off|hint|required`.
@@ -861,21 +863,21 @@ Same **Entry / Deliverables / Exit** bar as previous phases.
 
 ### Phase 5.6 — OTel metrics histograms — DONE
 
-- **Entry**: Phase 5.x telemetry on `model_call` / `tool_executed`
-  unchanged; P7 OTel spans already shipped.
+- **Entry**: Phase 5.x telemetry on **`llm.generate`** / **`tool.*`** spans
+  unchanged; OTLP lifecycle export shipped in O4.
 - **Deliverables**:
   - `telemetry/otel_metrics.py`: optional `OtelMetricsRecorder` that
-    listens to the same `TraceEvent` stream and emits OTel metric
+    listens to completed **`SpanRecord`** rows and emits OTel metric
     instruments:
     - `harnesslab.model.latency_ms` (histogram, attrs: provider,
       api_family, decision_kind)
     - `harnesslab.model.tokens.total` (counter)
     - `harnesslab.tool.duration_ms` (histogram, attrs: tool, ok)
     - `harnesslab.session.steps` (histogram)
-  - Wraps the existing `OtelTraceRecorder` fan-out; both ship in the
-    same factory and respect `HARNESSLAB_OTEL` / OTLP env.
+  - Composed with **`OtelSpanRecorder`** in the same factory; respects
+    `HARNESSLAB_OTEL` / OTLP env.
   - Sample Grafana dashboard JSON under `docs/observability/`.
-- **Exit**: enabling OTel metrics changes neither JSONL trace nor eval
+- **Exit**: enabling OTel metrics changes neither `spans.jsonl` nor eval
   baseline; metrics appear in a local OTel collector smoke test.
 
 ### Phase 5.7 — Proposal review surface (Web UI) — DONE
@@ -918,7 +920,8 @@ Same **Entry / Deliverables / Exit** bar as previous phases.
   - Config block `tools.hooks.pre_tool[]` / `tools.hooks.post_tool[]`
     parsed via operator config.
   - Supported hook types: `prompt`, `shell`, `http`.
-  - Trace events: `hook_invoked`, `hook_blocked`, `hook_failed`.
+  - Span events: **`hook.invoked` / `hook.blocked` / `hook.failed`**
+    on the active step (v1: `hook_invoked`, …).
   - `pre_tool` hooks can block with explicit reason (mapped to normalized
     tool denial), while `post_tool` is non-blocking.
 - **Deliverables**:
@@ -930,19 +933,19 @@ Same **Entry / Deliverables / Exit** bar as previous phases.
     and in post hooks `tool_result` summary.
   - Hooks may annotate, warn, or block (`pre_tool` only) with explicit
     reason; default behavior remains no hooks, no behavior change.
-  - Trace events: `hook_invoked`, `hook_blocked`, `hook_failed`.
+  - Span events: **`hook.invoked` / `hook.blocked` / `hook.failed`**
+    on the active step (v1: `hook_invoked`, …).
 - **Exit**: existing eval baseline unchanged with hooks disabled; one
   integration test verifies a `pre_tool` hook can block `run_shell_safe`
   and produce a normalized denial reason; docs in `tool-runtime.md`
   explain ordering and failure policy.
 
-### Phase 5.9 — Checkpoint & rewind (session-safe undo) — **partial**
+### Phase 5.9 — Checkpoint & rewind (session-safe undo) — **DONE**
 
 - **Shipped:** checkpoint snapshots before mutating tools; CLI
-  `harnesslab session checkpoints|rewind`; trace events
-  `checkpoint_created` / `checkpoint_restored`; deterministic rewind tests.
-- **Remaining:** Web UI rewind on session timeline with diff preview +
-  explicit confirm (see What's next).
+  `harnesslab session checkpoints|rewind`; span events
+  `session.checkpoint_created` / `session.checkpoint_restored`; deterministic rewind tests.
+- **Remaining:** *(none — Web UI rewind shipped in Trace Tab Checkpoints.)*
 
 ### Phase 5.10 — Session token/cost budgets — **Done**
 
@@ -1004,8 +1007,7 @@ Next: token streaming beyond DeepSeek (P0) and provider failover UX (P2).
 ### Observability v2 — Span-first telemetry (complete)
 
 Normative spec: [`architecture/observability-v2.md`](architecture/observability-v2.md).
-**O1–O7** landed on the feature branch; runtime writes `spans.jsonl` only (no
-v1/v2 dual-write).
+**O1–O7** landed; runtime writes `spans.jsonl` only (no v1/v2 dual-write).
 
 | Phase | Deliverable | Status |
 | --- | --- | --- |
@@ -1052,7 +1054,7 @@ v1/v2 dual-write).
 | --- | --- | --- |
 | **5.10 cost budgets** | USD guardrails | **Done** — price table; `max_session_cost_usd_total`; eval tasks |
 | **5.10 eval tasks** | Pin budget crossings | **Done** — hard + soft YAML + `ReplayModel` |
-| **5.9 Web UI rewind** | CLI only today | **Done** — Advanced trace column + diff modal |
+| **5.9 Web UI rewind** | CLI only today | **Done** — Trace Tab Checkpoints + diff modal |
 | **`research_summary` eval** | Phase 5.1 deliverable | **DONE** — `16_research_summary.yaml` |
 | **TS migration Phase D** | Advanced controls in TS only | MCP health **DONE**; rewind UI **DONE** |
 | **TS migration Phase E** | Remove legacy `web/static/` | **Done** — TS-only; build required |
@@ -1214,10 +1216,10 @@ existing tool/policy boundary (skills remain **prompt documents** only).
   (`features/proposals`, `features/sessions`, `features/composer`,
   `features/settings`, `features/trace`) plus send-flow hook extraction.
   Frontend Vitest coverage includes utility + component tests (proposal
-  gates, App Simple/Advanced mode toggle), and webui package management is
+  gates, App shell smoke). WebUI package management is
   now bun-first (`bun.lock` + bun command docs). TS bundle output
-  (`static_ts/`) is build-time only (gitignored). Default **Simple Chat**
-  mode in TS UI hides operator panels until Advanced is selected.
+  (`static_ts/`) is build-time only (gitignored). Operator surfaces
+  (Trace / Activity / Proposals) live in Session tabs and sidebar nav.
   Default serve UX is **TS when built** (`HARNESSLAB_WEB_UI_VERSION=ts`);
   legacy fallback when `static_ts/` is missing. Token SSE, slash palette,
   `/compact`, and `/skillname` invoke shipped in Phase C.
