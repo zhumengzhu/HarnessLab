@@ -36,24 +36,27 @@ export function scrollElementToBottom(element: HTMLElement): void {
 type UseChatScrollArgs = {
   /** Changes when message list or live turn content grows. */
   scrollSignal: string;
+  /** Changes when switching sessions — resets stick-to-bottom. */
+  resetKey?: string | null;
   onComposerChromeChange?: (collapsed: boolean) => void;
 };
 
 type UseChatScrollResult = {
-  scrollRef: RefObject<HTMLDivElement | null>;
-  bottomRef: RefObject<HTMLDivElement | null>;
-  showJumpToLatest: boolean;
+  scrollRef: RefObject<HTMLDivElement>;
+  bottomRef: RefObject<HTMLDivElement>;
+  newMessagesBelow: boolean;
   scrollToLatest: () => void;
   onScrollAreaScroll: () => void;
 };
 
 export function useChatScroll(args: UseChatScrollArgs): UseChatScrollResult {
-  const { scrollSignal, onComposerChromeChange } = args;
+  const { scrollSignal, resetKey, onComposerChromeChange } = args;
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const bottomRef = useRef<HTMLDivElement | null>(null);
   const stickToBottomRef = useRef(true);
   const lastScrollTopRef = useRef(0);
-  const [showJumpToLatest, setShowJumpToLatest] = useState(false);
+  const prevScrollSignalRef = useRef(scrollSignal);
+  const [newMessagesBelow, setNewMessagesBelow] = useState(false);
 
   const updateComposerChrome = useCallback(
     (element: HTMLElement) => {
@@ -73,15 +76,16 @@ export function useChatScroll(args: UseChatScrollArgs): UseChatScrollResult {
     [onComposerChromeChange]
   );
 
-  const syncJumpVisibility = useCallback(() => {
+  const syncStickState = useCallback(() => {
     const element = scrollRef.current;
     if (!element) {
-      setShowJumpToLatest(false);
       return;
     }
     const near = isNearBottom(element);
     stickToBottomRef.current = near;
-    setShowJumpToLatest(!near && element.scrollHeight > element.clientHeight);
+    if (near) {
+      setNewMessagesBelow(false);
+    }
   }, []);
 
   const scrollToLatest = useCallback(() => {
@@ -89,7 +93,7 @@ export function useChatScroll(args: UseChatScrollArgs): UseChatScrollResult {
     if (!element) return;
     scrollElementToBottom(element);
     stickToBottomRef.current = true;
-    setShowJumpToLatest(false);
+    setNewMessagesBelow(false);
     onComposerChromeChange?.(false);
     lastScrollTopRef.current = element.scrollTop;
   }, [onComposerChromeChange]);
@@ -99,24 +103,33 @@ export function useChatScroll(args: UseChatScrollArgs): UseChatScrollResult {
     if (element) {
       updateComposerChrome(element);
     }
-    syncJumpVisibility();
-  }, [syncJumpVisibility, updateComposerChrome]);
+    syncStickState();
+  }, [syncStickState, updateComposerChrome]);
 
   useEffect(() => {
-    onComposerChromeChange?.(false);
+    stickToBottomRef.current = true;
+    setNewMessagesBelow(false);
     lastScrollTopRef.current = 0;
-  }, [scrollSignal, onComposerChromeChange]);
+    onComposerChromeChange?.(false);
+  }, [resetKey, onComposerChromeChange]);
 
   useEffect(() => {
     const element = scrollRef.current;
     if (!element) return;
+
+    const signalChanged = prevScrollSignalRef.current !== scrollSignal;
+    prevScrollSignalRef.current = scrollSignal;
+
     if (stickToBottomRef.current) {
       scrollElementToBottom(element);
-      setShowJumpToLatest(false);
+      setNewMessagesBelow(false);
       return;
     }
-    syncJumpVisibility();
-  }, [scrollSignal, syncJumpVisibility]);
+
+    if (signalChanged) {
+      setNewMessagesBelow(true);
+    }
+  }, [scrollSignal]);
 
   useEffect(() => {
     const element = scrollRef.current;
@@ -124,19 +137,17 @@ export function useChatScroll(args: UseChatScrollArgs): UseChatScrollResult {
     const observer = new ResizeObserver(() => {
       if (stickToBottomRef.current) {
         scrollElementToBottom(element);
-        setShowJumpToLatest(false);
-        return;
+        setNewMessagesBelow(false);
       }
-      syncJumpVisibility();
     });
     observer.observe(element);
     return () => observer.disconnect();
-  }, [scrollSignal, syncJumpVisibility]);
+  }, [scrollSignal]);
 
   return {
-    scrollRef,
-    bottomRef,
-    showJumpToLatest,
+    scrollRef: scrollRef as RefObject<HTMLDivElement>,
+    bottomRef: bottomRef as RefObject<HTMLDivElement>,
+    newMessagesBelow,
     scrollToLatest,
     onScrollAreaScroll,
   };

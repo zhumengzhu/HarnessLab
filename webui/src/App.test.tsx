@@ -14,7 +14,7 @@ function createFetchMock() {
   return vi.fn(async (input: RequestInfo | URL) => {
     const url = String(input);
     if (url.includes("/api/health")) {
-      return jsonResponse({ ok: true, model: "simple", workspace: "/tmp" });
+      return jsonResponse({ ok: true, model: "simple", workspace: "/tmp", version: "0.1.0" });
     }
     if (url.includes("/api/settings")) {
       return jsonResponse({ settings: { model_backend: "simple" } });
@@ -27,6 +27,9 @@ function createFetchMock() {
     }
     if (url.includes("/api/proposals")) {
       return jsonResponse({ proposals: [] });
+    }
+    if (url.includes("/api/skills")) {
+      return jsonResponse({ skills: [] });
     }
     return jsonResponse({ error: `unhandled ${url}` }, 404);
   });
@@ -43,7 +46,7 @@ function renderApp() {
   );
 }
 
-describe("App ui mode", () => {
+describe("App shell", () => {
   beforeEach(() => {
     vi.restoreAllMocks();
     vi.stubGlobal("fetch", createFetchMock());
@@ -53,42 +56,57 @@ describe("App ui mode", () => {
     cleanup();
   });
 
-  it("defaults to simple mode and hides advanced panels", async () => {
+  it("shows chat workspace with session tabs by default", async () => {
     renderApp();
 
-    expect(await screen.findByText("HarnessLab")).toBeTruthy();
-    expect(screen.queryByRole("heading", { name: "Proposals" })).toBeNull();
-    expect(screen.queryByRole("heading", { name: "Settings" })).toBeNull();
-    expect(screen.queryByRole("heading", { name: "Trace" })).toBeNull();
-    expect(screen.getByTitle("新对话")).toBeTruthy();
+    expect(await screen.findByRole("navigation", { name: /位置|Location/ })).toBeTruthy();
+    expect(await screen.findByText("v0.1.0")).toBeTruthy();
+    expect(screen.getByRole("tablist", { name: /会话视图|Session views/ })).toBeTruthy();
+    expect(screen.getByRole("tab", { name: /追踪|Trace/ })).toBeTruthy();
+    expect(screen.getByTitle(/新对话|New chat/)).toBeTruthy();
+    expect(screen.getByRole("button", { name: /打开命令面板|Open command palette/ })).toBeTruthy();
   });
 
-  it("shows advanced nav and separate views after switching mode", async () => {
+  it("navigates to settings and skills from sidebar", async () => {
     renderApp();
-    await screen.findByText("HarnessLab");
+    await screen.findByRole("navigation", { name: /位置|Location/ });
 
-    fireEvent.click(screen.getByRole("button", { name: "Advanced" }));
-
+    fireEvent.click(screen.getByRole("button", { name: /设置|Settings/ }));
     await waitFor(() => {
-      expect(screen.getByRole("navigation", { name: "Advanced" })).toBeTruthy();
+      expect(screen.getByRole("heading", { name: /设置|Settings/ })).toBeTruthy();
+      expect(screen.getByText(/界面偏好|UI preferences/)).toBeTruthy();
     });
 
-    expect(screen.queryByRole("heading", { name: "Proposals" })).toBeNull();
-
-    fireEvent.click(screen.getByRole("button", { name: "Proposals" }));
+    fireEvent.click(screen.getByRole("button", { name: /技能|Skills/ }));
     await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Proposals" })).toBeTruthy();
-    });
-    expect(screen.queryByRole("heading", { name: "Trace" })).toBeNull();
-
-    fireEvent.click(screen.getByRole("button", { name: "Settings" }));
-    await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Settings" })).toBeTruthy();
+      expect(screen.getByRole("heading", { level: 1, name: /技能|Skills/ })).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: "Chat" }));
+    fireEvent.click(screen.getByRole("button", { name: /聊天|Chat/ }));
     await waitFor(() => {
-      expect(screen.getByRole("heading", { name: "Trace" })).toBeTruthy();
+      expect(screen.getByRole("tablist", { name: /会话视图|Session views/ })).toBeTruthy();
     });
+
+    fireEvent.click(screen.getByRole("tab", { name: /追踪|Trace/ }));
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: /Trace 跨度|Trace spans/ })).toBeTruthy();
+    });
+  });
+
+  it("collapses and expands the sidebar from the toggle control", async () => {
+    renderApp();
+    await screen.findByRole("navigation", { name: /位置|Location/ });
+
+    const shell = document.querySelector(".app-shell");
+    expect(shell?.classList.contains("app-shell-sidebar-collapsed")).toBe(false);
+
+    fireEvent.click(screen.getByRole("button", { name: /折叠侧栏|Collapse sidebar/ }));
+    expect(shell?.classList.contains("app-shell-sidebar-collapsed")).toBe(true);
+    expect(document.getElementById("app-sidebar")?.classList.contains("app-sidebar-collapsed")).toBe(
+      true
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: /展开侧栏|Expand sidebar/ }));
+    expect(shell?.classList.contains("app-shell-sidebar-collapsed")).toBe(false);
   });
 });

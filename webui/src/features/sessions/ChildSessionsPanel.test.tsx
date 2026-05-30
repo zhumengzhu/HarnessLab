@@ -1,6 +1,8 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import type React from "react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ChildSessionsPanel } from "./ChildSessionsPanel";
+import { I18nProvider } from "../../lib/i18n";
 import type { SessionSummary } from "../../lib/schemas";
 
 const baseSession = (overrides: Partial<SessionSummary>): SessionSummary => ({
@@ -17,20 +19,26 @@ const baseSession = (overrides: Partial<SessionSummary>): SessionSummary => ({
   ...overrides,
 });
 
+function renderPanel(props: React.ComponentProps<typeof ChildSessionsPanel>) {
+  return render(
+    <I18nProvider locale="zh" onLocaleChange={() => {}}>
+      <ChildSessionsPanel {...props} />
+    </I18nProvider>
+  );
+}
+
 describe("ChildSessionsPanel", () => {
   afterEach(() => {
     cleanup();
   });
 
   it("renders nothing when no parent or children", () => {
-    const { container } = render(
-      <ChildSessionsPanel
-        parentSession={null}
-        childSessions={[]}
-        selectedSessionId={null}
-        onSelectSession={() => {}}
-      />
-    );
+    const { container } = renderPanel({
+      parentSession: null,
+      childSessions: [],
+      selectedSessionId: null,
+      onSelectSession: () => {},
+    });
     expect(container.firstChild).toBeNull();
   });
 
@@ -44,14 +52,12 @@ describe("ChildSessionsPanel", () => {
       step_count: 2,
     });
 
-    render(
-      <ChildSessionsPanel
-        parentSession={parent}
-        childSessions={[child]}
-        selectedSessionId="ses_child"
-        onSelectSession={onSelect}
-      />
-    );
+    renderPanel({
+      parentSession: parent,
+      childSessions: [child],
+      selectedSessionId: "ses_child",
+      onSelectSession: onSelect,
+    });
 
     expect(screen.getByText("子 Agent")).toBeTruthy();
     fireEvent.click(screen.getByRole("button", { name: /←/ }));

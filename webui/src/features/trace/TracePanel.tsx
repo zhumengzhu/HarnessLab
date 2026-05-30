@@ -1,4 +1,5 @@
 import type { TraceEventItem } from "../../lib/schemas";
+import { useI18n } from "../../lib/i18n";
 import {
   ModelCallInspector,
   isModelCallEvent,
@@ -23,19 +24,20 @@ export function TracePanel(props: TracePanelProps) {
     hasStreamTrace,
     onClearStreamTrace,
   } = props;
+  const { t } = useI18n();
   return (
     <aside className="panel">
       <div className="panel-title-row">
-        <h2>Trace</h2>
+        <h2>{t("trace.eventsTitle")}</h2>
         <button type="button" onClick={onClearStreamTrace} disabled={!hasStreamTrace}>
-          清空实时流
+          {t("trace.clearStream")}
         </button>
       </div>
-      {!selectedSessionId ? <p>Select a session.</p> : null}
-      {loading ? <p>Loading trace...</p> : null}
-      {error ? <p>Failed: {error}</p> : null}
+      {!selectedSessionId ? <p>{t("trace.selectSession")}</p> : null}
+      {loading ? <p>{t("trace.loading")}</p> : null}
+      {error ? <p>{t("common.loadFailed", { error })}</p> : null}
       <ul className="trace-list">
-        {!rows.length ? <li>暂无事件</li> : null}
+        {!rows.length ? <li>{t("trace.noEvents")}</li> : null}
         {rows.map((e, idx) => (
           <li key={`${e.created_at}-${e.event_type}-${idx}`}>
             <strong>{e.event_type}</strong>
@@ -47,7 +49,7 @@ export function TracePanel(props: TracePanelProps) {
               <pre>{JSON.stringify(e.payload, null, 2)}</pre>
             ) : (
               <details className="trace-raw-json">
-                <summary>Raw JSON</summary>
+                <summary>{t("trace.rawJson")}</summary>
                 <pre>{JSON.stringify(e.payload, null, 2)}</pre>
               </details>
             )}

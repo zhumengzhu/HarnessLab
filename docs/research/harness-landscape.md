@@ -114,7 +114,7 @@ out of scope by project charter.
 | HTML / PDF ingest | 🔲 | Phase 5.1 (`html_to_markdown`, `read_pdf`). |
 | MCP support | 🔲 | Phase 5.4. Now the de-facto plugin protocol across Claude Code, OpenAI Agents SDK ([alicelabs.ai][alicelabs] ranks Claude Agent SDK #2 partly because of native MCP), Continue, Cline, Roo Code, Kilo Code. |
 | Sandboxed code execution (Python) | 🔲 | Phase 5.5. Cursor / Devin / OpenAI Agents SDK rely on first-class sandboxes (E2B, Modal, Daytona, Cloudflare, Vercel, Blaxel, Runloop); Claude Code uses `/sandbox` for OS-level isolation [(best-practices)](https://code.claude.com/docs/en/best-practices). |
-| Browser automation | 🔲 (defer) | Roadmap recommendation: reach for an MCP Playwright server, do not ship a driver. |
+| Browser automation | 🔲 (defer) | 操作员路径：MCP `@playwright/mcp`（[`guides/mcp-servers.md`](../guides/mcp-servers.md)）。OpenClaw 为 Gateway 内置 browser + CDP/Playwright；HarnessLab 不 ship in-process driver（[`guides/browser-automation.md`](../guides/browser-automation.md)）。 |
 | Streaming / monitor tool | 🔲 | Claude Code's Monitor (v2.1.98) is the canonical example; see [`claude-code-monitor.md`](claude-code-monitor.md). Requires a new `StreamingToolPort` — not in Phase 5. |
 | Custom skills / project workflows | 🟡 | `AGENTS.md` injected as dynamic prompt block today. Claude Code "Skills" are richer (markdown workflows invokable as `/skill foo` or preloaded into a subagent). Not on Phase 5 roadmap. |
 | Plugins (third-party tool packages) | 🟡 | Discussed in [provider-expansion §6.7][prov-exp]; explicit non-goal for now. |

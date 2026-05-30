@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { apiPatch } from "../../lib/api-client";
 import type { PatchSessionResponse, SessionSummary } from "../../lib/schemas";
 import { sessionListMeta, sessionLabel } from "../../lib/sessionLabels";
+import { useI18n } from "../../lib/i18n";
 
 const TITLE_MAX_LEN = 60;
 
@@ -13,6 +14,7 @@ type SessionListItemProps = {
 };
 
 export function SessionListItem({ session, selected, onSelect }: SessionListItemProps) {
+  const { t } = useI18n();
   const queryClient = useQueryClient();
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState(sessionLabel(session));
@@ -49,11 +51,11 @@ export function SessionListItem({ session, selected, onSelect }: SessionListItem
   async function saveTitle() {
     const title = draft.trim();
     if (!title) {
-      setRenameError("标题不能为空");
+      setRenameError(t("session.titleEmpty"));
       return;
     }
     if (title.length > TITLE_MAX_LEN) {
-      setRenameError(`标题最多 ${TITLE_MAX_LEN} 字`);
+      setRenameError(t("session.titleMaxLength", { max: TITLE_MAX_LEN }));
       return;
     }
     if (title === sessionLabel(session)) {
@@ -88,7 +90,7 @@ export function SessionListItem({ session, selected, onSelect }: SessionListItem
             value={draft}
             maxLength={TITLE_MAX_LEN}
             disabled={saving}
-            aria-label="重命名会话"
+            aria-label={t("session.renameSession")}
             onChange={(event) => setDraft(event.target.value)}
             onKeyDown={(event) => {
               if (event.key === "Enter") {
@@ -124,8 +126,8 @@ export function SessionListItem({ session, selected, onSelect }: SessionListItem
             <button
               type="button"
               className="app-session-rename-trigger"
-              title="重命名"
-              aria-label="重命名会话"
+              title={t("common.rename")}
+              aria-label={t("session.renameSession")}
               onClick={startEditing}
             >
               ✎

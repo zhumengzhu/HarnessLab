@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { apiGet, apiPost } from "../../lib/api-client";
+import { useI18n } from "../../lib/i18n";
 import type { CheckpointPreviewResponse, CheckpointsResponse } from "../../lib/schemas";
 
 type CheckpointPanelProps = {
@@ -14,6 +15,7 @@ function shortId(id: string): string {
 }
 
 export function CheckpointPanel({ sessionId, onRewindSuccess }: CheckpointPanelProps) {
+  const { t } = useI18n();
   const queryClient = useQueryClient();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [confirmOpen, setConfirmOpen] = useState(false);
@@ -46,7 +48,7 @@ export function CheckpointPanel({ sessionId, onRewindSuccess }: CheckpointPanelP
         }
       ),
     onSuccess: (data) => {
-      setActionMessage(`已恢复 ${data.paths.length} 个文件。`);
+      setActionMessage(t("checkpoint.restoredFiles", { count: data.paths.length }));
       setConfirmOpen(false);
       setSelectedId(null);
       setActionError(null);
@@ -62,8 +64,8 @@ export function CheckpointPanel({ sessionId, onRewindSuccess }: CheckpointPanelP
   if (!sessionId) {
     return (
       <section className="checkpoint-panel-shell">
-        <h3 className="checkpoint-panel-title">Checkpoints</h3>
-        <p className="checkpoint-panel-hint">选择会话后可查看 mutating tool 前的 checkpoint。</p>
+        <h3 className="checkpoint-panel-title">{t("checkpoint.title")}</h3>
+        <p className="checkpoint-panel-hint">{t("checkpoint.hintNoSession")}</p>
       </section>
     );
   }
@@ -83,24 +85,22 @@ export function CheckpointPanel({ sessionId, onRewindSuccess }: CheckpointPanelP
   }
 
   return (
-    <section className="checkpoint-panel-shell" aria-label="Session checkpoints">
+    <section className="checkpoint-panel-shell" aria-label={t("checkpoint.ariaLabel")}>
       <div className="checkpoint-panel-header">
-        <h3 className="checkpoint-panel-title">Checkpoints</h3>
+        <h3 className="checkpoint-panel-title">{t("checkpoint.title")}</h3>
         <span className="checkpoint-panel-count">{checkpoints.length}</span>
       </div>
-      <p className="checkpoint-panel-hint">
-        在 write / edit / shell 等 mutating tool 执行前自动创建；Rewind 仅恢复 workspace 文件。
-      </p>
+      <p className="checkpoint-panel-hint">{t("checkpoint.hint")}</p>
 
-      {listQuery.isLoading ? <p className="checkpoint-panel-status">加载中…</p> : null}
+      {listQuery.isLoading ? <p className="checkpoint-panel-status">{t("common.loading")}</p> : null}
       {listQuery.error ? (
-        <p className="error-text">加载失败：{(listQuery.error as Error).message}</p>
+        <p className="error-text">{t("common.loadFailed", { error: (listQuery.error as Error).message })}</p>
       ) : null}
       {actionError ? <p className="error-text">{actionError}</p> : null}
       {actionMessage ? <p className="checkpoint-panel-success">{actionMessage}</p> : null}
 
       {!listQuery.isLoading && checkpoints.length === 0 ? (
-        <p className="checkpoint-panel-empty">此会话尚无 checkpoint。</p>
+        <p className="checkpoint-panel-empty">{t("checkpoint.empty")}</p>
       ) : null}
 
       {checkpoints.length ? (
@@ -113,7 +113,7 @@ export function CheckpointPanel({ sessionId, onRewindSuccess }: CheckpointPanelP
                 <code title={row.id}>{shortId(row.id)}</code>
               </div>
               <button type="button" className="checkpoint-rewind-btn" onClick={() => openConfirm(row.id)}>
-                Rewind…
+                {t("checkpoint.rewind")}
               </button>
             </li>
           ))}
@@ -129,11 +129,11 @@ export function CheckpointPanel({ sessionId, onRewindSuccess }: CheckpointPanelP
             aria-labelledby="checkpoint-confirm-title"
             onClick={(e) => e.stopPropagation()}
           >
-            <h4 id="checkpoint-confirm-title">确认 Rewind</h4>
-            <p className="checkpoint-panel-hint">
-              将把 workspace 中列出的文件恢复到此 checkpoint 之前的状态。
-            </p>
-            {previewQuery.isLoading ? <p className="checkpoint-panel-status">加载 diff…</p> : null}
+            <h4 id="checkpoint-confirm-title">{t("checkpoint.confirmTitle")}</h4>
+            <p className="checkpoint-panel-hint">{t("checkpoint.confirmHint")}</p>
+            {previewQuery.isLoading ? (
+              <p className="checkpoint-panel-status">{t("checkpoint.loadingDiff")}</p>
+            ) : null}
             {previewQuery.error ? (
               <p className="error-text">{(previewQuery.error as Error).message}</p>
             ) : null}
@@ -144,19 +144,19 @@ export function CheckpointPanel({ sessionId, onRewindSuccess }: CheckpointPanelP
                     <div className="checkpoint-diff-path">{change.path}</div>
                     <div className="checkpoint-diff-cols">
                       <div className="checkpoint-diff-col">
-                        <span className="checkpoint-diff-label">当前 workspace</span>
-                        <pre>{change.current ?? "(文件不存在)"}</pre>
+                        <span className="checkpoint-diff-label">{t("checkpoint.currentWorkspace")}</span>
+                        <pre>{change.current ?? t("checkpoint.fileMissing")}</pre>
                       </div>
                       <div className="checkpoint-diff-col">
-                        <span className="checkpoint-diff-label">恢复后</span>
-                        <pre>{change.restore_to ?? "(删除文件)"}</pre>
+                        <span className="checkpoint-diff-label">{t("checkpoint.afterRestore")}</span>
+                        <pre>{change.restore_to ?? t("checkpoint.deleteFile")}</pre>
                       </div>
                     </div>
                   </li>
                 ))}
               </ul>
             ) : previewQuery.data ? (
-              <p className="checkpoint-panel-empty">与当前 workspace 无文件差异。</p>
+              <p className="checkpoint-panel-empty">{t("checkpoint.noDiff")}</p>
             ) : null}
             <div className="checkpoint-actions">
               <button
@@ -165,10 +165,10 @@ export function CheckpointPanel({ sessionId, onRewindSuccess }: CheckpointPanelP
                 disabled={rewindMutation.isPending || previewQuery.isLoading}
                 onClick={() => rewindMutation.mutate(selectedId)}
               >
-                {rewindMutation.isPending ? "恢复中…" : "确认恢复"}
+                {rewindMutation.isPending ? t("checkpoint.confirming") : t("checkpoint.confirm")}
               </button>
               <button type="button" onClick={closeConfirm}>
-                取消
+                {t("checkpoint.cancel")}
               </button>
             </div>
           </div>

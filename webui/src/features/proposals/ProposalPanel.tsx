@@ -2,6 +2,7 @@ import { useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { apiGet } from "../../lib/api-client";
 import { MarkdownView } from "../../lib/MarkdownView";
+import { useI18n } from "../../lib/i18n";
 import type {
   ProposalDetailResponse,
   ProposalGateRunResult,
@@ -11,6 +12,7 @@ import { summarizeGateOutput } from "./gate-utils";
 import { useProposalGateState } from "./useProposalGateState";
 
 export function ProposalPanel() {
+  const { t } = useI18n();
   const queryClient = useQueryClient();
   const [selectedProposalId, setSelectedProposalId] = useState<string | null>(null);
   const [proposalFilter, setProposalFilter] = useState<"open" | "all">("open");
@@ -40,26 +42,28 @@ export function ProposalPanel() {
     <section className="layout-single">
       <section className="panel">
         <div className="panel-title-row">
-          <h2>Proposals</h2>
+          <h2>{t("proposals.title")}</h2>
           <div className="proposal-filter">
             <button
               type="button"
               className={proposalFilter === "open" ? "active" : ""}
               onClick={() => setProposalFilter("open")}
             >
-              Open
+              {t("proposals.filterOpen")}
             </button>
             <button
               type="button"
               className={proposalFilter === "all" ? "active" : ""}
               onClick={() => setProposalFilter("all")}
             >
-              All
+              {t("proposals.filterAll")}
             </button>
           </div>
         </div>
-        {proposals.isLoading ? <p>Loading...</p> : null}
-        {proposals.isError ? <p>Failed: {(proposals.error as Error).message}</p> : null}
+        {proposals.isLoading ? <p>{t("proposals.loading")}</p> : null}
+        {proposals.isError ? (
+          <p>{t("common.loadFailed", { error: (proposals.error as Error).message })}</p>
+        ) : null}
         <div className="proposal-grid">
           <ul className="list">
             {(proposals.data?.proposals || []).map((p) => (
@@ -73,16 +77,18 @@ export function ProposalPanel() {
                   type="button"
                 >
                   <strong>{p.id}</strong>
-                  <small>{p.kind} · {p.occurrences}</small>
+                  <small>
+                    {p.kind} · {p.occurrences}
+                  </small>
                 </button>
               </li>
             ))}
           </ul>
           <div className="proposal-detail">
-            {!selectedProposalId ? <p>Select a proposal.</p> : null}
-            {proposalDetail.isLoading ? <p>Loading proposal...</p> : null}
+            {!selectedProposalId ? <p>{t("proposals.selectProposal")}</p> : null}
+            {proposalDetail.isLoading ? <p>{t("proposals.loadingDetail")}</p> : null}
             {proposalDetail.isError ? (
-              <p>Failed: {(proposalDetail.error as Error).message}</p>
+              <p>{t("common.loadFailed", { error: (proposalDetail.error as Error).message })}</p>
             ) : null}
             {proposalDetail.data ? (
               <>
@@ -108,7 +114,7 @@ export function ProposalPanel() {
                       onChange={(e) => gate.setConfirmReviewed(e.target.checked)}
                       disabled={gate.proposalActionBusy}
                     />
-                    已人工审阅变更
+                    {t("proposals.confirmReviewed")}
                   </label>
                   <label>
                     <input
@@ -117,7 +123,7 @@ export function ProposalPanel() {
                       onChange={(e) => gate.setConfirmPytestGreen(e.target.checked)}
                       disabled={gate.proposalActionBusy}
                     />
-                    `uv run pytest` 已通过
+                    {t("proposals.confirmPytest")}
                   </label>
                   <label>
                     <input
@@ -126,7 +132,7 @@ export function ProposalPanel() {
                       onChange={(e) => gate.setConfirmEvalNoRegression(e.target.checked)}
                       disabled={gate.proposalActionBusy}
                     />
-                    `uv run harnesslab eval` 无回归
+                    {t("proposals.confirmEval")}
                   </label>
                 </div>
                 <div className="proposal-gate-actions">
@@ -135,14 +141,14 @@ export function ProposalPanel() {
                     disabled={gate.proposalActionBusy || gate.gateBusy !== null}
                     onClick={() => gate.runGate("pytest")}
                   >
-                    {gate.gateBusy === "pytest" ? "Running pytest..." : "Run uv run pytest"}
+                    {gate.gateBusy === "pytest" ? t("proposals.runningPytest") : t("proposals.runPytest")}
                   </button>
                   <button
                     type="button"
                     disabled={gate.proposalActionBusy || gate.gateBusy !== null}
                     onClick={() => gate.runGate("eval")}
                   >
-                    {gate.gateBusy === "eval" ? "Running eval..." : "Run uv run harnesslab eval"}
+                    {gate.gateBusy === "eval" ? t("proposals.runningEval") : t("proposals.runEval")}
                   </button>
                 </div>
                 {(gate.gateResults.pytest || gate.gateResults.eval) && (
@@ -161,21 +167,21 @@ export function ProposalPanel() {
                     disabled={gate.proposalActionBusy || !gate.canAccept}
                     onClick={() => gate.updateProposalStatus("accepted")}
                   >
-                    Accept
+                    {t("proposals.accept")}
                   </button>
                   <button
                     type="button"
                     disabled={gate.proposalActionBusy}
                     onClick={() => gate.updateProposalStatus("rejected")}
                   >
-                    Reject
+                    {t("proposals.reject")}
                   </button>
                   <button
                     type="button"
                     disabled={gate.proposalActionBusy}
                     onClick={() => gate.updateProposalStatus("superseded")}
                   >
-                    Supersede
+                    {t("proposals.supersede")}
                   </button>
                   {gate.proposalActionError ? (
                     <span className="error-text">{gate.proposalActionError}</span>
@@ -184,13 +190,13 @@ export function ProposalPanel() {
                 <div className="proposal-action-inputs">
                   <textarea
                     rows={3}
-                    placeholder="Decision note (for reject)"
+                    placeholder={t("proposals.decisionPlaceholder")}
                     value={gate.proposalDecisionNote}
                     onChange={(e) => gate.setProposalDecisionNote(e.target.value)}
                     disabled={gate.proposalActionBusy}
                   />
                   <input
-                    placeholder="Superseded by proposal id"
+                    placeholder={t("proposals.supersededPlaceholder")}
                     value={gate.proposalSupersededBy}
                     onChange={(e) => gate.setProposalSupersededBy(e.target.value)}
                     disabled={gate.proposalActionBusy}
@@ -207,20 +213,22 @@ export function ProposalPanel() {
 }
 
 function GateResultCard({ result }: { result: ProposalGateRunResult }) {
+  const { t } = useI18n();
   const preview = summarizeGateOutput(result.stdout || result.stderr || "");
+  const statusText = result.ok ? t("proposals.gateOk") : t("proposals.gateFailed");
   return (
     <div className={`proposal-gate-result ${result.ok ? "ok" : "fail"}`}>
       <div className="proposal-gate-result-head">
         <strong>{result.gate}</strong>
         <span>
-          {result.ok ? "ok" : "failed"}
-          {result.timed_out ? " (timeout)" : ""} · {result.elapsed_ms}ms
+          {statusText}
+          {result.timed_out ? ` (${t("proposals.timeout")})` : ""} · {result.elapsed_ms}ms
         </span>
       </div>
-      <pre>{preview || "(no output)"}</pre>
+      <pre>{preview || t("common.noOutput")}</pre>
       <details>
-        <summary>查看完整输出</summary>
-        <pre>{result.stdout || result.stderr || "(no output)"}</pre>
+        <summary>{t("proposals.viewFullOutput")}</summary>
+        <pre>{result.stdout || result.stderr || t("common.noOutput")}</pre>
       </details>
     </div>
   );

@@ -173,6 +173,39 @@ Diagnostics: `harnesslab check network` (loads `~/.config/harnesslab/env` by def
 | `read_pdf` | Extract text from workspace PDF files with optional page cap | `_check_path` |
 | `run_shell_safe` | Argv shell invocation against the expanded allowlist + git subcommand gate (Phase 2.5) | `_check_shell` |
 
+### MCP 工具（Phase 5.4）
+
+HarnessLab 可将外部 [MCP](https://modelcontextprotocol.io/) 服务器的工具目录映射为原生 `ToolPort`，与内置工具共用同一执行流水线（见上文 Execution Pipeline）。实现：`tools/mcp_adapter.py`、`tools/mcp_client.py`（stdio JSON-RPC，lazy import）。
+
+**注册与命名**
+
+- 启动时 `register_mcp_servers(registry, configs)` 对每个配置的 server `Popen` 子进程，调用 `tools/list`，注册为 `McpToolAdapter`。
+- 工具名格式：`mcp_{server_name}_{原始工具名}`（见 `mcp_tool_name()`）。
+- 示例：`name: "playwright"` + MCP 工具 `browser_navigate` → `mcp_playwright_browser_navigate`。
+
+**Policy**
+
+- 所有 `mcp_*` 工具默认 **deny**。
+- 仅当工具名出现在 operator config 的 `tools.mcp_allowed_tools[]` 中时，`DefaultPolicy` 返回 allow。
+- 与内置 `web_search` / `fetch_url` 不同：MCP 能力必须 operator 逐工具 opt-in。
+
+**配置字段**（`~/.config/harnesslab/config.json`）
+
+| 字段 | 说明 |
+| --- | --- |
+| `tools.mcp_servers[]` | 每项：`name`、`command`、`args`、`env_names`（可选）、`policy_profile`（默认 `strict`） |
+| `tools.mcp_allowed_tools[]` | 允许执行的 `mcp_*` 工具名 allowlist |
+
+**与 eval / replay**
+
+- 未配置 MCP 时 runtime 不依赖 MCP SDK。
+- MCP 工具调用走相同 `tool_executed` trace；eval / replay 基线不强制包含 MCP（取决于任务是否启用 MCP config）。
+
+**浏览器自动化**
+
+- Core **不**内置 Playwright browser driver；浏览器场景通过 MCP（如 `@playwright/mcp`）接入。
+- 操作员指南：[`docs/guides/mcp-servers.md`](../guides/mcp-servers.md)、[`docs/guides/browser-automation.md`](../guides/browser-automation.md)。
+
 ### Tool lifecycle hooks (Phase 5.8)
 
 Optional hooks can run before and after tool execution via

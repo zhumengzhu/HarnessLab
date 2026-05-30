@@ -9,5 +9,7 @@ eval/reports/
 node_modules/
 webui/node_modules/
 webui/package-lock.json
+webui/test-results/
+webui/playwright-report/
 src/harnesslab/web/static_ts/
 

@@ -8,17 +8,30 @@ import { ComposerPanel } from "./features/composer/ComposerPanel";
 import { useComposerController } from "./features/composer/useComposerController";
 import type { LiveTurnState } from "./features/live-turn/liveTurnReducer";
 import { ProposalPanel } from "./features/proposals/ProposalPanel";
+import { SHOW_PROPOSALS_UI } from "./features/shell/featureFlags";
 import { SessionWorkspace } from "./features/sessions/SessionWorkspace";
+import { SessionViewTabs } from "./features/sessions/SessionViewTabs";
+import type { SessionViewTab } from "./features/sessions/SessionViewTabs";
+import { SessionTraceView } from "./features/sessions/SessionTraceView";
 import { AppSidebar } from "./features/shell/AppSidebar";
+import { AppTopBar } from "./features/shell/AppTopBar";
+import { useSidebarCollapsed } from "./features/shell/useSidebarCollapsed";
+import {
+  CommandPalette,
+  useCommandPaletteShortcut,
+  type CommandPaletteAction,
+} from "./features/shell/CommandPalette";
+import { ChatSessionHeader } from "./features/chat/ChatSessionHeader";
+import { DEFAULT_AGENT_PERSONA } from "./lib/agentPersona";
 import { SettingsPanel } from "./features/settings/SettingsPanel";
 import { SkillBrowserPanel } from "./features/settings/SkillBrowserPanel";
-import { TracePanel } from "./features/trace/TracePanel";
-import { CheckpointPanel } from "./features/sessions/CheckpointPanel";
+import { UsagePanel } from "./features/usage/UsagePanel";
 import {
   modelsForSessionPicker,
   resolveEffectiveModel,
 } from "./lib/sessionModel";
 import type { TurnEnrichment } from "./lib/turnEnrichments";
+import { isChatMessageVisible } from "./lib/messageVisibility";
 import {
   buildTurnEnrichmentsFromTrace,
   mergeTurnEnrichments,
@@ -26,17 +39,32 @@ import {
 import {
   loadStoredActivityDisplay,
   loadStoredChatTextSize,
+  loadStoredFocusMode,
+  loadStoredLocale,
   loadStoredSessionId,
-  loadStoredUiMode,
+  loadStoredSessionViewTab,
+  loadStoredShowThinking,
+  loadStoredShowTools,
+  loadStoredThemeFamily,
   loadStoredUiTheme,
   saveStoredActivityDisplay,
   saveStoredChatTextSize,
+  saveStoredFocusMode,
+  saveStoredLocale,
   saveStoredSessionId,
-  saveStoredUiMode,
+  saveStoredSessionViewTab,
+  saveStoredShowThinking,
+  saveStoredShowTools,
+  saveStoredThemeFamily,
   saveStoredUiTheme,
 } from "./lib/uiPreferences";
-import { applyUiTheme } from "./features/shell/theme";
-import type { UiTheme } from "./features/shell/theme";
+import {
+  applyUiTheme,
+  resolveUiTheme,
+  type ThemeFamily,
+  type ThemePreference,
+} from "./features/shell/theme";
+import { I18nProvider, translate, type Locale } from "./lib/i18n";
 import { ChatDisplayProvider } from "./features/chat/chatDisplayPreferences";
 import type { ActivityDisplayMode, ChatTextSize } from "./features/chat/chatDisplay";
 import type { AgentMode } from "./features/chat/AgentModeSelector";
@@ -56,7 +84,7 @@ import type {
   TraceResponse,
 } from "./lib/schemas";
 
-type MainView = "chat" | "proposals" | "settings" | "skills";
+type MainView = "chat" | "proposals" | "settings" | "skills" | "usage";
 
 function isSessionNotFoundError(err: unknown): boolean {
   const message = err instanceof Error ? err.message : String(err);
@@ -65,9 +93,6 @@ function isSessionNotFoundError(err: unknown): boolean {
 
 export function App() {
   const queryClient = useQueryClient();
-  const [uiMode, setUiMode] = useState<"simple" | "advanced">(
-    () => loadStoredUiMode() ?? "simple"
-  );
   const [activityDisplay, setActivityDisplay] = useState<ActivityDisplayMode>(
     () => loadStoredActivityDisplay() ?? "detailed"
   );
@@ -92,12 +117,48 @@ export function App() {
   const [modelSwitchError, setModelSwitchError] = useState<string | null>(null);
   const [composerChromeCollapsed, setComposerChromeCollapsed] = useState(false);
   const [activityCleared, setActivityCleared] = useState(false);
-  const [uiTheme, setUiTheme] = useState<UiTheme>(() => loadStoredUiTheme() ?? "dark");
+  const [themeFamily, setThemeFamily] = useState<ThemeFamily>(
+    () => loadStoredThemeFamily() ?? "claw"
+  );
+  const [themePreference, setThemePreference] = useState<ThemePreference>(
+    () => loadStoredUiTheme() ?? "system"
+  );
+  const [showThinking, setShowThinking] = useState(
+    () => loadStoredShowThinking() ?? true
+  );
+  const [showTools, setShowTools] = useState(() => loadStoredShowTools() ?? true);
+  const [focusMode, setFocusMode] = useState(() => loadStoredFocusMode() ?? false);
+  const { collapsed: sidebarCollapsed, toggleCollapsed: toggleSidebarCollapsed } =
+    useSidebarCollapsed();
+  const [locale, setLocale] = useState<Locale>(() => {
+    const stored = loadStoredLocale();
+    if (stored) return stored;
+    if (typeof navigator !== "undefined" && navigator.language.toLowerCase().startsWith("zh")) {
+      return "zh";
+    }
+    return "en";
+  });
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
+  const [sessionViewTab, setSessionViewTab] = useState<SessionViewTab>(
+    () => loadStoredSessionViewTab() ?? "chat"
+  );
 
   useEffect(() => {
-    applyUiTheme(uiTheme);
-    saveStoredUiTheme(uiTheme);
-  }, [uiTheme]);
+    applyUiTheme(resolveUiTheme(themeFamily, themePreference));
+    saveStoredUiTheme(themePreference);
+    saveStoredThemeFamily(themeFamily);
+  }, [themeFamily, themePreference]);
+
+  useEffect(() => {
+    if (themePreference !== "system") return;
+    if (typeof window.matchMedia !== "function") return;
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const onChange = () => applyUiTheme(resolveUiTheme(themeFamily, "system"));
+    media.addEventListener("change", onChange);
+    return () => media.removeEventListener("change", onChange);
+  }, [themeFamily, themePreference]);
+
+  useCommandPaletteShortcut(() => setCommandPaletteOpen(true));
 
   function selectSession(id: string | null) {
     const switchingSession = id !== selectedSessionId;
@@ -190,7 +251,7 @@ export function App() {
   const settings = useQuery({
     queryKey: ["settings"],
     queryFn: () => apiGet<SettingsResponse>("/api/settings"),
-    enabled: uiMode === "advanced" && mainView === "settings",
+    enabled: mainView === "settings",
   });
   const sessions = useQuery({
     queryKey: ["sessions", selectedSessionId],
@@ -256,12 +317,16 @@ export function App() {
 
   const visibleMessages = useMemo(() => {
     const rows = streamMessages ?? sessionDetail.data?.messages ?? [];
-    return rows.filter(
-      (m) =>
-        m.role === "user" ||
-        (m.role === "assistant" && (m.content.trim() || m.reasoning_text))
+    return rows.filter((m) =>
+      isChatMessageVisible(m, { showThinking, showTools }, turnEnrichments[m.id])
     );
-  }, [sessionDetail.data?.messages, streamMessages]);
+  }, [
+    sessionDetail.data?.messages,
+    streamMessages,
+    showThinking,
+    showTools,
+    turnEnrichments,
+  ]);
 
   const chatRows = useMemo(() => {
     if (!liveTurn) return visibleMessages;
@@ -269,20 +334,6 @@ export function App() {
     const withoutDuplicateUser = visibleMessages.filter((m) => m.id !== pendingUserId);
     return [...withoutDuplicateUser, liveTurn.userMessage];
   }, [liveTurn, visibleMessages]);
-
-  const toolMessages = useMemo(() => {
-    const rows = streamMessages ?? sessionDetail.data?.messages ?? [];
-    return rows.filter((m) => m.role === "tool");
-  }, [sessionDetail.data?.messages, streamMessages]);
-  const budgetEvents = useMemo(() => {
-    return traceRows.filter((e) =>
-      [
-        "budget_soft_threshold",
-        "budget_hard_exceeded",
-        "budget_enforcement_action",
-      ].includes(e.event_type)
-    );
-  }, [traceRows]);
 
   const childSessions = useMemo(() => {
     if (!selectedSessionId) return [];
@@ -346,12 +397,9 @@ export function App() {
     }
   }
 
-  function switchUiMode(mode: "simple" | "advanced") {
-    setUiMode(mode);
-    saveStoredUiMode(mode);
-    if (mode === "simple") {
-      setMainView("chat");
-    }
+  function switchSessionViewTab(tab: SessionViewTab) {
+    setSessionViewTab(tab);
+    saveStoredSessionViewTab(tab);
   }
 
   function switchActivityDisplay(mode: ActivityDisplayMode) {
@@ -364,20 +412,122 @@ export function App() {
     saveStoredChatTextSize(size);
   }
 
+  function switchShowThinking(value: boolean) {
+    setShowThinking(value);
+    saveStoredShowThinking(value);
+  }
+
+  function switchShowTools(value: boolean) {
+    setShowTools(value);
+    saveStoredShowTools(value);
+  }
+
+  function switchFocusMode(value: boolean) {
+    setFocusMode(value);
+    saveStoredFocusMode(value);
+  }
+
+  function switchLocale(next: Locale) {
+    setLocale(next);
+    saveStoredLocale(next);
+  }
+
+  const currentSessionSummary = useMemo(
+    () => (sessions.data?.sessions ?? []).find((s) => s.id === selectedSessionId) ?? null,
+    [sessions.data?.sessions, selectedSessionId]
+  );
+
+  const commandActions = useMemo((): CommandPaletteAction[] => {
+    const t = (key: string) => translate(locale, key);
+    const nav: CommandPaletteAction[] = [
+      {
+        id: "nav-chat",
+        label: t("command.openChat"),
+        group: t("command.nav"),
+        run: () => setMainView("chat"),
+      },
+      {
+        id: "nav-settings",
+        label: t("command.openSettings"),
+        group: t("command.nav"),
+        run: () => setMainView("settings"),
+      },
+      ...(SHOW_PROPOSALS_UI
+        ? ([
+            {
+              id: "nav-proposals",
+              label: t("command.openProposals"),
+              group: t("command.nav"),
+              run: () => setMainView("proposals"),
+            },
+          ] satisfies CommandPaletteAction[])
+        : []),
+      {
+        id: "nav-skills",
+        label: t("command.openSkills"),
+        group: t("command.nav"),
+        run: () => setMainView("skills"),
+      },
+      {
+        id: "nav-usage",
+        label: t("command.openUsage"),
+        group: t("command.nav"),
+        run: () => setMainView("usage"),
+      },
+      {
+        id: "nav-trace",
+        label: t("command.openTrace"),
+        group: t("command.nav"),
+        run: () => {
+          setMainView("chat");
+          setSessionViewTab("trace");
+        },
+      },
+      {
+        id: "cmd-compact",
+        label: t("command.compact"),
+        group: t("command.cmd"),
+        run: () => composerCtrl.sendCommand("/compact"),
+      },
+      {
+        id: "cmd-skill-list",
+        label: t("command.skillList"),
+        group: t("command.cmd"),
+        hint: "/skill list",
+        run: () => composerCtrl.setComposer("/skill list"),
+      },
+    ];
+    const sessionActions = (sessions.data?.sessions ?? []).slice(0, 20).map((session) => ({
+      id: `session-${session.id}`,
+      label: session.title || session.goal || session.id,
+      group: t("command.sessions"),
+      hint: session.id,
+      run: () => selectSession(session.id),
+    }));
+    return [...nav, ...sessionActions];
+  }, [sessions.data?.sessions, composerCtrl, locale]);
+
   const chatDisplayValue = useMemo(
     () => ({
       activityDisplay,
       setActivityDisplay: switchActivityDisplay,
       chatTextSize,
       setChatTextSize: switchChatTextSize,
+      showThinking,
+      setShowThinking: switchShowThinking,
+      showTools,
+      setShowTools: switchShowTools,
     }),
-    [activityDisplay, chatTextSize]
+    [activityDisplay, chatTextSize, showThinking, showTools]
   );
 
   return (
+    <I18nProvider locale={locale} onLocaleChange={switchLocale}>
     <ChatDisplayProvider value={chatDisplayValue}>
     <div
-      className={`app-shell${uiMode === "advanced" && mainView === "chat" ? " app-shell-with-trace" : ""}`}
+      className={`app-shell${focusMode ? " app-shell-focus" : ""}${
+        sidebarCollapsed ? " app-shell-sidebar-collapsed" : ""
+      }`}
     >
       <AppSidebar
         sessions={sessions.data?.sessions ?? []}
@@ -386,131 +536,195 @@ export function App() {
         sessionsLoading={sessions.isLoading}
         sessionsError={sessions.isError ? (sessions.error as Error).message : null}
         sessionActionError={sessionActionError}
-        uiMode={uiMode}
         mainView={mainView}
         healthOk={Boolean(health.data?.ok)}
+        version={health.data?.version}
+        focusMode={focusMode}
+        collapsed={sidebarCollapsed}
+        onToggleCollapsed={toggleSidebarCollapsed}
         onSelectSession={selectSession}
         onForkCurrentSession={() => forkCurrentSession(composerCtrl.sending)}
-        onUiModeChange={switchUiMode}
         onMainViewChange={setMainView}
-        uiTheme={uiTheme}
-        onUiThemeChange={setUiTheme}
       />
 
       <div className={`app-main chat-text-${chatTextSize}`}>
+        <AppTopBar
+          mainView={mainView}
+          sessionTitle={
+            currentSessionSummary?.title ||
+            currentSessionSummary?.goal ||
+            (selectedSessionId ? selectedSessionId.slice(0, 12) : null)
+          }
+          focusMode={focusMode}
+          themePreference={themePreference}
+          onThemePreferenceChange={setThemePreference}
+          onOpenCommandPalette={() => setCommandPaletteOpen(true)}
+          onExitFocusMode={() => switchFocusMode(false)}
+        />
+
+        <CommandPalette
+          open={commandPaletteOpen}
+          onClose={() => setCommandPaletteOpen(false)}
+          actions={commandActions}
+        />
         {mainView === "chat" ? (
-          <div className="app-chat-stack">
-            <SessionWorkspace
-              uiMode={uiMode}
-              selectedSessionId={selectedSessionId}
-              sending={composerCtrl.sending}
-              sessionDetailLoading={sessionDetail.isLoading}
-              sessionDetailError={
-                sessionDetail.isError ? (sessionDetail.error as Error).message : null
-              }
-              sessionDetailData={sessionDetail.data}
-              visibleMessages={chatRows}
-              toolMessages={toolMessages}
-              turnEnrichments={turnEnrichments}
-              liveTurn={liveTurn}
-              budgetEvents={budgetEvents}
-              hasStreamMessages={(streamMessages?.length ?? 0) > 0}
-              onComposerChromeChange={setComposerChromeCollapsed}
+          <div className="app-session-view">
+            <SessionViewTabs
+              value={sessionViewTab}
+              onChange={switchSessionViewTab}
+              showTrace
             />
+            <div className="app-session-view-body">
+              {sessionViewTab === "chat" ? (
+                <>
+                  <ChatSessionHeader
+                    session={currentSessionSummary}
+                    sessionId={selectedSessionId}
+                    currentModelId={currentModelId}
+                    currentLabel={currentLabel}
+                    models={models}
+                    modelSwitching={modelSwitching}
+                    modelSwitchError={modelSwitchError}
+                    showThinking={showThinking}
+                    showTools={showTools}
+                    focusMode={focusMode}
+                    onModelSwitch={handleModelSwitch}
+                    onDismissModelError={() => setModelSwitchError(null)}
+                    onToggleThinking={() => switchShowThinking(!showThinking)}
+                    onToggleTools={() => switchShowTools(!showTools)}
+                    onToggleFocus={() => switchFocusMode(!focusMode)}
+                    onRefresh={() => {
+                      if (!selectedSessionId) return;
+                      void queryClient.invalidateQueries({ queryKey: ["session", selectedSessionId] });
+                      void queryClient.invalidateQueries({ queryKey: ["trace", selectedSessionId] });
+                    }}
+                  />
 
-            <ChildSessionsPanel
-              parentSession={parentSession}
-              childSessions={childSessions}
-              selectedSessionId={selectedSessionId}
-              onSelectSession={(id) => selectSession(id)}
-            />
+                  <SessionWorkspace
+                    selectedSessionId={selectedSessionId}
+                    sessionDetailLoading={sessionDetail.isLoading}
+                    sessionDetailError={
+                      sessionDetail.isError ? (sessionDetail.error as Error).message : null
+                    }
+                    sessionDetailData={sessionDetail.data}
+                    visibleMessages={chatRows}
+                    turnEnrichments={turnEnrichments}
+                    liveTurn={liveTurn}
+                    hasStreamMessages={(streamMessages?.length ?? 0) > 0}
+                    persona={DEFAULT_AGENT_PERSONA}
+                    contextSnapshot={displayedContext}
+                    modelLabel={currentLabel}
+                    onPickPrompt={(text) => composerCtrl.setComposer(text)}
+                    onComposerChromeChange={setComposerChromeCollapsed}
+                  />
 
-            <ActivityPanel
-              entries={activityEntries}
-              live={composerCtrl.sending}
-              onClear={() => setActivityCleared(true)}
-            />
+                  <ChildSessionsPanel
+                    parentSession={parentSession}
+                    childSessions={childSessions}
+                    selectedSessionId={selectedSessionId}
+                    onSelectSession={(id) => selectSession(id)}
+                  />
 
-            <div className="app-composer-dock">
-              <ComposerPanel
-                composer={composerCtrl.composer}
-                sending={composerCtrl.sending}
-                sendError={composerCtrl.sendError}
-                queuedMessages={composerCtrl.queuedMessages}
-                steeredMessages={composerCtrl.steeredMessages}
-                rememberMode={composerCtrl.rememberMode}
-                slashMenu={composerCtrl.slashMenu}
-                agentMode={agentMode}
-                onAgentModeChange={setAgentMode}
-                currentModelId={currentModelId}
-                currentLabel={currentLabel}
-                models={models}
-                modelSwitching={modelSwitching}
-                modelSwitchError={modelSwitchError}
-                contextSnapshot={displayedContext}
-                onModelSwitch={handleModelSwitch}
-                onDismissModelError={() => setModelSwitchError(null)}
-                onSubmit={composerCtrl.onSubmit}
-                onSend={composerCtrl.onSend}
-                onStop={composerCtrl.onStop}
-                onComposerChange={composerCtrl.setComposer}
-                onToggleRememberMode={composerCtrl.toggleRememberMode}
-                onPickSlashItem={composerCtrl.pickSlashItem}
-                onComposerKeyDown={composerCtrl.onComposerKeyDown}
-                onCompositionStart={composerCtrl.onCompositionStart}
-                onCompositionEnd={composerCtrl.onCompositionEnd}
-                selectedSessionId={selectedSessionId}
-                onCompact={() => composerCtrl.sendCommand("/compact")}
-                chromeCollapsed={composerChromeCollapsed}
-              />
+                  <div className="app-composer-dock">
+                    <ComposerPanel
+                      composer={composerCtrl.composer}
+                      sending={composerCtrl.sending}
+                      sendError={composerCtrl.sendError}
+                      queuedCount={composerCtrl.queuedMessages.length}
+                      steeredCount={composerCtrl.steeredMessages.length}
+                      rememberMode={composerCtrl.rememberMode}
+                      slashMenu={composerCtrl.slashMenu}
+                      agentMode={agentMode}
+                      onAgentModeChange={setAgentMode}
+                      contextSnapshot={displayedContext}
+                      onSubmit={composerCtrl.onSubmit}
+                      onSend={composerCtrl.onSend}
+                      onStop={composerCtrl.onStop}
+                      onComposerChange={composerCtrl.setComposer}
+                      onToggleRememberMode={composerCtrl.toggleRememberMode}
+                      onPickSlashItem={composerCtrl.pickSlashItem}
+                      onComposerKeyDown={composerCtrl.onComposerKeyDown}
+                      onCompositionStart={composerCtrl.onCompositionStart}
+                      onCompositionEnd={composerCtrl.onCompositionEnd}
+                      selectedSessionId={selectedSessionId}
+                      onCompact={() => composerCtrl.sendCommand("/compact")}
+                      agentName={DEFAULT_AGENT_PERSONA.name}
+                      chromeCollapsed={composerChromeCollapsed}
+                    />
+                  </div>
+                </>
+              ) : null}
+
+              {sessionViewTab === "trace" ? (
+                <SessionTraceView
+                  sessionId={selectedSessionId}
+                  loading={sessionTrace.isLoading}
+                  error={sessionTrace.isError ? (sessionTrace.error as Error).message : null}
+                  rows={traceRows}
+                  hasStreamTrace={streamTrace.length > 0}
+                  onClearStreamTrace={() => setStreamTrace([])}
+                  onRewindSuccess={() => {
+                    if (!selectedSessionId) return;
+                    void queryClient.invalidateQueries({ queryKey: ["session", selectedSessionId] });
+                    void queryClient.invalidateQueries({ queryKey: ["trace", selectedSessionId] });
+                  }}
+                />
+              ) : null}
+
+              {sessionViewTab === "activity" ? (
+                <ActivityPanel
+                  entries={activityEntries}
+                  live={composerCtrl.sending}
+                  onClear={() => setActivityCleared(true)}
+                  fullPage
+                />
+              ) : null}
             </div>
           </div>
         ) : null}
 
-        {mainView === "proposals" && uiMode === "advanced" ? (
+        {SHOW_PROPOSALS_UI && mainView === "proposals" ? (
           <div className="app-page-content">
             <ProposalPanel />
           </div>
         ) : null}
 
-        {mainView === "settings" && uiMode === "advanced" ? (
+        {mainView === "settings" ? (
           <div className="app-page-content">
             <SettingsPanel
               loading={settings.isLoading}
               error={settings.isError ? (settings.error as Error).message : null}
               data={settings.data}
+              health={health.data}
+              healthLoading={health.isLoading}
+              themeFamily={themeFamily}
+              onThemeFamilyChange={setThemeFamily}
+              themePreference={themePreference}
+              onThemePreferenceChange={setThemePreference}
+              locale={locale}
+              onLocaleChange={switchLocale}
+              activityDisplay={activityDisplay}
+              onActivityDisplayChange={switchActivityDisplay}
+              chatTextSize={chatTextSize}
+              onChatTextSizeChange={switchChatTextSize}
             />
           </div>
         ) : null}
 
-        {mainView === "skills" && uiMode === "advanced" ? (
+        {mainView === "skills" ? (
           <div className="app-page-content">
             <SkillBrowserPanel />
           </div>
         ) : null}
-      </div>
 
-      {uiMode === "advanced" && mainView === "chat" ? (
-        <aside className="app-trace-column">
-          <CheckpointPanel
-            sessionId={selectedSessionId}
-            onRewindSuccess={() => {
-              if (!selectedSessionId) return;
-              void queryClient.invalidateQueries({ queryKey: ["session", selectedSessionId] });
-              void queryClient.invalidateQueries({ queryKey: ["trace", selectedSessionId] });
-            }}
-          />
-          <TracePanel
-            selectedSessionId={selectedSessionId}
-            loading={sessionTrace.isLoading}
-            error={sessionTrace.isError ? (sessionTrace.error as Error).message : null}
-            rows={traceRows}
-            hasStreamTrace={streamTrace.length > 0}
-            onClearStreamTrace={() => setStreamTrace([])}
-          />
-        </aside>
-      ) : null}
+        {mainView === "usage" ? (
+          <div className="app-page-content">
+            <UsagePanel />
+          </div>
+        ) : null}
+      </div>
     </div>
     </ChatDisplayProvider>
+    </I18nProvider>
   );
 }

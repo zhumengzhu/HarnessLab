@@ -1,4 +1,5 @@
 import type { SessionSummary } from "../../lib/schemas";
+import { useI18n } from "../../lib/i18n";
 import { sessionLabel, sessionStatusLabel } from "../../lib/sessionLabels";
 
 type ChildSessionsPanelProps = {
@@ -20,15 +21,17 @@ export function ChildSessionsPanel({
   selectedSessionId,
   onSelectSession,
 }: ChildSessionsPanelProps) {
+  const { t } = useI18n();
+
   if (!parentSession && childSessions.length === 0) {
     return null;
   }
 
   return (
-    <section className="child-sessions-panel" aria-label="子会话">
+    <section className="child-sessions-panel" aria-label={t("session.childSessions")}>
       {parentSession ? (
         <div className="child-sessions-parent">
-          <span className="child-sessions-parent-label">父会话</span>
+          <span className="child-sessions-parent-label">{t("session.parentSession")}</span>
           <button
             type="button"
             className="child-sessions-parent-btn"
@@ -42,7 +45,7 @@ export function ChildSessionsPanel({
       {childSessions.length ? (
         <div className="child-sessions-list-wrap">
           <div className="child-sessions-header">
-            <span className="child-sessions-title">子 Agent</span>
+            <span className="child-sessions-title">{t("session.childAgents")}</span>
             <span className="child-sessions-count">{childSessions.length}</span>
           </div>
           <ul className="child-sessions-list">
@@ -58,7 +61,9 @@ export function ChildSessionsPanel({
                     <span className="child-sessions-item-title">{shortGoal(child)}</span>
                     <span className="child-sessions-item-meta">
                       {sessionStatusLabel(child.status)}
-                      {child.step_count > 0 ? ` · ${child.step_count} steps` : ""}
+                      {child.step_count > 0
+                        ? ` · ${t("session.stepsCount", { count: child.step_count })}`
+                        : ""}
                     </span>
                   </button>
                 </li>

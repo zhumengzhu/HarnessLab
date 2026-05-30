@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import { apiPost } from "../../lib/api-client";
+import { useI18n } from "../../lib/i18n";
 
 type OperatorControlsProps = {
   multiAgentEnabled: boolean;
@@ -10,6 +11,7 @@ type OperatorControlsProps = {
 
 export function OperatorControls(props: OperatorControlsProps) {
   const { multiAgentEnabled, failoverEnabled, fallbacks } = props;
+  const { t } = useI18n();
   const queryClient = useQueryClient();
   const [pending, setPending] = useState(false);
   const [note, setNote] = useState<string | null>(null);
@@ -25,7 +27,7 @@ export function OperatorControls(props: OperatorControlsProps) {
         multi_agent_enabled: boolean;
         message?: string;
       }>("/api/settings/multi-agent", { enabled: next });
-      setNote(result.message ?? "Saved. Restart ./hl-serve to apply spawn_sub_agent.");
+      setNote(result.message ?? t("settings.savedRestartHint"));
       await queryClient.invalidateQueries({ queryKey: ["settings"] });
     } catch (err) {
       setError((err as Error).message);
@@ -34,9 +36,11 @@ export function OperatorControls(props: OperatorControlsProps) {
     }
   }
 
+  const failoverChain = fallbacks.length ? fallbacks.join(" → ") : t("settings.noFallbacks");
+
   return (
     <details className="settings-section settings-operator" open>
-      <summary>Operator controls</summary>
+      <summary>{t("settings.operatorControls")}</summary>
       <div className="settings-operator-row">
         <label className="settings-toggle">
           <input
@@ -45,23 +49,20 @@ export function OperatorControls(props: OperatorControlsProps) {
             disabled={pending}
             onChange={(e) => void toggleMultiAgent(e.target.checked)}
           />
-          <span>Multi-agent (spawn_sub_agent)</span>
+          <span>{t("settings.multiAgent")}</span>
         </label>
-        <p className="settings-mcp-hint">
-          写入 <code>config.json</code> 的 <code>loop.multi_agent.enabled</code>。
-          注册工具需重启 serve。
-        </p>
+        <p className="settings-mcp-hint">{t("settings.multiAgentHint")}</p>
       </div>
       <div className="settings-operator-row">
-        <strong>Provider failover</strong>
+        <strong>{t("settings.providerFailover")}</strong>
         <p className="settings-mcp-hint">
           {failoverEnabled
-            ? `Enabled · chain: ${fallbacks.length ? fallbacks.join(" → ") : "(no fallbacks configured)"}`
-            : "Disabled — set model.failover_enabled in config to enable P6 chain."}
+            ? t("settings.failoverEnabled", { chain: failoverChain })
+            : t("settings.failoverDisabled")}
         </p>
       </div>
       {note ? <p className="skills-status">{note}</p> : null}
-      {error ? <p className="error-text">{error}</p> : null}
+      {error ? <p className="error-text">{t("common.loadFailed", { error })}</p> : null}
     </details>
   );
 }

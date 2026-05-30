@@ -2,7 +2,7 @@ import type { TraceEventItem } from "../../lib/schemas";
 
 export type ActivityEntry = {
   id: string;
-  kind: "tool" | "tool_denied" | "step" | "thinking" | "compact" | "steer" | "spawn";
+  kind: "tool" | "tool_denied" | "step" | "thinking" | "compact" | "steer" | "spawn" | "failover";
   label: string;
   detail?: string;
   ok?: boolean;
@@ -12,6 +12,7 @@ export type ActivityEntry = {
 const ACTIVITY_EVENT_TYPES = new Set([
   "step_started",
   "model_call_started",
+  "model_call",
   "tool_executed",
   "tool_denied",
   "compaction_started",
@@ -90,6 +91,23 @@ export function activityEntryFromTrace(evt: TraceEventItem): ActivityEntry | nul
       id,
       kind: "thinking",
       label: `${step} · ${thinking}`,
+      at: evt.created_at,
+    };
+  }
+
+  if (evt.event_type === "model_call") {
+    const attempts = payload.failover_attempts;
+    if (typeof attempts !== "number" || attempts <= 1) {
+      return null;
+    }
+    const backend = String(payload.failover_backend || "backend");
+    const exhausted = payload.failover_exhausted === true;
+    return {
+      id,
+      kind: "failover",
+      label: exhausted ? `failover exhausted · ${backend}` : `failover · ${backend}`,
+      detail: `attempt ${attempts}`,
+      ok: !exhausted,
       at: evt.created_at,
     };
   }

@@ -1,4 +1,5 @@
 import type { SlashMenuItem } from "./useComposerSlashMenu";
+import { useI18n } from "../../lib/i18n";
 
 type ComposerSlashMenuProps = {
   open: boolean;
@@ -9,10 +10,11 @@ type ComposerSlashMenuProps = {
 
 export function ComposerSlashMenu(props: ComposerSlashMenuProps) {
   const { open, items, activeIndex, onPick } = props;
+  const { t } = useI18n();
   if (!open) return null;
 
   return (
-    <div className="composer-slash-menu" role="listbox" aria-label="Slash commands">
+    <div className="composer-slash-menu" role="listbox" aria-label={t("chat.slashCommands")}>
       {items.map((item, idx) => (
         <button
           key={`${item.group}-${item.name}`}
@@ -28,9 +30,9 @@ export function ComposerSlashMenu(props: ComposerSlashMenuProps) {
           <span className="composer-slash-usage">{item.usage}</span>
           <span className="composer-slash-desc">{item.description}</span>
           {item.group === "skill" ? (
-            <span className="composer-slash-tag">skill</span>
+            <span className="composer-slash-tag">{t("composer.skillTag")}</span>
           ) : item.kind === "admin" ? (
-            <span className="composer-slash-tag">admin</span>
+            <span className="composer-slash-tag">{t("composer.adminTag")}</span>
           ) : null}
         </button>
       ))}

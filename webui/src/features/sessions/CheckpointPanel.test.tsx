@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CheckpointPanel } from "./CheckpointPanel";
+import { I18nProvider } from "../../lib/i18n";
 
 function renderPanel(sessionId: string | null = "ses_test") {
   const queryClient = new QueryClient({
@@ -9,7 +10,9 @@ function renderPanel(sessionId: string | null = "ses_test") {
   });
   return render(
     <QueryClientProvider client={queryClient}>
-      <CheckpointPanel sessionId={sessionId} />
+      <I18nProvider locale="zh" onLocaleChange={() => {}}>
+        <CheckpointPanel sessionId={sessionId} />
+      </I18nProvider>
     </QueryClientProvider>
   );
 }
@@ -74,7 +77,7 @@ describe("CheckpointPanel", () => {
     renderPanel("ses_test");
 
     expect(await screen.findByText("write_file")).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "Rewind…" }));
+    fireEvent.click(screen.getByRole("button", { name: /Rewind…|Rewind\.\.\./ }));
 
     await waitFor(() => {
       expect(screen.getByText("当前 workspace")).toBeTruthy();

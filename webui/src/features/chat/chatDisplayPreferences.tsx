@@ -6,6 +6,10 @@ export type ChatDisplayPreferences = {
   setActivityDisplay: (mode: ActivityDisplayMode) => void;
   chatTextSize: ChatTextSize;
   setChatTextSize: (size: ChatTextSize) => void;
+  showThinking: boolean;
+  setShowThinking: (value: boolean) => void;
+  showTools: boolean;
+  setShowTools: (value: boolean) => void;
 };
 
 const ChatDisplayContext = createContext<ChatDisplayPreferences | null>(null);

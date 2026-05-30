@@ -21,13 +21,26 @@ export function ModelCallInspector({ payload }: ModelCallInspectorProps) {
     typeof payload.reasoning_text === "string" ? payload.reasoning_text : null;
   const latencyMs =
     typeof payload.latency_ms === "number" ? payload.latency_ms : null;
+  const failoverAttempts =
+    typeof payload.failover_attempts === "number" ? payload.failover_attempts : null;
+  const failoverBackend =
+    typeof payload.failover_backend === "string" ? payload.failover_backend : null;
+  const failoverExhausted = payload.failover_exhausted === true;
 
-  if (!blocks.length && !apiMessages.length && !reasoning) {
+  if (!blocks.length && !apiMessages.length && !reasoning && failoverAttempts == null) {
     return null;
   }
 
   return (
     <div className="trace-model-call-inspector">
+      {failoverAttempts != null && failoverAttempts > 1 && failoverBackend ? (
+        <div className="trace-failover-banner">
+          {failoverExhausted
+            ? `Failover exhausted after ${failoverAttempts} attempts (last: ${failoverBackend})`
+            : `Failover succeeded on ${failoverBackend} (attempt ${failoverAttempts})`}
+        </div>
+      ) : null}
+
       {latencyMs != null ? (
         <div className="trace-inspector-meta">
           latency: {latencyMs.toFixed(0)}ms
@@ -76,7 +89,14 @@ export function summarizeModelCall(payload: Record<string, unknown>): string {
   const blocks = Array.isArray(payload.prompt_blocks) ? payload.prompt_blocks.length : 0;
   const reasoning =
     typeof payload.reasoning_text === "string" ? payload.reasoning_text.length : 0;
+  const failoverAttempts =
+    typeof payload.failover_attempts === "number" ? payload.failover_attempts : null;
+  const failoverBackend =
+    typeof payload.failover_backend === "string" ? payload.failover_backend : null;
   const parts = [kind, latency].filter(Boolean);
+  if (failoverAttempts != null && failoverAttempts > 1 && failoverBackend) {
+    parts.push(`failover ${failoverBackend} #${failoverAttempts}`);
+  }
   if (blocks) parts.push(`${blocks} blocks`);
   if (reasoning) parts.push(`reasoning ${reasoning}c`);
   return parts.join(" · ") || "model call";

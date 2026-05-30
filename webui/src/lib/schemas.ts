@@ -35,6 +35,10 @@ export type HealthResponse = {
   model_label?: string | null;
   workspace: string;
   runtime_context_tokens?: number;
+  version?: string;
+  trace_path?: string | null;
+  pricing_version?: string | null;
+  pricing_fingerprint?: string | null;
 };
 
 export type SettingsResponse = {
@@ -68,6 +72,66 @@ export type SessionSummary = {
 
 export type SessionsResponse = {
   sessions: SessionSummary[];
+};
+
+export type UsageTotals = {
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+  cost_display?: number | null;
+  llm_calls: number;
+  tool_calls: number;
+  session_count: number;
+  dimensions?: Record<string, number>;
+};
+
+export type UsageDailyBucket = {
+  date: string;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+  cost_display?: number | null;
+  llm_calls: number;
+  dimensions?: Record<string, number>;
+};
+
+export type UsageModelBucket = {
+  model: string;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+  cost_display?: number | null;
+  llm_calls: number;
+  dimensions?: Record<string, number>;
+};
+
+export type UsageSessionRow = {
+  session_id: string;
+  title: string;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cost_usd: number;
+  cost_display?: number | null;
+  llm_calls: number;
+  tool_calls: number;
+  last_activity_at: string | null;
+  budget_status: string;
+  dimensions?: Record<string, number>;
+};
+
+export type UsageResponse = {
+  range: string;
+  source: "trace" | "sessions";
+  display_currency?: string;
+  currency_symbol?: string;
+  totals: UsageTotals;
+  daily: UsageDailyBucket[];
+  by_model: UsageModelBucket[];
+  sessions: UsageSessionRow[];
 };
 
 export type MessageItem = {
@@ -193,6 +257,13 @@ export type TraceEventItem = {
 export type TraceResponse = {
   session_id: string;
   events: TraceEventItem[];
+};
+
+export type TraceJsonlResponse = {
+  session_id: string;
+  trace_path: string | null;
+  line_count: number;
+  jsonl: string;
 };
 
 export type ProposalSummary = {

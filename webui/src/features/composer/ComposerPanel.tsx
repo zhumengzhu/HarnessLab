@@ -1,28 +1,28 @@
+import { useState } from "react";
 import type { CompositionEvent, FormEvent, KeyboardEvent } from "react";
-import type { ContextSnapshot, ModelInfo, ModelSwitchRequest } from "../../lib/schemas";
-import { ChatToolbar } from "../chat/ChatToolbar";
+import type { ContextSnapshot } from "../../lib/schemas";
+import { useI18n } from "../../lib/i18n";
+import { ContextRing } from "../chat/ContextRing";
+import { shouldSuggestCompaction } from "../chat/contextCompaction";
 import type { AgentMode } from "../chat/AgentModeSelector";
+import { DEFAULT_AGENT_PERSONA } from "../../lib/agentPersona";
 import { ComposerSlashMenu } from "./ComposerSlashMenu";
+import { ComposerSettingsDrawer } from "./ComposerSettingsDrawer";
 import type { useComposerSlashMenu } from "./useComposerSlashMenu";
+import { ComposerActionButton } from "./ComposerActionButton";
+import { IconGear } from "../shell/icons";
 
 type ComposerPanelProps = {
   composer: string;
   sending: boolean;
   sendError: string | null;
-  queuedMessages: string[];
-  steeredMessages: string[];
+  queuedCount: number;
+  steeredCount: number;
   rememberMode: boolean;
   slashMenu: ReturnType<typeof useComposerSlashMenu>;
   agentMode: AgentMode;
   onAgentModeChange: (m: AgentMode) => void;
-  currentModelId: string | null;
-  currentLabel: string;
-  models: ModelInfo[];
-  modelSwitching: boolean;
-  modelSwitchError: string | null;
   contextSnapshot: ContextSnapshot | null | undefined;
-  onModelSwitch: (req: ModelSwitchRequest) => void;
-  onDismissModelError: () => void;
   onSubmit: (e: FormEvent<HTMLFormElement>) => void;
   onSend: () => void;
   onStop: () => void;
@@ -34,34 +34,22 @@ type ComposerPanelProps = {
   onCompositionEnd: (e: CompositionEvent<HTMLTextAreaElement>) => void;
   selectedSessionId: string | null;
   onCompact: () => void;
+  agentName?: string;
   chromeCollapsed?: boolean;
 };
-
-function queuePreview(text: string, max = 48): string {
-  const oneLine = text.replace(/\s+/g, " ").trim();
-  if (oneLine.length <= max) return oneLine;
-  return `${oneLine.slice(0, max)}…`;
-}
 
 export function ComposerPanel(props: ComposerPanelProps) {
   const {
     composer,
     sending,
     sendError,
-    queuedMessages,
-    steeredMessages,
+    queuedCount,
+    steeredCount,
     rememberMode,
     slashMenu,
     agentMode,
     onAgentModeChange,
-    currentModelId,
-    currentLabel,
-    models,
-    modelSwitching,
-    modelSwitchError,
     contextSnapshot,
-    onModelSwitch,
-    onDismissModelError,
     onSubmit,
     onSend,
     onStop,
@@ -73,42 +61,27 @@ export function ComposerPanel(props: ComposerPanelProps) {
     onCompositionEnd,
     selectedSessionId,
     onCompact,
+    agentName = DEFAULT_AGENT_PERSONA.name,
     chromeCollapsed = false,
   } = props;
 
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const { t } = useI18n();
+  const showCompact = Boolean(selectedSessionId) && shouldSuggestCompaction(contextSnapshot);
+
   return (
-    <section className={`panel composer-panel${chromeCollapsed ? " composer-panel-compact" : ""}`}>
-      <form onSubmit={onSubmit} className="composer-form">
-        <div className="composer-quick-actions">
-          <button
-            type="button"
-            className={rememberMode ? "active" : ""}
-            onClick={onToggleRememberMode}
-          >
-            记住{rememberMode ? " ✓" : ""}
-          </button>
-          {rememberMode ? <span className="mode-chip">remember</span> : null}
-        </div>
-
-        {steeredMessages.length > 0 ? (
-          <div className="composer-queue composer-steer-queue" aria-live="polite">
-            <span className="composer-queue-label">Steer {steeredMessages.length}</span>
-            <ul className="composer-queue-list">
-              {steeredMessages.map((msg, idx) => (
-                <li key={`steer-${idx}-${msg.slice(0, 12)}`}>{queuePreview(msg)}</li>
-              ))}
-            </ul>
-          </div>
-        ) : null}
-
-        {queuedMessages.length > 0 ? (
-          <div className="composer-queue" aria-live="polite">
-            <span className="composer-queue-label">下一回合 {queuedMessages.length}</span>
-            <ul className="composer-queue-list">
-              {queuedMessages.map((msg, idx) => (
-                <li key={`${idx}-${msg.slice(0, 12)}`}>{queuePreview(msg)}</li>
-              ))}
-            </ul>
+    <section className={`composer-card${chromeCollapsed ? " composer-card-compact" : ""}`}>
+      <form onSubmit={onSubmit} className="composer-form composer-form-card">
+        {(queuedCount > 0 || steeredCount > 0) && !chromeCollapsed ? (
+          <div className="composer-queue-badges" aria-live="polite">
+            {steeredCount > 0 ? (
+              <span className="composer-queue-badge composer-queue-badge-steer">
+                steer {steeredCount}
+              </span>
+            ) : null}
+            {queuedCount > 0 ? (
+              <span className="composer-queue-badge">queued {queuedCount}</span>
+            ) : null}
           </div>
         ) : null}
 
@@ -125,35 +98,62 @@ export function ComposerPanel(props: ComposerPanelProps) {
             onCompositionStart={onCompositionStart}
             onCompositionEnd={onCompositionEnd}
             onKeyDown={onComposerKeyDown}
-            rows={3}
+            rows={1}
             placeholder={
               sending
-                ? "Agent 运行中 — Enter 注入 steer（当前 turn），Shift+Enter 换行"
-                : "Plan, Build, / 唤起命令或技能…（Enter 发送，Shift+Enter 换行）"
+                ? t("chat.sendSteerPlaceholder", { name: agentName })
+                : t("chat.sendPlaceholder", { name: agentName })
             }
           />
         </div>
 
         {sendError ? <p className="error-text composer-error">{sendError}</p> : null}
 
-        <ChatToolbar
+        <ComposerSettingsDrawer
+          open={settingsOpen && !chromeCollapsed}
           agentMode={agentMode}
+          rememberMode={rememberMode}
           onAgentModeChange={onAgentModeChange}
-          currentModelId={currentModelId}
-          currentLabel={currentLabel}
-          models={models}
-          modelSwitching={modelSwitching}
-          modelSwitchError={modelSwitchError}
-          contextSnapshot={contextSnapshot}
-          sending={sending}
-          canSend={Boolean(composer.trim())}
-          onModelSwitch={onModelSwitch}
-          onDismissModelError={onDismissModelError}
-          onSend={onSend}
-          onStop={onStop}
-          onCompact={selectedSessionId ? onCompact : undefined}
-          compactDisabled={sending}
+          onToggleRememberMode={onToggleRememberMode}
         />
+
+        <div className="composer-toolbar">
+          <div className="composer-toolbar-left">
+            {!chromeCollapsed ? (
+              <button
+                type="button"
+                className={`composer-toolbar-btn${settingsOpen ? " active" : ""}`}
+                title={t("chat.composerSettings")}
+                aria-pressed={settingsOpen}
+                aria-label={t("chat.composerSettings")}
+                onClick={() => setSettingsOpen((open) => !open)}
+              >
+                <IconGear size={16} />
+              </button>
+            ) : null}
+            {showCompact && !chromeCollapsed ? (
+              <button
+                type="button"
+                className="composer-toolbar-btn composer-toolbar-text"
+                onClick={onCompact}
+              >
+                Compact
+              </button>
+            ) : null}
+            {rememberMode && !chromeCollapsed ? (
+              <span className="composer-toolbar-badge">{t("chat.remember")}</span>
+            ) : null}
+          </div>
+          <div className="composer-toolbar-right">
+            {!chromeCollapsed ? <ContextRing snapshot={contextSnapshot} placement="inline" /> : null}
+            <ComposerActionButton
+              sending={sending}
+              canSend={Boolean(composer.trim())}
+              onSend={onSend}
+              onStop={onStop}
+            />
+          </div>
+        </div>
       </form>
     </section>
   );

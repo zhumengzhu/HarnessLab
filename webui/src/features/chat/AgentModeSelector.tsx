@@ -1,11 +1,12 @@
 import { useState } from "react";
+import { useI18n } from "../../lib/i18n";
 
 export type AgentMode = "agent" | "plan" | "debug";
 
-const MODES: { id: AgentMode; label: string; available: boolean }[] = [
-  { id: "agent", label: "Agent", available: true },
-  { id: "plan", label: "Plan", available: false },
-  { id: "debug", label: "Debug", available: false },
+const MODES: { id: AgentMode; labelKey: "chat.agentModeAgent" | "chat.agentModePlan" | "chat.agentModeDebug"; available: boolean }[] = [
+  { id: "agent", labelKey: "chat.agentModeAgent", available: true },
+  { id: "plan", labelKey: "chat.agentModePlan", available: false },
+  { id: "debug", labelKey: "chat.agentModeDebug", available: false },
 ];
 
 type AgentModeSelectorProps = {
@@ -14,6 +15,7 @@ type AgentModeSelectorProps = {
 };
 
 export function AgentModeSelector({ mode, onChange }: AgentModeSelectorProps) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const current = MODES.find((m) => m.id === mode) ?? MODES[0];
 
@@ -30,11 +32,11 @@ export function AgentModeSelector({ mode, onChange }: AgentModeSelectorProps) {
       <button
         type="button"
         className="agent-mode-trigger"
-        title="Agent mode"
+        title={t("chat.agentMode")}
         onClick={() => setOpen((v) => !v)}
       >
         <span className="agent-mode-icon">∞</span>
-        <span>{current.label}</span>
+        <span>{t(current.labelKey)}</span>
         <span className="agent-mode-caret">▾</span>
       </button>
 
@@ -47,13 +49,13 @@ export function AgentModeSelector({ mode, onChange }: AgentModeSelectorProps) {
               className={`agent-mode-option${mode === m.id ? " agent-mode-option-active" : ""}${
                 !m.available ? " agent-mode-option-disabled" : ""
               }`}
-              title={!m.available ? `${m.label} — coming soon` : m.label}
+              title={!m.available ? t("chat.comingSoon", { label: t(m.labelKey) }) : t(m.labelKey)}
               disabled={!m.available}
               onClick={() => pick(m.id)}
             >
-              <span>{m.label}</span>
+              <span>{t(m.labelKey)}</span>
               {mode === m.id && <span className="agent-mode-check">✓</span>}
-              {!m.available ? <span className="agent-mode-soon">soon</span> : null}
+              {!m.available ? <span className="agent-mode-soon">{t("chat.soon")}</span> : null}
             </button>
           ))}
         </div>

@@ -72,7 +72,7 @@ Non-goals:
 - Build/dev: `Vite` + `bun` (see `webui/README.md`)
 - Data fetching: `@tanstack/react-query`
 - Validation: `zod` + thin helpers
-- Testing: `vitest` + `@testing-library/react`; optional Playwright smoke later
+- Testing: `vitest` + `@testing-library/react`；Playwright E2E 冒烟见 `webui/e2e/` 与 [`guides/browser-automation.md`](../guides/browser-automation.md)
 
 ## Migration phases
 
@@ -109,14 +109,45 @@ Composer, SSE streaming, fork, slash commands, tool cards, model picker persiste
 
 ## Frontend testing coverage strategy
 
-Layered tests so migration does not block feature delivery:
+分层测试，避免迁移阻塞功能交付。完整操作说明见 [`webui/README.md`](../../webui/README.md) § Playwright E2E。
+
+### 三层职责（勿与 Agent 浏览器混淆）
+
+| 层级 | 工具 | 运行环境 | 网络 | 职责 |
+| --- | --- | --- | --- | --- |
+| 单元 / 组件 | Vitest + Testing Library | jsdom | **mock `fetch`** | 组件逻辑、SSE 客户端解析顺序 |
+| 流式集成 | Vitest + Python pytest | jsdom / 无浏览器 | mock 或真实 SSE | `trace` → delta → `done` 顺序 |
+| E2E 冒烟 | Playwright (`webui/e2e/`) | headless Chromium | **真实 localhost API** | UI 壳层：sidebar、tabs、Settings |
+| Python runtime | pytest | — | — | loop、API 契约；不含 Web UI DOM |
+
+```mermaid
+flowchart TB
+  subgraph vitest["Vitest（无浏览器）"]
+    V1["组件测试"]
+    V2["sse-client.test.ts<br/>stubGlobal fetch"]
+  end
+
+  subgraph e2e["Playwright E2E"]
+    P1["page.goto / click"]
+    P2["React 发真实 fetch"]
+    SRV["harnesslab serve<br/>webServer 自动启动"]
+  end
+
+  vitest -.->|"不测 DOM"| e2e
+  P1 --> P2 --> SRV
+```
+
+**要点：** E2E **不是** `page.route` mock 网络；是无头浏览器里的真实点击 + 真实 HTTP。Vitest 里 mock SSE **不是** Playwright 职责。
+
+### 各层状态
 
 | Layer | Purpose | Status |
 | --- | --- | --- |
 | Utility | Pure helpers (`gate-utils`, `thoughtUtils`, …) | Active |
 | Component | RTL + Vitest on feature slices | Active |
 | **Stream integration** | SSE ordering: `trace` → deltas → `done`; error events | **Done** — `sse-client.test.ts` + `test_web_sse_stream_event_ordering` |
-| E2E smoke (optional) | Playwright core chat workflow | Planned, non-blocking |
+| E2E smoke | Playwright UI shell smoke | **Done** — `webui/e2e/smoke.spec.ts` |
+| E2E chat workflow | Composer 发消息 + SSE 流式回复 | **未做**（可选后续） |
 
 **Stream integration:**
 
@@ -124,12 +155,15 @@ Layered tests so migration does not block feature delivery:
 2. **Reducer (done):** `liveTurnStream.test.ts` for delta → LiveTurn state.
 3. **Python (done):** `tests/test_web_server.py` asserts `trace` precedes `done` on live SSE turn.
 4. **Next (optional):** `useComposerController` integration test with mocked `postSse` returning a full turn script.
+5. **Next (optional E2E):** Playwright 点击 Composer、`waitForResponse` / 等待 DOM，**仍走真实 API**，不用 mock fetch。
+
+Agent 浏览器（MCP Playwright）与 Web UI E2E 是两种 Playwright 用途，见 [`guides/browser-automation.md`](../guides/browser-automation.md)。
 
 ## Compatibility and rollout controls
 
 - Env: `HARNESSLAB_WEB_UI_VERSION=legacy|ts`
 - Config: `web_ui_version` in operator config
-- CI: Python tests + `cd webui && bun run check && bun test`
+- CI: Python tests + `cd webui && bun run check && bun test && bun run build && bun run test:e2e`
 - `./hl-serve build` / `./hl-serve restart --build` for local frontend refresh
 
 ## Risks and mitigations

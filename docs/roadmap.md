@@ -837,6 +837,7 @@ Same **Entry / Deliverables / Exit** bar as previous phases.
   MCP SDK at import time (lazy import); one documented server
   (e.g. `@modelcontextprotocol/server-filesystem`) round-trips a tool
   call end-to-end; eval/replay unaffected.
+- **Operator guide**: [`docs/guides/mcp-servers.md`](docs/guides/mcp-servers.md).
 
 ### Phase 5.5 — Python sandbox tool — DONE
 
@@ -956,7 +957,7 @@ Same **Entry / Deliverables / Exit** bar as previous phases.
       `max_session_cost_usd_total`
     - soft threshold ratio (`budget.soft_ratio`) and hard action
       (`ask_user|final|error`)
-  - Provider price table (`providers/pricing.py`) estimates USD per
+  - Provider pricing module (`providers/pricing/`, [`architecture/pricing.md`](architecture/pricing.md)) estimates USD per
     model call from token counts for budget guardrails.
   - Loop accumulates `cost_usd_total` after each model call and emits
     `budget_soft_threshold`, `budget_hard_exceeded`,
@@ -1180,6 +1181,8 @@ existing tool/policy boundary (skills remain **prompt documents** only).
     environment HarnessLab does not own.
   - *Revisit when:* Phase 5.4 MCP adapter is shipped and a Playwright
     MCP server proves insufficient.
+  - *Operator path today:* [`docs/guides/mcp-servers.md`](docs/guides/mcp-servers.md),
+    [`docs/guides/browser-automation.md`](docs/guides/browser-automation.md).
 - **Metrics dashboard HTML artifact.** Static report on top of
   `harnesslab metrics` / `harnesslab context`. Phase 5.6 OTel metrics +
   external Grafana cover most of this need; revisit only if an offline,

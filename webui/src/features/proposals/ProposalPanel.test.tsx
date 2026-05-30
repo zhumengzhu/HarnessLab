@@ -2,6 +2,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ProposalPanel } from "./ProposalPanel";
+import { I18nProvider } from "../../lib/i18n";
 
 function jsonResponse(payload: unknown, status: number = 200): Response {
   return new Response(JSON.stringify(payload), {
@@ -77,7 +78,9 @@ describe("ProposalPanel", () => {
 
     render(
       <QueryClientProvider client={queryClient}>
-        <ProposalPanel />
+        <I18nProvider locale="zh" onLocaleChange={() => {}}>
+          <ProposalPanel />
+        </I18nProvider>
       </QueryClientProvider>
     );
 
@@ -85,7 +88,7 @@ describe("ProposalPanel", () => {
     fireEvent.click(proposalButton);
 
     const runPytestButton = await screen.findByRole("button", {
-      name: /Run uv run pytest/i,
+      name: /Run uv run pytest|运行 uv run pytest/,
     });
     fireEvent.click(runPytestButton);
 
@@ -153,7 +156,9 @@ describe("ProposalPanel", () => {
 
     render(
       <QueryClientProvider client={queryClient}>
-        <ProposalPanel />
+        <I18nProvider locale="zh" onLocaleChange={() => {}}>
+          <ProposalPanel />
+        </I18nProvider>
       </QueryClientProvider>
     );
 
@@ -166,7 +171,7 @@ describe("ProposalPanel", () => {
     expect((checkbox as HTMLInputElement).checked).toBe(true);
 
     const runPytestButton = await screen.findByRole("button", {
-      name: /Run uv run pytest/i,
+      name: /Run uv run pytest|运行 uv run pytest/,
     });
     fireEvent.click(runPytestButton);
 
@@ -223,7 +228,9 @@ describe("ProposalPanel", () => {
 
     render(
       <QueryClientProvider client={queryClient}>
-        <ProposalPanel />
+        <I18nProvider locale="zh" onLocaleChange={() => {}}>
+          <ProposalPanel />
+        </I18nProvider>
       </QueryClientProvider>
     );
 
@@ -231,7 +238,7 @@ describe("ProposalPanel", () => {
     fireEvent.click(proposalButton);
 
     const runPytestButton = await screen.findByRole("button", {
-      name: /Run uv run pytest/i,
+      name: /Run uv run pytest|运行 uv run pytest/,
     });
     fireEvent.click(runPytestButton);
 

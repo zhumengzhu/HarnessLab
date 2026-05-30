@@ -1,5 +1,6 @@
 import type { ChildAgentRun } from "./liveTurnReducer";
 import { MarkdownView } from "../../lib/MarkdownView";
+import { useI18n } from "../../lib/i18n";
 import { useChatDisplay } from "../chat/chatDisplayPreferences";
 import { ToolCardRow } from "../chat/ToolCardRow";
 import { ThinkingBlock } from "./ThinkingBlock";
@@ -9,6 +10,7 @@ type ChildAgentRunCardProps = {
 };
 
 export function ChildAgentRunCard({ run }: ChildAgentRunCardProps) {
+  const { t } = useI18n();
   const { activityDisplay } = useChatDisplay();
   const busy = run.phase === "running" || run.phase === "pending";
 
@@ -16,12 +18,12 @@ export function ChildAgentRunCard({ run }: ChildAgentRunCardProps) {
     <article
       className={`child-agent-run child-agent-run-${run.phase}`}
       aria-busy={busy}
-      aria-label={`子 Agent: ${run.goal}`}
+      aria-label={t("liveTurn.childAgentAria", { goal: run.goal })}
     >
       <header className="child-agent-run-header">
-        <span className="child-agent-run-label">子 Agent</span>
+        <span className="child-agent-run-label">{t("liveTurn.childAgent")}</span>
         <span className="child-agent-run-goal">{run.goal}</span>
-        {busy ? <span className="child-agent-run-status">Running…</span> : null}
+        {busy ? <span className="child-agent-run-status">{t("liveTurn.running")}</span> : null}
       </header>
 
       <div className="child-agent-run-body">
@@ -49,7 +51,7 @@ export function ChildAgentRunCard({ run }: ChildAgentRunCardProps) {
           <MarkdownView markdown={run.assistantText} className="chat-msg-content" />
         ) : busy ? (
           <p className="child-agent-run-activity" aria-live="polite">
-            子会话执行中…
+            {t("liveTurn.childSessionRunning")}
           </p>
         ) : null}
       </div>

@@ -1,5 +1,6 @@
 import { useRef, useState } from "react";
 import type { ModelInfo, ModelSwitchRequest } from "../../lib/schemas";
+import { useI18n } from "../../lib/i18n";
 
 type ModelSelectorProps = {
   currentModelId: string | null;
@@ -27,14 +28,10 @@ function effortLabel(level: string, model?: ModelInfo): string {
   return level.charAt(0).toUpperCase() + level.slice(1);
 }
 
-function effortSectionTitle(model: ModelInfo): string {
-  if (model.backend === "deepseek") {
-    return "Reasoning";
-  }
-  if (model.thinking_schema === "toggle") {
-    return "Thinking";
-  }
-  return "Reasoning";
+function effortSectionTitle(model: ModelInfo, t: (key: string) => string): string {
+  if (model.backend === "deepseek") return t("chat.reasoning");
+  if (model.thinking_schema === "toggle") return t("chat.thinkingLevel");
+  return t("chat.reasoning");
 }
 
 function formatContextLabel(m: ModelInfo): string {
@@ -73,6 +70,7 @@ export function ModelSelector({
   onSwitch,
   onDismissError,
 }: ModelSelectorProps) {
+  const { t } = useI18n();
   const [open, setOpen] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [hoverId, setHoverId] = useState<string | null>(null);
@@ -81,15 +79,11 @@ export function ModelSelector({
   const current =
     models.find((m) => m.id === currentModelId) ?? models.find((m) => m.current);
   const effortTag = current ? describeEffort(current) : "";
+  const buttonLabel = [current?.label ?? currentLabel, effortTag].filter(Boolean).join(" · ");
 
   function close() {
     setOpen(false);
     setEditingId(null);
-  }
-
-  function handleRightClick(e: React.MouseEvent) {
-    e.preventDefault();
-    setOpen((v) => !v);
   }
 
   function pickModel(m: ModelInfo) {
@@ -106,37 +100,35 @@ export function ModelSelector({
     close();
   }
 
-  const editingModel = editingId
-    ? models.find((m) => m.id === editingId) ?? null
-    : null;
+  const editingModel = editingId ? models.find((m) => m.id === editingId) ?? null : null;
 
   return (
     <div className="model-sel-wrap">
       <button
         ref={triggerRef}
         type="button"
-        className={`model-sel-btn${switching ? " model-sel-busy" : ""}`}
-        title="Click to choose a model — right-click for the same menu"
-        onClick={() => setOpen((v) => !v)}
-        onContextMenu={handleRightClick}
+        className={`model-sel-btn model-sel-btn-compact${switching ? " model-sel-busy" : ""}`}
+        title={buttonLabel}
+        aria-expanded={open}
+        onClick={() => setOpen((value) => !value)}
       >
-        <span className="model-sel-icon">⊕</span>
-        <span className="model-sel-label">{current?.label ?? currentLabel}</span>
-        {effortTag && <span className="model-sel-effort">{effortTag}</span>}
+        <span className="model-sel-label">{buttonLabel}</span>
         <span className="model-sel-caret">▾</span>
       </button>
 
-      {switchError && (
+      {switchError ? (
         <div className="model-sel-error">
           <span>{switchError}</span>
-          <button type="button" onClick={onDismissError}>×</button>
+          <button type="button" onClick={onDismissError}>
+            ×
+          </button>
         </div>
-      )}
+      ) : null}
 
-      {open && (
-        <div className="model-sel-flyout">
+      {open ? (
+        <div className="model-sel-flyout model-sel-flyout-down">
           <div className="model-sel-dropdown">
-            <div className="model-sel-dropdown-header">Models</div>
+            <div className="model-sel-dropdown-header">{t("chat.models")}</div>
             {models.map((m) => {
               const isHovered = hoverId === m.id;
               const isEditing = editingId === m.id;
@@ -157,40 +149,42 @@ export function ModelSelector({
                     onClick={() => pickModel(m)}
                   >
                     <span className="model-sel-row-label">{m.label}</span>
-                    {modelSupportsEdit(m) && (
+                    {modelSupportsEdit(m) ? (
                       <span className="model-sel-row-effort">
                         {effortLabel(m.current_effort || m.thinking_default, m)}
                       </span>
-                    )}
-                    {!m.configured && m.backend !== "simple" && (
-                      <span className="model-sel-row-tag">no key</span>
-                    )}
-                    {m.current && <span className="model-sel-row-check">✓</span>}
+                    ) : null}
+                    {!m.configured && m.backend !== "simple" ? (
+                      <span className="model-sel-row-tag">{t("chat.noKey")}</span>
+                    ) : null}
+                    {m.current ? <span className="model-sel-row-check">✓</span> : null}
                   </button>
-                  {(isHovered || isEditing) && modelSupportsEdit(m) && (
+                  {(isHovered || isEditing) && modelSupportsEdit(m) ? (
                     <button
                       type="button"
                       className="model-sel-row-edit"
-                      onClick={(e) => {
-                        e.stopPropagation();
+                      onClick={(event) => {
+                        event.stopPropagation();
                         setEditingId(isEditing ? null : m.id);
                       }}
                     >
-                      Edit
+                      {t("chat.edit")}
                     </button>
-                  )}
+                  ) : null}
                 </div>
               );
             })}
           </div>
 
-          {editingModel && (
+          {editingModel ? (
             <div className="model-sel-flyout-sub">
-              <div className="model-sel-dropdown-header">Options · {editingModel.label}</div>
-              {modelSupportsEdit(editingModel) && (
+              <div className="model-sel-dropdown-header">
+                {t("chat.options")} · {editingModel.label}
+              </div>
+              {modelSupportsEdit(editingModel) ? (
                 <div className="model-sel-section">
                   <div className="model-sel-section-title">
-                    {effortSectionTitle(editingModel)}
+                    {effortSectionTitle(editingModel, t)}
                   </div>
                   {editingModel.effort_levels.map((lv) => {
                     const active =
@@ -203,25 +197,23 @@ export function ModelSelector({
                         onClick={() => applyEffort(editingModel, lv)}
                       >
                         <span>{effortLabel(lv, editingModel)}</span>
-                        {active && <span className="model-sel-row-check">✓</span>}
+                        {active ? <span className="model-sel-row-check">✓</span> : null}
                       </button>
                     );
                   })}
                 </div>
-              )}
+              ) : null}
               <div className="model-sel-section">
-                <div className="model-sel-section-title">Context</div>
-                <div className="model-sel-context-readonly">
-                  {formatContextLabel(editingModel)}
-                </div>
-                {contextHint(editingModel) && (
+                <div className="model-sel-section-title">{t("chat.modelContextSection")}</div>
+                <div className="model-sel-context-readonly">{formatContextLabel(editingModel)}</div>
+                {contextHint(editingModel) ? (
                   <div className="model-sel-context-hint">{contextHint(editingModel)}</div>
-                )}
+                ) : null}
               </div>
             </div>
-          )}
+          ) : null}
         </div>
-      )}
+      ) : null}
     </div>
   );
 }

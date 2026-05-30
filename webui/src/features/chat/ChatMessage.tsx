@@ -1,62 +1,59 @@
 import { useMemo } from "react";
-import type { MessageItem, ToolCard } from "../../lib/schemas";
+import type { MessageItem, ToolCard, ContextSnapshot } from "../../lib/schemas";
 import { MarkdownView } from "../../lib/MarkdownView";
-import { mergeMessageReasoningIntoThoughts } from "../../lib/thoughtUtils";
+import { useI18n } from "../../lib/i18n";
 import { useChatDisplay } from "./chatDisplayPreferences";
 import { ToolCardRow } from "./ToolCardRow";
 import { ThinkingBlock } from "../live-turn/ThinkingBlock";
 import type { ThoughtEntry } from "../live-turn/liveTurnReducer";
+import { ChatBubbleShell } from "./ChatBubbleShell";
+import { MessageMetaDetails } from "./MessageMetaDetails";
+import {
+  assistantDisplayBody,
+  isChatMessageVisible,
+  resolvePersistedThoughts,
+} from "../../lib/messageVisibility";
 
 type ChatMessageProps = {
   message: MessageItem;
   toolCards?: ToolCard[];
-  /** Advanced tool/debug rows: collapsible via native disclosure. */
-  defaultCollapsed?: boolean;
   thoughtEntries?: ThoughtEntry[];
+  agentName?: string;
+  agentAvatar?: string;
+  contextSnapshot?: ContextSnapshot | null;
+  showContextMeta?: boolean;
+  modelLabel?: string | null;
 };
-
-function previewLine(text: string, max = 72): string {
-  const line = text.split("\n").find((l) => l.trim())?.trim() ?? "";
-  if (line.length <= max) return line;
-  return `${line.slice(0, max)}…`;
-}
-
-function parseThoughtBlocks(content: string): { thought: string | null; body: string } {
-  const open = content.indexOf("<thinking>");
-  const close = content.indexOf("</thinking>");
-  if (open === -1 || close === -1 || close <= open) {
-    return { thought: null, body: content };
-  }
-  const thought = content.slice(open + "<thinking>".length, close).trim();
-  const body = (content.slice(0, open) + content.slice(close + "</thinking>".length)).trim();
-  return { thought: thought || null, body };
-}
 
 function MessageBody({
   displayBody,
-  fallbackContent,
   persistedThoughts,
   toolCards,
   activityDisplay,
+  showThinking,
+  showTools,
 }: {
   displayBody: string;
-  fallbackContent: string;
   persistedThoughts: ThoughtEntry[];
   toolCards: ToolCard[];
   activityDisplay: "compact" | "detailed";
+  showThinking: boolean;
+  showTools: boolean;
 }) {
   return (
-    <div className="chat-msg-body">
-      {persistedThoughts.map((thought, idx) => (
-        <ThinkingBlock
-          key={idx}
-          thought={thought}
-          showWhenIdle
-          displayMode={activityDisplay}
-        />
-      ))}
+    <>
+      {showThinking
+        ? persistedThoughts.map((thought, idx) => (
+            <ThinkingBlock
+              key={idx}
+              thought={thought}
+              showWhenIdle
+              displayMode={activityDisplay}
+            />
+          ))
+        : null}
 
-      {toolCards.length > 0 ? (
+      {showTools && toolCards.length > 0 ? (
         <div className="chat-msg-tools">
           {toolCards.map((card, idx) => (
             <ToolCardRow key={`${card.tool}-${idx}`} card={card} displayMode={activityDisplay} />
@@ -64,82 +61,94 @@ function MessageBody({
         </div>
       ) : null}
 
-      <MarkdownView markdown={displayBody || fallbackContent} className="chat-msg-content" />
-    </div>
+      {displayBody ? <MarkdownView markdown={displayBody} className="chat-msg-content" /> : null}
+    </>
   );
 }
 
 export function ChatMessage({
   message,
   toolCards = [],
-  defaultCollapsed,
   thoughtEntries,
+  agentName = "HarnessLab",
+  agentAvatar = "HL",
+  contextSnapshot,
+  showContextMeta = false,
+  modelLabel,
 }: ChatMessageProps) {
-  const { activityDisplay } = useChatDisplay();
-  const { thought: inlineThought, body } = useMemo(
-    () =>
-      message.role === "assistant"
-        ? parseThoughtBlocks(message.content)
-        : { thought: null, body: message.content },
-    [message.content, message.role]
+  const { t } = useI18n();
+  const { activityDisplay, showThinking, showTools } = useChatDisplay();
+
+  const persistedThoughts = useMemo(
+    () => resolvePersistedThoughts(message, thoughtEntries),
+    [message, thoughtEntries]
   );
 
-  const persistedThoughts = useMemo(() => {
-    const merged = mergeMessageReasoningIntoThoughts(
-      thoughtEntries ?? [],
-      message.reasoning_text,
-      message.created_at
-    );
-    if (merged.length) return merged;
-    if (inlineThought) {
-      return [
-        {
-          stepIndex: 0,
-          status: "done" as const,
-          text: inlineThought,
-          startedAt: new Date(message.created_at).getTime(),
-        },
-      ];
+  const displayBody = useMemo(() => {
+    if (message.role === "assistant") {
+      return assistantDisplayBody(message);
     }
-    return [];
-  }, [thoughtEntries, inlineThought, message.created_at, message.reasoning_text]);
+    return message.content.trim();
+  }, [message]);
 
-  const roleLabel =
-    message.role === "user"
-      ? "You"
-      : message.role === "assistant"
-        ? "Assistant"
-        : message.role === "tool"
-          ? "Tool"
-          : message.role;
+  const visible = isChatMessageVisible(
+    message,
+    { showThinking, showTools },
+    { thoughts: persistedThoughts, tools: toolCards }
+  );
 
-  const displayBody = body || message.content;
   const bodyProps = {
     displayBody,
-    fallbackContent: message.content,
     persistedThoughts,
     toolCards,
     activityDisplay,
+    showThinking,
+    showTools,
   };
 
-  if (defaultCollapsed) {
+  if (!visible) {
+    return null;
+  }
+
+  if (message.role === "user") {
     return (
-      <details className={`chat-msg chat-msg-${message.role} chat-msg-disclosure`}>
-        <summary className="chat-msg-summary">
-          <span className="chat-msg-role">{roleLabel}</span>
-          <span className="chat-msg-preview">{previewLine(displayBody || message.content)}</span>
-        </summary>
+      <ChatBubbleShell
+        role="user"
+        displayName={t("chat.you")}
+        avatar="Y"
+        createdAt={message.created_at}
+      >
         <MessageBody {...bodyProps} />
-      </details>
+      </ChatBubbleShell>
+    );
+  }
+
+  if (message.role === "assistant") {
+    return (
+      <ChatBubbleShell
+        role="assistant"
+        displayName={agentName}
+        avatar={agentAvatar}
+        createdAt={message.created_at}
+        footerExtra={
+          showContextMeta ? (
+            <MessageMetaDetails snapshot={contextSnapshot} modelLabel={modelLabel} />
+          ) : undefined
+        }
+      >
+        <MessageBody {...bodyProps} />
+      </ChatBubbleShell>
     );
   }
 
   return (
-    <article className={`chat-msg chat-msg-${message.role}`}>
+    <article className={`chat-msg chat-msg-${message.role} chat-msg-system`}>
       <div className="chat-msg-header chat-msg-header-static">
-        <span className="chat-msg-role">{roleLabel}</span>
+        <span className="chat-msg-role">{t("chat.tool")}</span>
       </div>
-      <MessageBody {...bodyProps} />
+      <div className="chat-msg-body">
+        <MessageBody {...bodyProps} />
+      </div>
     </article>
   );
 }

@@ -21,7 +21,23 @@ describe("activityFeed", () => {
     expect(isActivityTraceEvent("tool_executed")).toBe(true);
     expect(isActivityTraceEvent("user_steer_received")).toBe(true);
     expect(isActivityTraceEvent("sub_agent_spawned")).toBe(true);
-    expect(isActivityTraceEvent("model_call")).toBe(false);
+    expect(isActivityTraceEvent("model_call")).toBe(true);
+  });
+
+  it("surfaces failover on model_call events", () => {
+    const entry = activityEntryFromTrace(
+      trace("model_call", {
+        failover_backend: "simple",
+        failover_attempts: 2,
+      })
+    );
+    expect(entry?.kind).toBe("failover");
+    expect(entry?.label).toContain("simple");
+    expect(entry?.detail).toBe("attempt 2");
+  });
+
+  it("ignores model_call without failover", () => {
+    expect(activityEntryFromTrace(trace("model_call", { latency_ms: 12 }))).toBeNull();
   });
 
   it("redacts tool args and truncates output preview", () => {

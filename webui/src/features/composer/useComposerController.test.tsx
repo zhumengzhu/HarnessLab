@@ -29,7 +29,7 @@ function turnPayload(sessionId: string): TurnPayload {
       parent_session_id: null,
       title: "test",
       message_count: 2,
-      budget_usage: null,
+      budget_usage: undefined,
     },
     reply: "done",
     messages: [

@@ -1,3 +1,5 @@
+import { useI18n } from "../../lib/i18n";
+
 type ComposerActionButtonProps = {
   sending: boolean;
   canSend: boolean;
@@ -11,13 +13,15 @@ export function ComposerActionButton({
   onSend,
   onStop,
 }: ComposerActionButtonProps) {
+  const { t } = useI18n();
+
   if (sending) {
     return (
       <button
         type="button"
-        className="composer-action-btn composer-action-stop"
-        title="停止当前回合"
-        aria-label="Stop"
+        className="composer-toolbar-btn composer-toolbar-btn-send composer-toolbar-btn-stop"
+        title={t("chat.stopTurn")}
+        aria-label={t("chat.stop")}
         onClick={onStop}
       >
         <span className="composer-action-stop-icon" aria-hidden />
@@ -28,9 +32,11 @@ export function ComposerActionButton({
   return (
     <button
       type="button"
-      className="composer-action-btn composer-action-send"
-      title="发送"
-      aria-label="Send"
+      className={`composer-toolbar-btn composer-toolbar-btn-send${
+        canSend ? " composer-toolbar-btn-send-ready" : ""
+      }`}
+      title={t("chat.send")}
+      aria-label={t("chat.send")}
       disabled={!canSend}
       onClick={onSend}
     >
@@ -38,10 +44,10 @@ export function ComposerActionButton({
         <path
           fill="none"
           stroke="currentColor"
-          strokeWidth="1.75"
+          strokeWidth="1.5"
           strokeLinecap="round"
           strokeLinejoin="round"
-          d="M8 12V4M8 4L5 7M8 4l3 3"
+          d="M14 2 7 9M14 2l-4.5 12L7 9 2 6.5 14 2z"
         />
       </svg>
     </button>

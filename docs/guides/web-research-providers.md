@@ -16,6 +16,7 @@ capabilities to agents, but the architecture and paid backends differ.
 | `fetch_url` | Direct HTTPS GET or **Jina Reader** (`provider: jina`) | Jina optional `JINA_API_KEY`; SSRF-safe open mode |
 | `html_to_markdown` | Local HTML → markdown parser | Free, offline |
 | `read_pdf` | Local PDF text extraction | Free, offline |
+| 浏览器自动化 | MCP `@playwright/mcp`（非内置 tool） | 操作员配置；见 [`browser-automation.md`](browser-automation.md)、[`mcp-servers.md`](mcp-servers.md) |
 
 Configuration:
 
@@ -102,6 +103,24 @@ DuckDuckGo HTML scrape often returns HTTP **202 anti-bot** even with proxy—pre
 
 `fetch_url` cannot render JavaScript; Google search pages, BBC SPAs, etc. need article URLs + `html_to_markdown`, or a future Firecrawl-style fallback.
 
+## HarnessLab：搜索 / 抓取 / 浏览器 选型
+
+```text
+web_search          → 发现 URL 与摘要
+fetch_url           → 拉取单个 URL 正文（无 JS 执行）
+html_to_markdown    → 本地 HTML 转 markdown
+MCP Playwright      → JS SPA、登录态、多步点击（需配置 mcp_servers + allowlist）
+```
+
+| 需求 | 工具 |
+| --- | --- |
+| 关键词发现 | `web_search` |
+| 静态页 / API 文档 | `fetch_url` |
+| SPA / 登录 / 交互 | MCP browser（[`browser-automation.md`](browser-automation.md)） |
+| 测 Web UI 壳层 | `webui/e2e/` Playwright（非 agent 工具） |
+
+与 OpenClaw 对比：OpenClaw 内置 `browser` 插件；HarnessLab 通过 MCP 外挂，core 不内置 driver（[`roadmap.md`](../roadmap.md)）。
+
 ## Provider pricing snapshot (2026-05-25)
 
 Verify live pricing before budgeting. “Free tier” rules change; links are official entry points.
@@ -139,8 +158,10 @@ Verify live pricing before budgeting. “Free tier” rules change; links are of
 4. Run **`uv run harnesslab check network`** after `./hl-serve restart`.
 5. Deep research flow: `web_search` → pick article URLs → `fetch_url` → `html_to_markdown` (avoid Google search URLs).
 
-## Related docs (tree `c7625595e226daf7ebb715cec82b4d08931ea586`)
+## Related docs
 
-- [Tool runtime](https://github.com/zhumengzhu/HarnessLab/blob/2273f9c3ff038b4f1bc5499832d5d8951ba3430b) — tool policy and schemas
-- [Deep research skill](https://github.com/zhumengzhu/HarnessLab/blob/c7625595e226daf7ebb715cec82b4d08931ea586/skills/deep-research.md) — research skill workflow
-- [Deep research landscape](https://github.com/zhumengzhu/HarnessLab/blob/c7625595e226daf7ebb715cec82b4d08931ea586/docs/guides/deep-research-landscape.md) — cross-project deep research comparison and HarnessLab design
+- [`architecture/tool-runtime.md`](../architecture/tool-runtime.md) — tool policy and schemas
+- [`guides/browser-automation.md`](browser-automation.md) — fetch vs MCP browser
+- [`guides/mcp-servers.md`](mcp-servers.md) — MCP 配置
+- [`skills/deep-research.md`](../../skills/deep-research.md) — research skill workflow
+- [`guides/deep-research-landscape.md`](deep-research-landscape.md) — cross-project deep research comparison

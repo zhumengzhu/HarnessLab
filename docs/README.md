@@ -27,6 +27,7 @@ payload shape, update the relevant file and tests in the same PR.
 | [`architecture/web-api.md`](architecture/web-api.md) | Localhost HTTP + SSE contract |
 | [`architecture/webui-design.md`](architecture/webui-design.md) | Chat UX, SSE, Thinking/Thought, composer slash commands; OpenClaw layout reference & UI phases |
 | [`architecture/provider-expansion.md`](architecture/provider-expansion.md) | ModelPort adapters, catalog, transforms |
+| [`architecture/pricing.md`](architecture/pricing.md) | Usage normalization, pricing catalog, cost estimates |
 | [`architecture/model-parameters.md`](architecture/model-parameters.md) | Thinking / effort operator controls |
 | [`architecture/frontend-ts-migration.md`](architecture/frontend-ts-migration.md) | TS WebUI migration phases and status |
 | [`architecture/multi-agent-exploration.md`](architecture/multi-agent-exploration.md) | Supervisor PoC, spawn_sub_agent |
@@ -41,6 +42,8 @@ payload shape, update the relevant file and tests in the same PR.
 | [`guides/multi-agent.md`](guides/multi-agent.md) | Enable spawn_sub_agent, limits, CLI/Web visibility |
 | [`guides/deep-research-landscape.md`](guides/deep-research-landscape.md) | Deep research skills vs tools (DeerFlow, OpenCode, HarnessLab design) |
 | [`guides/web-research-providers.md`](guides/web-research-providers.md) | Search/fetch providers, pricing, proxy |
+| [`guides/mcp-servers.md`](guides/mcp-servers.md) | MCP 服务器配置（stdio、allowlist、Playwright 示例） |
+| [`guides/browser-automation.md`](guides/browser-automation.md) | 浏览器自动化：fetch vs MCP、与 OpenClaw 对比 |
 | [`guides/deepseek-thinking-troubleshooting.md`](guides/deepseek-thinking-troubleshooting.md) | DeepSeek thinking 400s, `reasoning_content` replay, session recovery |
 
 ## Other repo docs
@@ -69,6 +72,7 @@ payload shape, update the relevant file and tests in the same PR.
 2. Add or change a tool under `src/harnesslab/tools/`
 3. Add an eval task under `eval/tasks/` and update baseline if needed
 4. Update `architecture/tool-runtime.md` if the public tool surface changed
+5. **MCP / 浏览器：** [`guides/mcp-servers.md`](guides/mcp-servers.md) → [`guides/browser-automation.md`](guides/browser-automation.md)
 
 ### Path C — Web UI or streaming
 

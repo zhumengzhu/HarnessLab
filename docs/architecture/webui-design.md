@@ -45,16 +45,118 @@ Turn 完成后，Thinking / Tool 活动归档到该轮 terminal assistant 消息
 Thought 正文来源优先级：`message.reasoning_text`（API）> trace `model_call.reasoning_text` >
 content 内 `<thinking>` 标签（legacy fallback）。
 
-## Simple vs Advanced
+## Simple vs Advanced → unified shell (UI-6)
 
-| 能力 | Simple | Advanced |
-|------|--------|----------|
-| User / Assistant / Turn 活动 | ✅ | ✅ |
-| Thinking / Tool 折叠 | ✅ | ✅ |
-| Context 圆环 | ✅ | ✅ |
-| Trace JSON 面板 | ❌ | ✅ |
-| Session metadata / Budget | ❌ | ✅ |
-| **完整 model prompt 查看** | ❌ | ✅（Trace 内 `model_call` → Prompt inspector） |
+**Simple / Advanced 双模式已移除（2026-05）。** 单一产品壳：
+
+| 区域 | 内容 |
+|------|------|
+| **Sidebar 顶栏** | Chat · Proposals · Skills · Settings |
+| **Chat 导航下** | 会话搜索/列表、+新对话、Fork |
+| **Settings** | **界面偏好**（主题、Thought/Tool 简洁/详细、字号）+ 运行时 config 快照 |
+| **Session 主区 Tab** | 对话 · Trace · Activity |
+
+Chat 区不再嵌入 Session metadata / Budget JSON / Tool messages 诊断块；预算与
+原始事件见 **Trace**（Spans 或 Events）与 **Activity** Tab。
+
+| 能力 | 位置 |
+|------|------|
+| User / Assistant / Turn 活动 | 对话 Tab |
+| Thinking / Tool 折叠 | 对话 Tab（密度由 Settings 控制） |
+| Context 圆环 | Composer |
+| Trace span 树 + 事件调试 | Trace Tab（Spans 默认，Events 调试） |
+| Activity 流 | Activity Tab |
+| Proposals / Skills / 运行时 Settings | Sidebar 导航 |
+
+## Trace 视图（UI-F2）
+
+Trace Tab 内双层：
+
+1. **Spans（默认）** — 由 JSONL 事件 **前端启发式** 合成 Jaeger 风格层级：
+   `session → turn → step → model | tool | compaction | …`。左树 + 右详情；
+   时长条、状态色；`model_call` 保留 Prompt inspector；Raw JSON 折叠。
+2. **Events** — 保留原有 **OpenClaw 式调试列表**（`event_type` + payload JSON）。
+
+后端 JSONL **不变**。无 native `span_id` 时树形为近似；OTel/Jaeger 真同源导出仍走
+`HARNESSLAB_OTEL=1`（见 `data-model.md`）。
+
+实现：`buildTraceSpanTree.ts`、`TraceSpanPanel.tsx`、`TraceSpanDetail.tsx`；
+`SessionTraceView` 内 Spans | Events 切换。
+
+## Chat / Composer 减重方案（UI-7，待实施）
+
+OpenClaw 对照下的 **下一视觉迭代**（本 PR 仅文档化，不改 Composer 结构）：
+
+| 项 | 现状 | 目标 |
+| --- | --- | --- |
+| **Composer 首行** | Agent 模式 + 模型选择 + 工具栏并排 | **单行输入为主**；模型/模式收到 **⋯ 菜单** 或 Settings 默认 |
+| **Context 圆环** | 与发送钮同排 | 保留；Compact 仅在高压时出现 |
+| **队列/steer 提示** | 输入框上方 dashed 框 | **细条 badge**（「queued 2」点击展开） |
+| **子 session 面板** | Chat 栈内卡片 | 折叠为 **侧栏会话树** 内 indent 或 Trace span |
+| **消息气泡** | 多边框/嵌套 details | 减少外框；User 右对齐轻量气泡；Assistant 无 heavy panel |
+| **Activity** | 独立 Tab | 保持；不在对话 Tab 堆叠 inline 条 |
+| **Slash palette** | 绝对定位列表 | 保留；对齐 OpenClaw 命令面板宽度与键盘导航 |
+
+**原则：** Chat Tab = 消息 + Composer；一切 operator 诊断进 Tab / Settings / Trace。
+
+## OpenClaw 式 UI 迁移（UI-8）
+
+借鉴 [OpenClaw Control UI](https://docs.openclaw.ai/web/control-ui) 的分组侧栏、顶栏、
+Session 条、空态 Hero、Composer 卡片与设置抽屉；**不复刻** Channels / Cron / 语音等 gateway 能力。
+
+**第一批（8a–8d + 8e 显隐/专注）已落地（2026-05）。** Trace / Activity Tab 视觉统一仍待后续小批次。
+
+### UI-9：OpenClaw 式 Chat 审美（2026-05）
+
+| 项 | 内容 |
+| --- | --- |
+| **气泡对话** | 用户右对齐粉调气泡；助手左对齐头像 + 名字/时间 + Context 按钮 |
+| **Session 条** | 去掉顶栏「新对话」；模型单按钮 `Model · High`；移除 Trace 钟表 icon |
+| **模型菜单** | 下拉改为向下展开，避免遮挡 |
+| **i18n** | Settings 切换 中文 / English；侧栏、顶栏、Tab、Composer 等核心文案可本地化 |
+
+### UI-10：OpenClaw 暖红 polish（2026-05）
+
+| 项 | 内容 |
+| --- | --- |
+| **Light accent** | `#dc2626` 暖红（对齐 OpenClaw light） |
+| **Dark accent** | `#ff5c5c` 签名红 |
+| **Token 分层** | `--hl-bg-hover` / `--hl-accent-glow` / `--hl-focus-ring` / `color-mix` 边框 |
+| **选中态** | 侧栏 nav、Session toggle、顶栏主题：inset 高光 + subtle shadow |
+| **Settings** | 卡片网格 + `SegmentedControl`（neutral 档位，OpenClaw `qs-segmented` 风格） |
+| **Context 用量色** | `ContextRing` / `MessageContextButton` / modal 百分比与环形色随 `--hl-accent` / warning / danger token，不再硬编码 GitHub 蓝 |
+| **Context 交互（UI-11）** | 消息 footer `<details>` + Composer pill 点击展开 Cursor 式 breakdown；进度条按 **limit** 比例分段，轨道显示剩余 context |
+| **New messages** | 用户上滑后若有新内容，滚动区下方居中显示「新消息」pill；对话区 thin scrollbar |
+| **Skills 页（UI-11）** | OpenClaw 式卡片：hero 标题、scope tabs、filter + count、分组折叠列表、预览 dialog、本地安装区 |
+| **Usage 页（UI-12）** | OpenClaw 式用量页预留：时间/指标控件（仅「全部」可用）、会话 `budget_usage` 汇总与表格；待 `/api/usage` |
+| **Chat 顶栏** | 模型/控制栏不再随滚动折叠；仅 Composer 可 compact |
+
+### 导航：保留 Session Tab（方案 B，已确认 2026-05）
+
+Trace / Activity **继续放在主区 Tab**（对话 | Trace | Activity），**不**迁到侧栏「运行」组。
+
+| 理由 | 说明 |
+| --- | --- |
+| 调整成本低 | Tab 与侧栏导航正交，后续改 IA 只动一层 |
+| 会话上下文清晰 | 同一 session 下切换诊断视图，无需改侧栏选中态 |
+| OpenClaw 差异可接受 | OpenClaw 用顶栏/侧栏进 Trace；我们用 Tab 等价 |
+
+侧栏负责：**全局页**（Chat 入口 + 会话列表、Proposals、Skills、Settings）+ 分组/icon 视觉。
+主区 Chat 视图：**Session Tab** +（UI-8）**ChatSessionHeader** + Hero + Composer。
+
+后续若 Tab 显得冗余，可再评估「Trace 进侧栏、去掉 Tab」（方案 A），无需改后端。
+
+### UI-8 分批（Tab 不变）
+
+| 批次 | 内容 |
+| --- | --- |
+| **8a** | 设计 token；侧栏分组卡片 + icon |
+| **8b** | 全局顶栏（面包屑、⌘K、主题三态） |
+| **8c** | **ChatSessionHeader**（session chip、model、effort、🧠🔧↻）— 仅 **对话 Tab** |
+| **8d** | Empty Hero + quick chips；Composer 卡片 + 齿轮设置抽屉 |
+| **8e** | 思考/工具 **显隐** toggle、专注模式（与 Settings「简洁/详细」正交） |
+
+Trace / Activity Tab 在 UI-8 中 **仅做视觉统一**（圆角、间距），不改信息架构。
 
 ## SSE 事件（Chat 消费子集）
 
@@ -104,17 +206,17 @@ User / Assistant **主对话**默认 **全文展示**，不提供 peek / 折叠�
 - **Thinking / Tool** 仍用 `<details>` 左侧 disclosure 折叠（二级内容）
 - **Advanced** 面板中的 raw `tool` 行可折叠，不影响 Simple 模式主对话
 
-## App shell（UI-1）
+## App shell（UI-1 + UI-6）
 
-布局：`app-shell` 三列网格（Simple 为两列）。
+布局：`app-shell` **两列**（sidebar + main）。
 
 | 区域 | 职责 |
 |------|------|
-| **Sidebar** (`AppSidebar`) | 品牌、health、+新对话、Fork、**会话搜索/筛选**、会话列表、Simple/Advanced、Advanced 导航 |
-| **Main** (`app-main`) | Chat 栈（消息 + 贴底 Composer）或 Proposals / Settings / Skills 页 |
-| **Trace column**（Advanced + Chat） | `TracePanel` 独立列，不与 Chat 滚动竞争 |
+| **Sidebar** (`AppSidebar`) | 顶栏 **Chat / Proposals / Skills / Settings**；Chat 下为会话搜索/列表 |
+| **Main** (`app-main`) | Session Tab（对话/Trace/Activity）或 Proposals / Settings / Skills 页 |
+| ~~Trace column~~ | **已移除** — Trace 在 Session **Trace Tab** 内 |
 
-Chat 区为 `app-chat-stack`：消息区 `flex: 1` 占满剩余高度，Composer 固定在底部（`app-composer-dock`）。
+Chat 对话 Tab：`SessionWorkspace` 全高滚动 + 贴底 `ComposerPanel`（`app-composer-dock`）。
 
 ## Sidebar 会话搜索（UI-2）
 
@@ -126,16 +228,17 @@ Chat 区为 `app-chat-stack`：消息区 `flex: 1` 占满剩余高度，Composer
 
 实现：`filterSessions`（`webui/src/features/shell/filterSessions.ts`）。
 
-## 活动展示与字号（UI-3）
+## 活动展示与字号（UI-3 → UI-6）
 
-侧栏底部 **阅读偏好**：
+**Settings → 界面偏好**（原侧栏 footer 控件已迁入）：
 
 | 控件 | 行为 |
 |------|------|
-| **活动 · 简洁 / 详细** | 简洁：Thought / Tool 仅一行状态条，正文点击展开；详细：保持 UI-1 前默认可折叠块 |
-| **A− / A+** | 调整 Chat 正文与 Composer 字号（`sm` / `md` / `lg`，写入 `localStorage`） |
+| **Thought / Tool · 简洁 / 详细** | 简洁：一行状态条；详细：可折叠块 |
+| **主题 · 暗 / 亮** | `data-hl-theme` + `--hl-*` tokens |
+| **A− / A+** | Chat 字号 `sm` / `md` / `lg` |
 
-实现：`ChatDisplayProvider`、`ToolCardRow`、`ThinkingBlock` 的 `displayMode` prop。
+实现：`UiPreferencesPanel`、`ChatDisplayProvider`。
 
 ## Compact 按钮（UI-4a）
 
@@ -147,13 +250,11 @@ Chat 区为 `app-chat-stack`：消息区 `flex: 1` 占满剩余高度，Composer
 
 侧栏当前选中会话行提供 inline 重命名（铅笔 / 双击标题）。`PATCH /api/sessions/{id}` body `{ "title": "…" }`，标题最长 60 字符（与 `derive_title_from_text` 一致），持久化经 `SessionStorePort.save`。
 
-## Activity 轻量面板（UI-4b）
+## Activity 轻量面板（UI-4b + UI-6）
 
-Chat 与 Composer 之间的 **Activity** 条（Simple + Advanced 均可见）：
+**Activity Tab**（非对话 Tab 内联）：
 
-- 从 trace 子集推导：`step_started`、`model_call_started`、`tool_executed`、`tool_denied`、compaction 事件
-- **脱敏**：不展示 tool args 值，仅显示字段数量；output 为截断 preview
-- 浏览器会话内有效；**清空**后仅跟踪新一轮 SSE trace；切换会话重置
+- 从 trace 子集推导；脱敏 tool args；会话内可清空
 - 实现：`activityFeed.ts`、`ActivityPanel.tsx`
 
 ## Composer 滚动收起（UI-4b）
@@ -162,11 +263,9 @@ Chat 与 Composer 之间的 **Activity** 条（Simple + Advanced 均可见）：
 
 回顶、回到底部、或 **向上滚动** 时恢复完整控件。实现：`useChatScroll` + `onComposerChromeChange`。
 
-## 亮/暗主题（UI-4c）
+## 亮/暗主题（UI-4c → UI-6）
 
-侧栏 **主题 · 暗 / 亮** 切换，写入 `localStorage`（`harnesslab.uiTheme`）。`document.documentElement` 设置 `data-hl-theme`；CSS `--hl-*` tokens 在 dark/light 间切换；代码块高亮同步换用 highlight.js `github-dark` / `github` 主题。
-
-Composer 输入框字号 `max(16px, var(--hl-chat-font-size))`，避免移动端 Safari 聚焦放大。
+主题切换在 **Settings → 界面偏好**；`localStorage` key `harnesslab.uiTheme`。
 
 ## 后续（UI-5，需 backend）
 
@@ -206,7 +305,7 @@ Nodes, …).
 | **Structure** | Document page: header → session dropdown → stacked panels | App shell: **sidebar + main + optional trace** | App shell (UI-1+) |
 | **Chat** | Message panel with capped height scroll | Full-height chat; **composer pinned bottom** | Full-height + docked composer |
 | **Sessions** | Top dropdown picker | Sidebar session list | Sidebar list (UI-1) |
-| **Diagnostics** | Advanced mode toggles trace beside chat in one grid | Trace/logs in separate columns or nav pages | Trace column in Advanced (UI-1) |
+| **Diagnostics** | Advanced mode toggles trace beside chat in one grid | Trace/logs in separate columns or nav pages | **Session Tab** Trace/Activity（UI-6+）；非第三列 |
 | **Theming** | Ad-hoc GitHub-dark hex | Built-in themes + optional tweakcn import | CSS tokens (UI-1); optional themes later |
 | **Tool/thinking UX** | Thought + tool cards (collapsible) | Simplified mode: status bars vs full EXEC | Phase UI-3 toggle |
 
@@ -216,7 +315,7 @@ Nodes, …).
 
 - Sidebar navigation + session list
 - Chat column fills viewport; composer fixed at bottom
-- Trace/diagnostics in a side column (Advanced), not competing with chat scroll
+- Trace/diagnostics in **Session Tab** (Trace / Activity), not competing with chat scroll
 - Central design tokens (`--hl-*` in `webui/src/styles.css`)
 
 **Skip (feature shell without backend):**
@@ -252,6 +351,10 @@ Prioritized borrowings after UI-1–3 (see discussion; not OpenClaw gateway shel
 | **4b** | Collapse composer chrome on scroll down | Long transcripts stay immersive |
 | **4c** | Light/dark theme toggle | **Shipped** |
 | **UI-5** | Steer queued message; per-session model override | **Done** |
+| **UI-6** | 统一 shell；Settings 收拢偏好；Session Tab；移除 Simple/Advanced | **Shipped** |
+| **UI-F2** | Trace Spans 树 + Events 调试双视图 | **Shipped** |
+| **UI-7** | Chat/Composer OpenClaw 式减重 | **Shipped** — 见 UI-8 第一批 |
+| **UI-8** | OpenClaw 式 shell；**保留 Session Tab（方案 B）** | **Shipped (batch 1: 8a–8e)** — Trace/Activity 视觉 polish 待定 |
 
 **Skip:** Channels, Cron, Nodes, Talk/voice, PWA push, WebSocket RPC dashboard, device pairing.
 

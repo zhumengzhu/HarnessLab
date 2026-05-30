@@ -1,40 +1,49 @@
 import type { ReactNode } from "react";
+import { useI18n } from "../../lib/i18n";
+import { IconChevron } from "../shell/icons";
 import { useChatScroll } from "./useChatScroll";
 
 type ChatScrollAreaProps = {
   scrollSignal: string;
+  resetKey?: string | null;
   children: ReactNode;
   onComposerChromeChange?: (collapsed: boolean) => void;
 };
 
 export function ChatScrollArea({
   scrollSignal,
+  resetKey,
   children,
   onComposerChromeChange,
 }: ChatScrollAreaProps) {
-  const { scrollRef, bottomRef, showJumpToLatest, scrollToLatest, onScrollAreaScroll } =
-    useChatScroll({ scrollSignal, onComposerChromeChange });
+  const { t } = useI18n();
+  const { scrollRef, bottomRef, newMessagesBelow, scrollToLatest, onScrollAreaScroll } =
+    useChatScroll({ scrollSignal, resetKey, onComposerChromeChange });
 
   return (
-    <div className="chat-scroll-host">
-      <div
-        ref={scrollRef}
-        className="chat-scroll-area"
-        onScroll={onScrollAreaScroll}
-        data-testid="chat-scroll-area"
-      >
-        {children}
-        <div ref={bottomRef} className="chat-scroll-bottom" aria-hidden />
+    <div className="chat-scroll-column">
+      <div className="chat-scroll-host">
+        <div
+          ref={scrollRef}
+          className="chat-scroll-area"
+          onScroll={onScrollAreaScroll}
+          data-testid="chat-scroll-area"
+        >
+          {children}
+          <div ref={bottomRef} className="chat-scroll-bottom" aria-hidden />
+        </div>
       </div>
-      {showJumpToLatest ? (
+      {newMessagesBelow ? (
         <button
           type="button"
-          className="chat-jump-latest"
-          aria-label="跳到最新"
-          title="跳到最新"
+          className="chat-new-messages"
+          aria-label={t("chat.newMessages")}
           onClick={scrollToLatest}
         >
-          ↓ 最新
+          <span className="chat-new-messages-icon" aria-hidden>
+            <IconChevron size={14} open />
+          </span>
+          {t("chat.newMessages")}
         </button>
       ) : null}
     </div>
