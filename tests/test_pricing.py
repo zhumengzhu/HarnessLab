@@ -2,8 +2,24 @@
 
 from __future__ import annotations
 
+import pytest
+
 from harnesslab.providers.catalog import ModelCatalog
 from harnesslab.providers.pricing import estimate_call_cost_usd
+from harnesslab.providers.pricing.catalog import reset_pricing_catalog_cache
+from harnesslab.providers.pricing.override import reset_pricing_overrides_cache
+
+
+@pytest.fixture(autouse=True)
+def _usd_catalog_without_operator_override(monkeypatch: pytest.MonkeyPatch) -> None:
+    """CI has no ``~/.config/harnesslab/pricing.json``; pin the same for unit tests."""
+
+    monkeypatch.setenv("HARNESSLAB_PRICING_CONFIG", "/dev/null/harnesslab-pricing-test-none.json")
+    reset_pricing_overrides_cache()
+    reset_pricing_catalog_cache()
+    yield
+    reset_pricing_overrides_cache()
+    reset_pricing_catalog_cache()
 
 
 def test_estimate_call_cost_deepseek_flash() -> None:
@@ -41,7 +57,8 @@ def test_estimate_call_cost_partial_model_id_match() -> None:
         request_tokens=1_000_000,
         response_tokens=1_000_000,
     )
-    assert abs(cost - 1.26) < 1e-9
+    # USD catalog: 0.435/M input + 0.87/M output (deepseek-v4-pro-usd).
+    assert abs(cost - 1.305) < 1e-9
 
 
 def test_mimo_v25_cny_pricing() -> None:

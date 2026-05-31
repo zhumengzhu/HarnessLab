@@ -14,12 +14,16 @@ test.describe("HarnessLab Web UI smoke", () => {
     await expect(page.getByRole("tab", { name: "Activity" })).toBeVisible();
   });
 
-  test("trace tab shows span tree by default", async ({ page }) => {
+  test("trace tab shows Jaeger-style span tree by default", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("tab", { name: "Trace" }).click();
-    await expect(page.getByRole("heading", { name: "Trace spans" })).toBeVisible();
-    await page.getByRole("tab", { name: "Events" }).click();
-    await expect(page.getByRole("heading", { name: "Trace events" })).toBeVisible();
+    await page.getByRole("tab", { name: /Trace|追踪/ }).click();
+    await expect(page.locator(".trace-jaeger-panel")).toBeVisible();
+    await expect(page.getByRole("tab", { name: /Timeline|时间线/ })).toHaveAttribute(
+      "aria-selected",
+      "true",
+    );
+    await page.getByRole("tab", { name: /^Events$/ }).click();
+    await expect(page.getByRole("heading", { name: /Span list|Span 列表/ })).toBeVisible();
   });
 
   test("settings page holds UI preferences", async ({ page }) => {

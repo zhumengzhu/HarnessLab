@@ -31,21 +31,19 @@ def _free_port() -> int:
         return int(s.getsockname()[1])
 
 
-def _get(url: str, *, retries: int = 20) -> dict:
-    last_err: Exception | None = None
-    for _ in range(retries):
-        try:
-            with urllib.request.urlopen(url, timeout=5) as resp:  # noqa: S310
-                return json.loads(resp.read().decode("utf-8"))
-        except (urllib.error.URLError, ConnectionResetError) as exc:
-            last_err = exc
-            time.sleep(0.05)
-    raise last_err  # type: ignore[misc]
+_SERVER_RETRY_INTERVAL_S = 0.1
+_DEFAULT_SERVER_RETRIES = 100
 
 
-def _post(url: str, payload: dict, *, retries: int = 20, headers: dict | None = None) -> dict:
-    data = json.dumps(payload).encode("utf-8")
-    hdrs = {"Content-Type": "application/json", **(headers or {})}
+def _open_url(
+    url: str,
+    *,
+    method: str = "GET",
+    data: bytes | None = None,
+    headers: dict[str, str] | None = None,
+    retries: int = _DEFAULT_SERVER_RETRIES,
+) -> bytes:
+    hdrs = headers or {}
     last_err: Exception | None = None
     for _ in range(retries):
         try:
@@ -53,48 +51,54 @@ def _post(url: str, payload: dict, *, retries: int = 20, headers: dict | None = 
                 url,
                 data=data,
                 headers=hdrs,
-                method="POST",
+                method=method,
             )
             with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
-                return json.loads(resp.read().decode("utf-8"))
+                return resp.read()
         except (urllib.error.URLError, ConnectionResetError) as exc:
             last_err = exc
-            time.sleep(0.05)
+            time.sleep(_SERVER_RETRY_INTERVAL_S)
     raise last_err  # type: ignore[misc]
 
 
-def _post_sse(url: str, payload: dict) -> str:
+def _get(url: str, *, retries: int = _DEFAULT_SERVER_RETRIES) -> dict:
+    return json.loads(_open_url(url, retries=retries).decode("utf-8"))
+
+
+def _post(
+    url: str,
+    payload: dict,
+    *,
+    retries: int = _DEFAULT_SERVER_RETRIES,
+    headers: dict | None = None,
+) -> dict:
     data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(  # noqa: S310
+    hdrs = {"Content-Type": "application/json", **(headers or {})}
+    body = _open_url(url, method="POST", data=data, headers=hdrs, retries=retries)
+    return json.loads(body.decode("utf-8"))
+
+
+def _post_sse(url: str, payload: dict, *, retries: int = _DEFAULT_SERVER_RETRIES) -> str:
+    data = json.dumps(payload).encode("utf-8")
+    body = _open_url(
         url,
+        method="POST",
         data=data,
         headers={
             "Content-Type": "application/json",
             "Accept": "text/event-stream",
         },
-        method="POST",
+        retries=retries,
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
-        return resp.read().decode("utf-8")
+    return body.decode("utf-8")
 
 
-def _post_error(url: str, payload: dict) -> tuple[int, str]:
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(  # noqa: S310
-        url,
-        data=data,
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=30):  # noqa: S310
-            return (200, "")
-    except urllib.error.HTTPError as exc:
-        body = exc.read().decode("utf-8")
-        return (int(exc.code), body)
-
-
-def _patch(url: str, payload: dict, *, retries: int = 20) -> dict:
+def _post_error(
+    url: str,
+    payload: dict,
+    *,
+    retries: int = _DEFAULT_SERVER_RETRIES,
+) -> tuple[int, str]:
     data = json.dumps(payload).encode("utf-8")
     last_err: Exception | None = None
     for _ in range(retries):
@@ -103,14 +107,29 @@ def _patch(url: str, payload: dict, *, retries: int = 20) -> dict:
                 url,
                 data=data,
                 headers={"Content-Type": "application/json"},
-                method="PATCH",
+                method="POST",
             )
-            with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
-                return json.loads(resp.read().decode("utf-8"))
+            with urllib.request.urlopen(req, timeout=30):  # noqa: S310
+                return (200, "")
+        except urllib.error.HTTPError as exc:
+            body = exc.read().decode("utf-8")
+            return (int(exc.code), body)
         except (urllib.error.URLError, ConnectionResetError) as exc:
             last_err = exc
-            time.sleep(0.05)
+            time.sleep(_SERVER_RETRY_INTERVAL_S)
     raise last_err  # type: ignore[misc]
+
+
+def _patch(url: str, payload: dict, *, retries: int = _DEFAULT_SERVER_RETRIES) -> dict:
+    data = json.dumps(payload).encode("utf-8")
+    body = _open_url(
+        url,
+        method="PATCH",
+        data=data,
+        headers={"Content-Type": "application/json"},
+        retries=retries,
+    )
+    return json.loads(body.decode("utf-8"))
 
 
 def _web_runtime(tmp_path: Path, *, max_steps: int = 1) -> WebRuntime:
@@ -145,6 +164,7 @@ def _start_server(runtime: WebRuntime, port: int) -> None:
         daemon=True,
     )
     thread.start()
+    _get(f"http://127.0.0.1:{port}/api/health")
 
 
 def test_web_api_models_deepseek_catalog_fields(tmp_path: Path) -> None:
@@ -711,6 +731,7 @@ def test_web_model_switch_persists_operator_config(
         encoding="utf-8",
     )
     monkeypatch.setenv("HARNESSLAB_CONFIG", str(config_path))
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
 
     port = _free_port()
     runtime = _web_runtime(tmp_path)
@@ -737,9 +758,7 @@ def test_web_composer_commands_lists_skills(tmp_path: Path) -> None:
     runtime = _web_runtime(tmp_path)
     _start_server(runtime, port)
     base = f"http://127.0.0.1:{port}"
-    req = urllib.request.Request(f"{base}/api/composer/commands", method="GET")  # noqa: S310
-    with urllib.request.urlopen(req, timeout=30) as resp:  # noqa: S310
-        payload = json.loads(resp.read().decode("utf-8"))
+    payload = _get(f"{base}/api/composer/commands")
     names = {item["name"] for item in payload["commands"]}
     assert "remember" in names
     assert payload["skills"][0]["name"] == "research"
@@ -761,8 +780,7 @@ def test_web_static_index_served(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     runtime = _web_runtime(tmp_path)
     _start_server(runtime, port)
     base = f"http://127.0.0.1:{port}"
-    with urllib.request.urlopen(f"{base}/", timeout=5) as resp:  # noqa: S310
-        body = resp.read().decode("utf-8")
+    body = _open_url(f"{base}/").decode("utf-8")
     assert "HarnessLab" in body
     assert 'id="root"' in body
     assert "/assets/index.js" in body
@@ -791,11 +809,9 @@ def test_web_can_switch_to_ts_static_bundle(
     runtime = _web_runtime(tmp_path)
     _start_server(runtime, port)
     base = f"http://127.0.0.1:{port}"
-    with urllib.request.urlopen(f"{base}/", timeout=5) as resp:  # noqa: S310
-        body = resp.read().decode("utf-8")
+    body = _open_url(f"{base}/").decode("utf-8")
     assert "/assets/index.js" in body
-    with urllib.request.urlopen(f"{base}/assets/index.js", timeout=5) as resp:  # noqa: S310
-        asset = resp.read().decode("utf-8")
+    asset = _open_url(f"{base}/assets/index.js").decode("utf-8")
     assert "ts ui" in asset
 
 
@@ -807,8 +823,7 @@ def test_web_skills_list_api(tmp_path: Path) -> None:
     runtime = _web_runtime(tmp_path)
     _start_server(runtime, port)
     base = f"http://127.0.0.1:{port}"
-    with urllib.request.urlopen(f"{base}/api/skills", timeout=5) as resp:  # noqa: S310
-        payload = json.loads(resp.read().decode("utf-8"))
+    payload = _get(f"{base}/api/skills")
     names = {item["name"] for item in payload["skills"]}
     assert "research" in names
     assert "compact" in names
@@ -822,21 +837,13 @@ def test_web_skills_preview_and_install_catalog(tmp_path: Path) -> None:
     runtime = _web_runtime(tmp_path)
     _start_server(runtime, port)
     base = f"http://127.0.0.1:{port}"
-    with urllib.request.urlopen(  # noqa: S310
-        f"{base}/api/skills/preview?catalog_id=compact",
-        timeout=5,
-    ) as resp:
-        preview = json.loads(resp.read().decode("utf-8"))
+    preview = _get(f"{base}/api/skills/preview?catalog_id=compact")
     assert "/compact" in preview["markdown"]
 
-    req = urllib.request.Request(
+    installed = _post(
         f"{base}/api/skills/install",
-        data=json.dumps({"catalog_id": "compact", "scope": "workspace"}).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
+        {"catalog_id": "compact", "scope": "workspace"},
     )
-    with urllib.request.urlopen(req, timeout=5) as resp:  # noqa: S310
-        installed = json.loads(resp.read().decode("utf-8"))
     assert installed["ok"] is True
     assert (tmp_path / "skills" / "compact.md").is_file()
 
@@ -850,14 +857,7 @@ def test_web_patch_multi_agent_setting(tmp_path: Path, monkeypatch: pytest.Monke
     runtime = _web_runtime(tmp_path)
     _start_server(runtime, port)
     base = f"http://127.0.0.1:{port}"
-    req = urllib.request.Request(
-        f"{base}/api/settings/multi-agent",
-        data=json.dumps({"enabled": True}).encode("utf-8"),
-        headers={"Content-Type": "application/json"},
-        method="POST",
-    )
-    with urllib.request.urlopen(req, timeout=5) as resp:  # noqa: S310
-        payload = json.loads(resp.read().decode("utf-8"))
+    payload = _post(f"{base}/api/settings/multi-agent", {"enabled": True})
     assert payload["multi_agent_enabled"] is True
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["loop"]["multi_agent"]["enabled"] is True
