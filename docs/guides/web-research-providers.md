@@ -80,14 +80,17 @@ Key differences:
 
 **Exa vs Tavily:** separate vendors ([exa.ai](https://exa.ai/) vs [tavily.com](https://tavily.com/)); OpenCode’s built-in path is Exa MCP, not Tavily. See [Deep research landscape](https://github.com/zhumengzhu/HarnessLab/blob/c7625595e226daf7ebb715cec82b4d08931ea586/docs/guides/deep-research-landscape.md).
 
-## HarnessLab backend selection (no auto-fallback)
+## HarnessLab backend selection
 
-`web_search` uses **exactly one** backend per process (`ddgs` | `duckduckgo` |
-`exa` | `brave` | `tavily` | `serpapi`). Setting `TAVILY_API_KEY` alone does **not**
-enable Tavily unless `tools.web_search.backend` (or `WEB_SEARCH_BACKEND`) is
-`tavily`. **`exa`** without `EXA_API_KEY` uses Exa hosted MCP (shared free quota,
-OpenCode-compatible); with a key it uses Exa REST. There is **no** automatic
-DuckDuckGo → Tavily fallback.
+`web_search` uses **one primary** backend per process (`ddgs` | `duckduckgo` |
+`exa` | `brave` | `tavily` | `serpapi`). Optional
+**`tools.web_search.fallback_backend`** tries a second backend when the primary
+raises or returns no hits (e.g. `ddgs` → `tavily` when `TAVILY_API_KEY` is set).
+
+Setting `TAVILY_API_KEY` alone does **not** enable Tavily unless
+`tools.web_search.backend` (or `WEB_SEARCH_BACKEND`) is `tavily`, or
+`fallback_backend` is `tavily`. **`exa`** without `EXA_API_KEY` uses Exa hosted
+MCP (OpenCode-compatible `web_search_exa`); with a key it uses Exa REST.
 
 ## Mainland China / VPN note
 

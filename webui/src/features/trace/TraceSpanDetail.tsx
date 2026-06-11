@@ -10,6 +10,7 @@ import {
 } from "../../lib/spanTree";
 import { useI18n } from "../../lib/i18n";
 import { ModelCallInspector } from "./ModelCallInspector";
+import { ToolSpanInspector } from "./ToolSpanInspector";
 import { TraceAttributesTable } from "./TraceAttributesTable";
 import { TraceDetailAccordion } from "./TraceDetailAccordion";
 
@@ -100,10 +101,6 @@ export function TraceSpanDetail({
   const subtitle = spanDisplaySubtitle(span);
   const timeline = spanTimeline(span, traceStartMs, traceDurationMs);
   const metrics = span.metrics ?? {};
-  const context =
-    typeof metrics.context === "object" && metrics.context
-      ? (metrics.context as Record<string, unknown>)
-      : null;
   const tags = attributeRows(span);
   const processRows = spanResourceRows(span);
   const metricEntries = metricRows(metrics);
@@ -217,9 +214,18 @@ export function TraceSpanDetail({
             <ModelCallInspector
               payload={{
                 ...metrics,
-                context,
                 decision_kind: span.attributes["harnesslab.decision.kind"],
               }}
+            />
+          </TraceDetailAccordion>
+        ) : null}
+
+        {span.name.startsWith("tool.") && !span.name.startsWith("tool.hooks.") ? (
+          <TraceDetailAccordion label={t("trace.detailToolIo")} defaultOpen>
+            <ToolSpanInspector
+              metrics={metrics}
+              sessionId={span.session_id}
+              toolName={String(span.attributes["harnesslab.tool.name"] ?? span.name.slice(5))}
             />
           </TraceDetailAccordion>
         ) : null}

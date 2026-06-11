@@ -42,6 +42,7 @@ GEN_AI_REQUEST_MODEL = "gen_ai.request.model"
 HARNESSLAB_DECISION_KIND = "harnesslab.decision.kind"
 HARNESSLAB_THINKING_ENABLED = "harnesslab.thinking.enabled"
 HARNESSLAB_FAILOVER_ATTEMPTS = "harnesslab.failover.attempts"
+HARNESSLAB_FAILOVER_BACKEND = "harnesslab.failover.backend"
 
 # --- Tool ---
 HARNESSLAB_TOOL_NAME = "harnesslab.tool.name"

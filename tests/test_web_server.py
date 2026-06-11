@@ -542,6 +542,33 @@ def test_web_trace_jsonl_endpoint(tmp_path: Path) -> None:
     assert first["name"]
 
 
+def test_web_artifact_endpoint(tmp_path: Path) -> None:
+    from harnesslab.artifact.in_memory import InMemoryArtifactStore
+
+    port = _free_port()
+    runtime = _web_runtime(tmp_path, max_steps=1)
+    runtime.loop._artifacts = InMemoryArtifactStore()  # noqa: SLF001
+    store = runtime.loop._artifacts  # noqa: SLF001
+    session = runtime.loop.start(goal="artifact probe")
+    ref = store.put(
+        b"full tool output body",
+        mime="text/plain; charset=utf-8",
+        session_id=session.id,
+        artifact_id="art_web_test",
+    )
+    _start_server(runtime, port)
+    base = f"http://127.0.0.1:{port}"
+
+    payload = _get(f"{base}/api/sessions/{session.id}/artifacts/{ref}")
+    assert payload["id"] == ref
+    assert payload["encoding"] == "utf-8"
+    assert payload["content"] == "full tool output body"
+
+    with pytest.raises(urllib.error.HTTPError) as exc:
+        _get(f"{base}/api/sessions/{session.id}/artifacts/missing")
+    assert exc.value.code == 404
+
+
 def test_web_health_includes_pricing_fingerprint(tmp_path: Path) -> None:
     port = _free_port()
     runtime = _web_runtime(tmp_path)
@@ -861,3 +888,27 @@ def test_web_patch_multi_agent_setting(tmp_path: Path, monkeypatch: pytest.Monke
     assert payload["multi_agent_enabled"] is True
     saved = json.loads(config_path.read_text(encoding="utf-8"))
     assert saved["loop"]["multi_agent"]["enabled"] is True
+
+
+def test_web_patch_failover_setting(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    config_path = tmp_path / "config.json"
+    config_path.write_text(
+        '{"version": 1, "model": {"default_backend": "simple", "failover_enabled": false}}\n'
+    )
+    monkeypatch.setenv("HARNESSLAB_CONFIG", str(config_path))
+    monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
+
+    port = _free_port()
+    runtime = _web_runtime(tmp_path)
+    _start_server(runtime, port)
+    base = f"http://127.0.0.1:{port}"
+    payload = _post(
+        f"{base}/api/settings/failover",
+        {"enabled": True, "fallbacks": ["deepseek"]},
+    )
+    assert payload["model_failover_enabled"] is True
+    assert payload["model_fallbacks"] == ["deepseek"]
+    assert "simple" in payload["model_failover_chain"]
+    saved = json.loads(config_path.read_text(encoding="utf-8"))
+    assert saved["model"]["failover_enabled"] is True
+    assert saved["model"]["fallbacks"] == ["deepseek"]

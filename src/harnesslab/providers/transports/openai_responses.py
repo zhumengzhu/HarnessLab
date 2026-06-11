@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -50,26 +51,8 @@ class OpenAIResponsesTransport:
     def create_response(self, body: dict[str, Any]) -> dict[str, Any]:
         """Execute one Responses call; return a JSON-like response dict."""
 
-        kwargs: dict[str, Any] = {
-            "model": body["model"],
-            "input": body["input"],
-        }
-        instructions = body.get("instructions")
-        if isinstance(instructions, str) and instructions.strip():
-            kwargs["instructions"] = instructions
-        reasoning = body.get("reasoning")
-        if reasoning is not None:
-            kwargs["reasoning"] = reasoning
-        max_output_tokens = body.get("max_output_tokens")
-        if max_output_tokens is not None:
-            kwargs["max_output_tokens"] = max_output_tokens
-        tools = body.get("tools")
-        if tools:
-            kwargs["tools"] = tools
-            kwargs["tool_choice"] = body.get("tool_choice", "auto")
-
         try:
-            response = self._client.responses.create(**kwargs)
+            response = self._client.responses.create(**_response_kwargs(body))
         except OpenAIAPIStatusError as exc:
             if is_context_overflow_error(exc):
                 raise ModelOverflowError(overflow_message_from_error(exc)) from exc
@@ -78,6 +61,57 @@ class OpenAIResponsesTransport:
             raise
 
         return response.model_dump()
+
+    def create_response_stream(
+        self,
+        body: dict[str, Any],
+        *,
+        on_delta: Callable[[str, str], None],
+    ) -> dict[str, Any]:
+        """Stream one Responses call; invoke ``on_delta(kind, text)`` per chunk."""
+
+        try:
+            with self._client.responses.stream(**_response_kwargs(body)) as stream:
+                for event in stream:
+                    event_type = getattr(event, "type", "") or ""
+                    if event_type == "response.output_text.delta":
+                        piece = getattr(event, "delta", "") or ""
+                        if piece:
+                            on_delta("assistant", piece)
+                    elif "reasoning" in event_type and event_type.endswith(".delta"):
+                        piece = getattr(event, "delta", "") or ""
+                        if isinstance(piece, str) and piece:
+                            on_delta("reasoning", piece)
+                response = stream.get_final_response()
+        except OpenAIAPIStatusError as exc:
+            if is_context_overflow_error(exc):
+                raise ModelOverflowError(overflow_message_from_error(exc)) from exc
+            raise
+        except (APIConnectionError, APITimeoutError):
+            raise
+
+        return response.model_dump()
+
+
+def _response_kwargs(body: dict[str, Any]) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "model": body["model"],
+        "input": body["input"],
+    }
+    instructions = body.get("instructions")
+    if isinstance(instructions, str) and instructions.strip():
+        kwargs["instructions"] = instructions
+    reasoning = body.get("reasoning")
+    if reasoning is not None:
+        kwargs["reasoning"] = reasoning
+    max_output_tokens = body.get("max_output_tokens")
+    if max_output_tokens is not None:
+        kwargs["max_output_tokens"] = max_output_tokens
+    tools = body.get("tools")
+    if tools:
+        kwargs["tools"] = tools
+        kwargs["tool_choice"] = body.get("tool_choice", "auto")
+    return kwargs
 
 
 def is_context_overflow_error(exc: OpenAIAPIStatusError) -> bool:

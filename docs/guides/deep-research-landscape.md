@@ -98,9 +98,9 @@ Implementation: `WebSearchTool._search()` branches on `self._backend` — see
 `"backend": "tavily"` explicitly. Having a Tavily key in env alone does not
 change runtime behavior.
 
-**Planned improvement (not implemented yet):** optional
-`tools.web_search.fallback_backend` (e.g. `duckduckgo` → `tavily`) for
-cost-aware deployments. See [Recommended HarnessLab direction](#recommended-harnesslab-direction) below.
+**Shipped:** optional `tools.web_search.fallback_backend` (e.g. `ddgs` → `tavily`)
+for cost-aware deployments when the primary backend fails or returns no hits.
+See [`docs/guides/web-research-providers.md`](web-research-providers.md).
 
 ---
 

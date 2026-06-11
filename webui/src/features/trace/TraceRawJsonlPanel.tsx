@@ -4,7 +4,21 @@ import { apiGet } from "../../lib/api-client";
 import { copyText } from "../../lib/copyText";
 import type { SpanRecordItem, TraceJsonlResponse } from "../../lib/schemas";
 import { filterSpans, spansToJsonl } from "../../lib/traceJsonl";
+import { downloadTraceHtml } from "../../lib/traceHtmlExport";
 import { useI18n } from "../../lib/i18n";
+
+function jsonlToSpans(jsonl: string): SpanRecordItem[] {
+  const rows: SpanRecordItem[] = [];
+  for (const line of jsonl.split("\n")) {
+    if (!line.trim()) continue;
+    try {
+      rows.push(JSON.parse(line) as SpanRecordItem);
+    } catch {
+      // skip malformed lines
+    }
+  }
+  return rows;
+}
 
 type TraceRawJsonlPanelProps = {
   sessionId: string | null;
@@ -57,6 +71,13 @@ export function TraceRawJsonlPanel(props: TraceRawJsonlPanelProps) {
     return spansToJsonl(filterSpans(liveSpans, filter));
   }, [filter, hasStreamSpans, liveSpans, persisted.data?.jsonl]);
 
+  const exportSpans = useMemo(() => {
+    if (hasStreamSpans && liveSpans.length) {
+      return filterSpans(liveSpans, filter);
+    }
+    return jsonlToSpans(jsonl);
+  }, [filter, hasStreamSpans, jsonl, liveSpans]);
+
   const lineCount = jsonl.trim() ? jsonl.trim().split("\n").length : 0;
   const spansPath = persisted.data?.spans_path ?? persisted.data?.trace_path ?? null;
   const isLoading = loading || persisted.isLoading;
@@ -89,6 +110,13 @@ export function TraceRawJsonlPanel(props: TraceRawJsonlPanelProps) {
             }
           >
             {t("trace.jsonlDownload")}
+          </button>
+          <button
+            type="button"
+            disabled={!exportSpans.length || !sessionId}
+            onClick={() => downloadTraceHtml(sessionId ?? "session", exportSpans)}
+          >
+            {t("trace.htmlDownload")}
           </button>
         </div>
       </div>

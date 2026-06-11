@@ -1,6 +1,6 @@
 # TUI Stack Options (Python Backend)
 
-Status: Draft
+Status: **Beta** (Textual operator surface shipped; see [`guides/tui.md`](../guides/tui.md)).
 
 ## Context
 

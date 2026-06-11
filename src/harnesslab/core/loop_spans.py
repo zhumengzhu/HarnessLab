@@ -20,6 +20,7 @@ from harnesslab.telemetry.span_attributes import (
     HARNESSLAB_COMPACTION_TRIGGER,
     HARNESSLAB_DECISION_KIND,
     HARNESSLAB_FAILOVER_ATTEMPTS,
+    HARNESSLAB_FAILOVER_BACKEND,
     HARNESSLAB_MAX_STEPS,
     HARNESSLAB_PARENT_SESSION_ID,
     HARNESSLAB_SESSION_GOAL,
@@ -251,6 +252,7 @@ class LoopSpans:
         provider: str | None = None,
         model_id: str | None = None,
         failover_attempts: int = 0,
+        failover_backend: str | None = None,
         status: str = "ok",
         status_message: str | None = None,
     ) -> None:
@@ -261,6 +263,8 @@ class LoopSpans:
             attrs[GEN_AI_REQUEST_MODEL] = model_id
         if failover_attempts > 0:
             attrs[HARNESSLAB_FAILOVER_ATTEMPTS] = failover_attempts
+        if failover_backend:
+            attrs[HARNESSLAB_FAILOVER_BACKEND] = failover_backend
         self._recorder.end_span(
             handle,
             status="error" if status == "error" else "ok",

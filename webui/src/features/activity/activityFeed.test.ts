@@ -31,6 +31,22 @@ describe("activityFeed spans", () => {
     expect(entry?.kind).toBe("failover");
   });
 
+  it("surfaces hook spans", () => {
+    const entry = activityEntryFromSpanCompleted(
+      span({
+        span_id: "hook1",
+        name: "tool.hooks.pre",
+        attributes: {
+          "harnesslab.hook.name": "block-rm",
+          "harnesslab.hook.phase": "pre_tool",
+          "harnesslab.hook.type": "prompt",
+        },
+      })
+    );
+    expect(entry?.kind).toBe("hook");
+    expect(entry?.label).toContain("block-rm");
+  });
+
   it("maps tool spans with redacted detail", () => {
     const entry = activityEntryFromSpanCompleted(
       span({

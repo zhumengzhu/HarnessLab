@@ -2,7 +2,17 @@ import type { SpanEventPayload, SpanRecordItem, SpanStartedPayload } from "../..
 
 export type ActivityEntry = {
   id: string;
-  kind: "tool" | "tool_denied" | "step" | "thinking" | "compact" | "steer" | "spawn" | "failover";
+  kind:
+    | "tool"
+    | "tool_denied"
+    | "step"
+    | "thinking"
+    | "compact"
+    | "steer"
+    | "spawn"
+    | "failover"
+    | "hook"
+    | "hook_blocked";
   label: string;
   detail?: string;
   ok?: boolean;
@@ -86,14 +96,33 @@ export function activityEntryFromSpanCompleted(span: SpanRecordItem): ActivityEn
   }
   if (span.name === "llm.generate") {
     const attempts = span.attributes["harnesslab.failover.attempts"];
+    const backend = span.attributes["harnesslab.failover.backend"];
     if (typeof attempts === "number" && attempts > 1) {
+      const backendLabel = typeof backend === "string" && backend ? ` · ${backend}` : "";
       return {
         id: `${span.span_id}-failover`,
         kind: "failover",
-        label: `failover · ${attempts} attempts`,
+        label: `failover · ${attempts} attempts${backendLabel}`,
         at: span.end_time,
       };
     }
+  }
+  if (span.name.startsWith("tool.hooks.")) {
+    const hookName = String(span.attributes["harnesslab.hook.name"] ?? "hook");
+    const phase = String(span.attributes["harnesslab.hook.phase"] ?? span.name.slice(11));
+    const hookType = String(span.attributes["harnesslab.hook.type"] ?? "");
+    const duration =
+      typeof span.metrics?.duration_ms === "number"
+        ? ` · ${Math.round(span.metrics.duration_ms)}ms`
+        : "";
+    return {
+      id: `${span.span_id}-hook`,
+      kind: "hook",
+      label: `hook ${phase} · ${hookName}${duration}`,
+      detail: hookType || undefined,
+      ok: span.status !== "error",
+      at: span.end_time,
+    };
   }
   return null;
 }
@@ -105,6 +134,29 @@ export function activityEntryFromSpanEvent(payload: SpanEventPayload): ActivityE
       kind: "steer",
       label: "steer received",
       detail: previewText(payload.attributes?.user_input),
+      at: new Date().toISOString(),
+    };
+  }
+  if (payload.name === "tool.hook_blocked") {
+    const hookName = String(payload.attributes?.name ?? "hook");
+    const reason = previewText(payload.attributes?.reason);
+    return {
+      id: `${payload.span_id}-${payload.name}`,
+      kind: "hook_blocked",
+      label: `hook blocked · ${hookName}`,
+      detail: reason,
+      ok: false,
+      at: new Date().toISOString(),
+    };
+  }
+  if (payload.name === "hook.failed") {
+    const hookName = String(payload.attributes?.name ?? "hook");
+    return {
+      id: `${payload.span_id}-${payload.name}`,
+      kind: "hook",
+      label: `hook failed · ${hookName}`,
+      detail: previewText(payload.attributes?.error),
+      ok: false,
       at: new Date().toISOString(),
     };
   }

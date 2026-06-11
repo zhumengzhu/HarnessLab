@@ -128,6 +128,41 @@ def test_load_operator_config_parses_failover_and_gemini(tmp_path: Path) -> None
     assert config.gemini_thinking_level == "high"
 
 
+def test_patch_model_failover_writes_config(tmp_path: Path) -> None:
+    from harnesslab.core.operator_config import load_operator_config, patch_model_failover
+
+    path = tmp_path / "config.json"
+    path.write_text('{"version": 1, "model": {"default_backend": "deepseek"}}\n')
+    patch_model_failover(enabled=True, fallbacks=["simple", "anthropic"], path=path)
+    config = load_operator_config(path)
+    assert config.model_failover_enabled is True
+    assert config.model_fallbacks == ("simple", "anthropic")
+    saved = json.loads(path.read_text(encoding="utf-8"))
+    assert saved["model"]["failover_enabled"] is True
+    assert saved["model"]["fallbacks"] == ["simple", "anthropic"]
+
+
+def test_load_operator_config_parses_web_search_fallback(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    path.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "tools": {
+                    "web_search": {
+                        "backend": "ddgs",
+                        "fallback_backend": "tavily",
+                    }
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+    config = load_operator_config(path)
+    assert config.web_search_backend == "ddgs"
+    assert config.web_search_fallback_backend == "tavily"
+
+
 def test_load_operator_config_parses_tools_block(tmp_path: Path) -> None:
     path = tmp_path / "config.json"
     path.write_text(

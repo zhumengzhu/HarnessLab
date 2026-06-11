@@ -434,6 +434,11 @@ class HarnessLoop:
                                 else None
                             ),
                             failover_attempts=int(meta.get("failover_attempts") or 0),
+                            failover_backend=(
+                                str(meta["failover_backend"])
+                                if meta.get("failover_backend") is not None
+                                else None
+                            ),
                         )
                     self._loop_spans.add_step_event(
                         session,
@@ -1514,6 +1519,9 @@ class HarnessLoop:
                         "output_size",
                         "output_preview",
                         "output_truncated",
+                        "args",
+                        "error",
+                        "artifact_ref",
                     )
                     if k in exec_payload
                 }
@@ -1713,6 +1721,19 @@ class HarnessLoop:
         context = payload.get("context")
         if isinstance(context, dict):
             metrics["context"] = context
+        for key in (
+            "prompt_blocks",
+            "api_messages",
+            "reasoning_text",
+            "usage_breakdown",
+            "cost_estimate",
+            "failover_index",
+            "failover_backend",
+            "failover_attempts",
+            "failover_exhausted",
+        ):
+            if key in payload:
+                metrics[key] = payload[key]
         return metrics
 
     @staticmethod

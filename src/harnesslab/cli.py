@@ -409,6 +409,11 @@ def build_runtime(
         web_search_max_results = (
             operator_config.web_search_max_results if operator_config is not None else 5
         )
+    web_search_fallback_backend = (
+        operator_config.web_search_fallback_backend
+        if operator_config is not None
+        else None
+    )
     configured_api_key_env = (
         operator_config.web_search_api_key_env
         if operator_config is not None and operator_config.web_search_api_key_env
@@ -492,8 +497,10 @@ def build_runtime(
     tools.register(
         WebSearchTool(
             backend=web_search_backend,
+            fallback_backend=web_search_fallback_backend,
             max_results=web_search_max_results,
             api_key=web_search_api_key,
+            configured_api_key_env=configured_api_key_env,
             api_base_url=(
                 operator_config.web_search_api_base_url
                 if operator_config is not None

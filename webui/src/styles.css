@@ -883,6 +883,46 @@ body {
   border-color: color-mix(in srgb, var(--hl-danger) 45%, transparent);
 }
 
+.activity-panel-item-failover {
+  border-color: color-mix(in srgb, var(--hl-warning, #d4a017) 40%, transparent);
+}
+
+.activity-panel-item-hook,
+.activity-panel-item-hook_blocked {
+  border-color: color-mix(in srgb, var(--hl-accent) 35%, transparent);
+}
+
+.settings-failover-backends {
+  border: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 12px;
+}
+
+.settings-failover-option {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.settings-save-btn {
+  margin-top: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  border-radius: var(--hl-radius-sm);
+  border: 1px solid var(--hl-border);
+  background: var(--hl-bg-elevated);
+  cursor: pointer;
+}
+
+.settings-save-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .activity-panel-empty {
   padding: 6px 8px;
   color: var(--hl-text-muted);

@@ -318,6 +318,16 @@ export type TraceJsonlResponse = {
   jsonl: string;
 };
 
+export type ArtifactResponse = {
+  id: string;
+  session_id: string;
+  mime: string;
+  size_bytes: number;
+  sha256: string;
+  encoding: "utf-8" | "base64";
+  content: string;
+};
+
 export type ProposalSummary = {
   id: string;
   status: "open" | "accepted" | "rejected" | "superseded";

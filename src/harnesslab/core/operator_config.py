@@ -68,6 +68,7 @@ class OperatorConfig:
     fetch_url_provider: Literal["direct", "jina"] = "direct"
     fetch_url_jina_api_key_env: str | None = None
     web_search_backend: str = DEFAULT_WEB_SEARCH_BACKEND
+    web_search_fallback_backend: str | None = None
     web_search_max_results: int = DEFAULT_WEB_SEARCH_MAX_RESULTS
     web_search_api_key_env: str | None = None
     web_search_api_base_url: str | None = None
@@ -143,6 +144,40 @@ def save_operator_config(config: OperatorConfig, path: Path | None = None) -> Pa
         data = {"version": CONFIG_VERSION}
 
     _patch_model_section(data, config)
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    tmp.write_text(
+        json.dumps(data, indent=2, ensure_ascii=False) + "\n",
+        encoding="utf-8",
+    )
+    tmp.replace(path)
+    return path
+
+
+def patch_model_failover(
+    *,
+    enabled: bool,
+    fallbacks: list[str] | None = None,
+    path: Path | None = None,
+) -> Path:
+    """Merge ``model.failover_enabled`` and ``model.fallbacks`` into config."""
+
+    path = path or config_path_from_env()
+    if path.is_file():
+        data = json5.loads(path.read_text(encoding="utf-8"))
+        if not isinstance(data, dict):
+            data = {"version": CONFIG_VERSION}
+    else:
+        data = {"version": CONFIG_VERSION}
+
+    model_raw = data.get("model")
+    model: dict[str, Any] = model_raw if isinstance(model_raw, dict) else {}
+    data["model"] = model
+    model["failover_enabled"] = bool(enabled)
+    if fallbacks is not None:
+        cleaned = [str(item).strip().lower() for item in fallbacks if str(item).strip()]
+        model["fallbacks"] = cleaned
 
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp = path.with_suffix(path.suffix + ".tmp")
@@ -333,11 +368,17 @@ def config_settings_snapshot(
         "gemini_thinking_level": config.gemini_thinking_level,
         "model_failover_enabled": config.model_failover_enabled,
         "model_fallbacks": list(config.model_fallbacks),
+        "model_failover_chain": (
+            [model_backend, *config.model_fallbacks]
+            if config.model_failover_enabled and config.model_fallbacks
+            else [model_backend]
+        ),
         "fetch_url_mode": config.fetch_url_mode,
         "fetch_url_allowlist": list(config.fetch_url_allowlist),
         "fetch_url_deny_hosts": list(config.fetch_url_deny_hosts),
         "fetch_url_provider": config.fetch_url_provider,
         "web_search_backend": config.web_search_backend,
+        "web_search_fallback_backend": config.web_search_fallback_backend,
         "web_search_max_results": config.web_search_max_results,
         "web_search_api_base_url": config.web_search_api_base_url,
         "skill_selection_mode": config.skill_selection_mode,
@@ -474,6 +515,7 @@ def _parse_config(data: dict[str, Any]) -> OperatorConfig:
         fetch_url_provider=_fetch_provider(fetch_url),
         fetch_url_jina_api_key_env=_optional_str(fetch_url.get("jina_api_key_env")),
         web_search_backend=_optional_str(web_search.get("backend")) or DEFAULT_WEB_SEARCH_BACKEND,
+        web_search_fallback_backend=_optional_str(web_search.get("fallback_backend")),
         web_search_max_results=_optional_int(web_search.get("max_results"))
         or DEFAULT_WEB_SEARCH_MAX_RESULTS,
         web_search_api_key_env=_optional_str(web_search.get("api_key_env")),

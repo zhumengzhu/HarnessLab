@@ -77,6 +77,58 @@ def test_web_search_duckduckgo_antibot_returns_actionable_error() -> None:
     assert "HTTPS_PROXY" in result.error
 
 
+def test_web_search_fallback_backend_uses_secondary_on_primary_failure(monkeypatch) -> None:
+    monkeypatch.setenv("TAVILY_API_KEY", "test-tavily-key")
+    calls: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if "tavily" in str(request.url):
+            calls.append("tavily")
+            return httpx.Response(
+                200,
+                json={
+                    "results": [
+                        {
+                            "title": "Tavily Hit",
+                            "url": "https://example.com/t",
+                            "content": "from tavily",
+                        }
+                    ]
+                },
+            )
+        calls.append("ddg")
+        return httpx.Response(200, text="<html></html>")
+
+    tool = WebSearchTool(
+        backend="ddgs",
+        fallback_backend="tavily",
+        transport=httpx.MockTransport(handler),
+    )
+
+    class FailingDDGS:
+        def __init__(self, **kwargs: object) -> None:
+            pass
+
+        def __enter__(self) -> FailingDDGS:
+            return self
+
+        def __exit__(self, *args: object) -> None:
+            return None
+
+        def text(self, query: str, max_results: int, backend: str) -> list[dict[str, str]]:
+            raise RuntimeError("ddgs blocked")
+
+    monkeypatch.setattr("ddgs.DDGS", FailingDDGS)
+    try:
+        result = tool.execute(ToolCall(name="web_search", args={"query": "example"}))
+    finally:
+        tool.close()
+    assert result.ok, result.error
+    assert "Tavily Hit" in result.output
+    assert "fallback backend: tavily" in result.output
+    assert calls == ["tavily"]
+
+
 def test_web_search_tavily_requires_key(monkeypatch) -> None:
     monkeypatch.delenv("TAVILY_API_KEY", raising=False)
     monkeypatch.delenv("WEB_SEARCH_API_KEY", raising=False)

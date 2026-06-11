@@ -93,16 +93,26 @@ class WebSearchTool:
         self,
         *,
         backend: str = DEFAULT_WEB_SEARCH_BACKEND,
+        fallback_backend: str | None = None,
         max_results: int = DEFAULT_WEB_SEARCH_MAX_RESULTS,
         transport: httpx.BaseTransport | None = None,
         timeout_seconds: float = DEFAULT_WEB_SEARCH_TIMEOUT_SECONDS,
         api_key: str | None = None,
         api_base_url: str | None = None,
+        configured_api_key_env: str | None = None,
     ) -> None:
         self._backend = backend.strip().lower() or DEFAULT_WEB_SEARCH_BACKEND
+        self._fallback_backend = (
+            fallback_backend.strip().lower()
+            if fallback_backend and fallback_backend.strip()
+            else None
+        )
         self._max_results = max(1, min(max_results, 20))
         self._api_key = (api_key or "").strip() or None
         self._api_base_url = (api_base_url or "").strip() or None
+        self._configured_api_key_env = (
+            configured_api_key_env.strip() if configured_api_key_env else None
+        )
         self._timeout_seconds = timeout_seconds
         self._client = httpx.Client(
             timeout=timeout_seconds,
@@ -119,7 +129,10 @@ class WebSearchTool:
             return ToolResult(ok=False, output="", error="missing query")
         max_results = _coerce_max_results(call.args.get("max_results"), self._max_results)
         try:
-            hits = self._search(query=query, max_results=max_results)
+            hits, used_backend = self._search_with_fallback(
+                query=query,
+                max_results=max_results,
+            )
         except ValueError as exc:
             return ToolResult(ok=False, output="", error=str(exc))
         except httpx.HTTPError as exc:
@@ -127,13 +140,46 @@ class WebSearchTool:
         if not hits:
             return ToolResult(ok=True, output="No results.")
         lines = []
+        if used_backend != self._backend:
+            lines.append(f"(fallback backend: {used_backend})")
         for idx, hit in enumerate(hits, start=1):
             snippet = f"\n   {hit.snippet}" if hit.snippet else ""
             lines.append(f"{idx}. {hit.title}\n   {hit.url}{snippet}")
         return ToolResult(ok=True, output="\n".join(lines))
 
-    def _search(self, *, query: str, max_results: int) -> list[SearchHit]:
-        backend = self._backend
+    def _search_with_fallback(
+        self,
+        *,
+        query: str,
+        max_results: int,
+    ) -> tuple[list[SearchHit], str]:
+        primary = self._backend
+        fallback = self._fallback_backend
+        if fallback and fallback == primary:
+            fallback = None
+
+        try:
+            hits = self._search_backend(primary, query=query, max_results=max_results)
+            if hits or not fallback:
+                return hits, primary
+        except (ValueError, httpx.HTTPError):
+            if not fallback:
+                raise
+            hits = self._search_backend(fallback, query=query, max_results=max_results)
+            return hits, fallback
+
+        if not fallback:
+            return hits, primary
+        hits = self._search_backend(fallback, query=query, max_results=max_results)
+        return hits, fallback
+
+    def _search_backend(
+        self,
+        backend: str,
+        *,
+        query: str,
+        max_results: int,
+    ) -> list[SearchHit]:
         if backend == "ddgs":
             return _search_ddgs(
                 query=query,
@@ -147,7 +193,7 @@ class WebSearchTool:
                 self._client,
                 query=query,
                 max_results=max_results,
-                api_key=self._required_api_key("BRAVE_API_KEY"),
+                api_key=self._required_api_key("BRAVE_API_KEY", backend=backend),
                 api_base_url=self._api_base_url,
             )
         if backend == "tavily":
@@ -155,7 +201,7 @@ class WebSearchTool:
                 self._client,
                 query=query,
                 max_results=max_results,
-                api_key=self._required_api_key("TAVILY_API_KEY"),
+                api_key=self._required_api_key("TAVILY_API_KEY", backend=backend),
                 api_base_url=self._api_base_url,
             )
         if backend == "serpapi":
@@ -163,7 +209,7 @@ class WebSearchTool:
                 self._client,
                 query=query,
                 max_results=max_results,
-                api_key=self._required_api_key("SERPAPI_API_KEY"),
+                api_key=self._required_api_key("SERPAPI_API_KEY", backend=backend),
                 api_base_url=self._api_base_url,
             )
         if backend == "exa":
@@ -177,22 +223,39 @@ class WebSearchTool:
                 api_base_url=self._api_base_url,
             )
         raise ValueError(
-            f"unknown web_search backend {self._backend!r} "
+            f"unknown web_search backend {backend!r} "
             "(known: ddgs, duckduckgo, brave, tavily, serpapi, exa)"
         )
+
+    def _search(self, *, query: str, max_results: int) -> list[SearchHit]:
+        hits, _ = self._search_with_fallback(query=query, max_results=max_results)
+        return hits
 
     def _optional_api_key(self, env_name: str) -> str | None:
         if self._api_key:
             return self._api_key
-        specific = (os.environ.get(env_name) or "").strip()
-        if specific:
-            return specific
-        generic = (os.environ.get("WEB_SEARCH_API_KEY") or "").strip()
-        return generic or None
+        if self._configured_api_key_env:
+            configured = (os.environ.get(self._configured_api_key_env) or "").strip()
+            if configured:
+                return configured
+        return resolve_web_search_api_key(
+            self._backend,
+            self._configured_api_key_env,
+        )
 
-    def _required_api_key(self, env_name: str) -> str:
+    def _required_api_key(self, env_name: str, *, backend: str | None = None) -> str:
         if self._api_key:
             return self._api_key
+        if self._configured_api_key_env:
+            configured = (os.environ.get(self._configured_api_key_env) or "").strip()
+            if configured:
+                return configured
+        resolved = resolve_web_search_api_key(
+            backend or self._backend,
+            self._configured_api_key_env,
+        )
+        if resolved:
+            return resolved
         specific = (os.environ.get(env_name) or "").strip()
         if specific:
             return specific
@@ -200,7 +263,7 @@ class WebSearchTool:
         if generic:
             return generic
         raise ValueError(
-            f"{env_name} is required for web_search backend {self._backend!r}"
+            f"{env_name} is required for web_search backend {(backend or self._backend)!r}"
         )
 
 

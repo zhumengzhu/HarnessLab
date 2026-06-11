@@ -194,6 +194,12 @@ export function SettingsPanel(props: SettingsPanelProps) {
             multiAgentEnabled={Boolean(settings.multi_agent_enabled)}
             failoverEnabled={Boolean(settings.model_failover_enabled)}
             fallbacks={Array.isArray(settings.model_fallbacks) ? (settings.model_fallbacks as string[]) : []}
+            modelBackend={String(settings.model_backend ?? "simple")}
+            failoverChain={
+              Array.isArray(settings.model_failover_chain)
+                ? (settings.model_failover_chain as string[])
+                : undefined
+            }
           />
 
           <McpHealthPanel servers={settings.mcp_servers} health={mcpHealth} />

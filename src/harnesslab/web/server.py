@@ -530,6 +530,42 @@ def _session_spans(runtime: WebRuntime, session_id: str) -> list[SpanRecord]:
     return filter_spans_by_session(read_spans(path), session_id)
 
 
+def _artifact_payload(
+    runtime: WebRuntime, session_id: str, artifact_id: str
+) -> dict[str, Any]:
+    store = runtime.loop._artifacts  # noqa: SLF001
+    if store is None:
+        raise ValueError("artifact store not configured")
+    meta = store.metadata(artifact_id)
+    if meta.session_id != session_id:
+        raise KeyError(f"artifact not found: {artifact_id}")
+    data = store.get(artifact_id)
+    mime = meta.mime
+    if mime.startswith("text/") or mime.startswith("application/json"):
+        try:
+            content = data.decode("utf-8")
+            encoding = "utf-8"
+        except UnicodeDecodeError:
+            import base64
+
+            content = base64.b64encode(data).decode("ascii")
+            encoding = "base64"
+    else:
+        import base64
+
+        content = base64.b64encode(data).decode("ascii")
+        encoding = "base64"
+    return {
+        "id": meta.id,
+        "session_id": meta.session_id,
+        "mime": mime,
+        "size_bytes": meta.size_bytes,
+        "sha256": meta.sha256,
+        "encoding": encoding,
+        "content": content,
+    }
+
+
 def _checkpoint_store_for(runtime: WebRuntime):
     return getattr(runtime.loop, "_checkpoint_store", None)
 
@@ -961,6 +997,13 @@ class _Handler(BaseHTTPRequestHandler):
                         "jsonl": "\n".join(lines) + ("\n" if lines else ""),
                     }
                 )
+            if action.startswith("artifacts/"):
+                artifact_id = action[len("artifacts/") :].strip("/")
+                if not artifact_id:
+                    raise ValueError("artifact id required")
+                return self._json_ok(
+                    _artifact_payload(self.runtime, session_id, artifact_id)
+                )
             if action == "checkpoints":
                 return self._json_ok(_checkpoints_payload(self.runtime, session_id))
             if action.startswith("checkpoints/"):
@@ -1145,6 +1188,55 @@ class _Handler(BaseHTTPRequestHandler):
                     "multi_agent_enabled": config.multi_agent_enabled,
                     "needs_restart": True,
                     "message": "Restart harnesslab serve for spawn_sub_agent registration.",
+                }
+            )
+
+        if path == "/api/settings/failover":
+            enabled = bool(body.get("enabled"))
+            raw_fallbacks = body.get("fallbacks")
+            fallbacks: list[str] | None = None
+            if isinstance(raw_fallbacks, list):
+                fallbacks = [
+                    str(item).strip().lower()
+                    for item in raw_fallbacks
+                    if str(item).strip()
+                ]
+            from harnesslab.core.operator_config import (  # noqa: PLC0415
+                config_settings_snapshot,
+                load_operator_config,
+                patch_model_failover,
+            )
+            from harnesslab.providers.registry import normalize_backend  # noqa: PLC0415
+
+            config_path = patch_model_failover(
+                enabled=enabled,
+                fallbacks=fallbacks,
+            )
+            config = load_operator_config(config_path)
+            self.runtime.operator_config = config
+            primary = normalize_backend(
+                self.runtime.model_backend,
+                fallback=config.model_backend,
+            )
+            self.runtime._install_loop_model(  # noqa: SLF001
+                primary,
+                model_id=None,
+                config=config,
+            )
+            snapshot = config_settings_snapshot(
+                config,
+                workspace_root=self.runtime.workspace_root,
+                model_backend=primary,
+            )
+            self.runtime.settings.update(snapshot)
+            return self._json_ok(
+                {
+                    "ok": True,
+                    "model_failover_enabled": config.model_failover_enabled,
+                    "model_fallbacks": list(config.model_fallbacks),
+                    "model_failover_chain": snapshot.get("model_failover_chain", []),
+                    "needs_restart": False,
+                    "message": "Failover chain updated; active model reloaded.",
                 }
             )
 

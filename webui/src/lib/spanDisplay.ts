@@ -5,6 +5,7 @@ export type SpanDisplayKind =
   | "step"
   | "llm"
   | "tool"
+  | "hook"
   | "compact"
   | "sub_agent"
   | "skill"
@@ -17,6 +18,7 @@ export function spanDisplayKind(name: string): SpanDisplayKind {
   if (name === "context.compact") return "compact";
   if (name === "sub_agent.run") return "sub_agent";
   if (name.startsWith("skill.")) return "skill";
+  if (name.startsWith("tool.hooks.")) return "hook";
   if (name.startsWith("tool.")) return "tool";
   return "other";
 }
@@ -64,6 +66,14 @@ export function spanOperationHint(span: SpanRecordItem): string | null {
     const goal = attrs["harnesslab.sub_agent.goal"];
     return typeof goal === "string" && goal ? goal.slice(0, 40) : null;
   }
+  if (span.name.startsWith("tool.hooks.")) {
+    const hookName = attrs["harnesslab.hook.name"];
+    const phase = attrs["harnesslab.hook.phase"];
+    const parts: string[] = [];
+    if (typeof hookName === "string" && hookName) parts.push(hookName);
+    if (typeof phase === "string" && phase) parts.push(phase);
+    return parts.length ? parts.join(" · ") : null;
+  }
   return null;
 }
 
@@ -86,6 +96,14 @@ export function spanDisplayLabel(span: SpanRecordItem): string {
   if (name === "sub_agent.run") {
     const goal = span.attributes?.["harnesslab.sub_agent.goal"];
     return typeof goal === "string" && goal ? `Sub-agent · ${goal.slice(0, 48)}` : "Sub-agent";
+  }
+  if (name.startsWith("tool.hooks.")) {
+    const hookName = span.attributes?.["harnesslab.hook.name"];
+    const phase = span.attributes?.["harnesslab.hook.phase"];
+    if (typeof hookName === "string" && hookName) {
+      return `Hook · ${hookName}${phase ? ` (${phase})` : ""}`;
+    }
+    return "Tool hook";
   }
   if (name.startsWith("tool.")) {
     const tool = span.attributes?.["harnesslab.tool.name"];
@@ -120,6 +138,10 @@ export function spanDisplaySubtitle(span: SpanRecordItem): string | null {
   if (span.name === "context.compact") {
     const trigger = attrs["harnesslab.compaction.trigger"];
     return typeof trigger === "string" ? trigger : null;
+  }
+  if (span.name.startsWith("tool.hooks.")) {
+    const hookType = attrs["harnesslab.hook.type"];
+    return typeof hookType === "string" && hookType ? hookType : span.status === "error" ? "failed" : "ok";
   }
   return null;
 }

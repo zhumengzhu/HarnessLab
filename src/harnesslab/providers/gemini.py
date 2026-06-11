@@ -12,6 +12,7 @@ from harnesslab.core.compaction import ModelOverflowError, estimate_tokens
 from harnesslab.core.context import build_prompt_block_meta
 from harnesslab.core.models import Decision, Session
 from harnesslab.core.prompt import ComposedPrompt, PromptBlock, PromptComposer
+from harnesslab.core.stream_context import emit_stream_delta, stream_sink_active
 from harnesslab.providers.catalog import CatalogEntry, ModelCatalog
 from harnesslab.providers.model_resolve import (
     DEFAULT_GEMINI_MODEL,
@@ -90,7 +91,15 @@ class GeminiModel:
             **prompt_meta,
         }
         try:
-            payload = self._chat.generate_content(body)
+            if stream_sink_active():
+                payload = self._chat.generate_content_stream(
+                    body,
+                    on_delta=lambda kind, text: emit_stream_delta(
+                        "reasoning" if kind == "reasoning" else "assistant", text
+                    ),
+                )
+            else:
+                payload = self._chat.generate_content(body)
         except ModelOverflowError:
             self._last_call_meta = dict(base_meta)
             _log.warning("context overflow model=%s session=%s", self._model_name, session.id)

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 import httpx
@@ -50,27 +51,8 @@ class AnthropicMessagesTransport:
     def create_message(self, body: dict[str, Any]) -> dict[str, Any]:
         """Execute one Messages call; return a JSON-like response dict."""
 
-        kwargs: dict[str, Any] = {
-            "model": body["model"],
-            "max_tokens": body.get("max_tokens", 8192),
-            "messages": body["messages"],
-        }
-        system = body.get("system")
-        if isinstance(system, str) and system.strip():
-            kwargs["system"] = system
-        thinking = body.get("thinking")
-        if thinking is not None:
-            kwargs["thinking"] = thinking
-        output_config = body.get("output_config")
-        if output_config is not None:
-            kwargs["output_config"] = output_config
-        tools = body.get("tools")
-        if tools:
-            kwargs["tools"] = tools
-            kwargs["tool_choice"] = body.get("tool_choice", {"type": "auto"})
-
         try:
-            response = self._client.messages.create(**kwargs)
+            response = self._client.messages.create(**_message_kwargs(body))
         except AnthropicAPIStatusError as exc:
             if is_context_overflow_error(exc):
                 raise ModelOverflowError(overflow_message_from_error(exc)) from exc
@@ -79,6 +61,61 @@ class AnthropicMessagesTransport:
             raise
 
         return response.model_dump()
+
+    def create_message_stream(
+        self,
+        body: dict[str, Any],
+        *,
+        on_delta: Callable[[str, str], None],
+    ) -> dict[str, Any]:
+        """Stream one Messages call; invoke ``on_delta(kind, text)`` per chunk."""
+
+        try:
+            with self._client.messages.stream(**_message_kwargs(body)) as stream:
+                for event in stream:
+                    if event.type != "content_block_delta":
+                        continue
+                    delta = event.delta
+                    delta_type = getattr(delta, "type", None)
+                    if delta_type == "text_delta":
+                        piece = getattr(delta, "text", "") or ""
+                        if piece:
+                            on_delta("assistant", piece)
+                    elif delta_type == "thinking_delta":
+                        piece = getattr(delta, "thinking", "") or ""
+                        if piece:
+                            on_delta("reasoning", piece)
+                message = stream.get_final_message()
+        except AnthropicAPIStatusError as exc:
+            if is_context_overflow_error(exc):
+                raise ModelOverflowError(overflow_message_from_error(exc)) from exc
+            raise
+        except (APIConnectionError, APITimeoutError):
+            raise
+
+        return message.model_dump()
+
+
+def _message_kwargs(body: dict[str, Any]) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "model": body["model"],
+        "max_tokens": body.get("max_tokens", 8192),
+        "messages": body["messages"],
+    }
+    system = body.get("system")
+    if isinstance(system, str) and system.strip():
+        kwargs["system"] = system
+    thinking = body.get("thinking")
+    if thinking is not None:
+        kwargs["thinking"] = thinking
+    output_config = body.get("output_config")
+    if output_config is not None:
+        kwargs["output_config"] = output_config
+    tools = body.get("tools")
+    if tools:
+        kwargs["tools"] = tools
+        kwargs["tool_choice"] = body.get("tool_choice", {"type": "auto"})
+    return kwargs
 
 
 def is_context_overflow_error(exc: AnthropicAPIStatusError) -> bool:

@@ -1002,7 +1002,7 @@ Next: token streaming beyond DeepSeek (P0) and provider failover UX (P2).
 | --- | --- | --- |
 | **Multi-turn thinking replay (OpenAI-chat / DeepSeek)** | API 400 without historical `reasoning_content` on tool assistants | **DONE** |
 | **Anthropic / Gemini multi-turn tool+thinking replay audit** | Same class of bug on other transforms | **Done** — fixture tests in `test_anthropic_messages_transform.py` / `test_google_generate_content_transform.py` |
-| **Token streaming beyond DeepSeek** | Web UI renders deltas; other backends step-only | After P0 replay audit green |
+| **Token streaming beyond DeepSeek** | Web UI renders deltas; other backends step-only | **Done** — Anthropic Messages, OpenAI Responses, Gemini generateContent stream paths |
 
 ### Observability v2 — Span-first telemetry (complete)
 
@@ -1060,7 +1060,7 @@ Normative spec: [`architecture/observability-v2.md`](architecture/observability-
 | **TS migration Phase E** | Remove legacy `web/static/` | **Done** — TS-only; build required |
 | **SSE stream integration tests** | Guard event ordering | **Done** — TS `sse-client.test.ts` + Python ordering test |
 | **Optional Playwright smoke** | E2E chat workflow | Non-blocking |
-| **Provider failover UX** | P6 backend exists | Web surfacing TBD |
+| **Provider failover UX** | P6 backend exists | **Done** — Settings toggle + `POST /api/settings/failover` + Activity/Trace surfacing |
 | **Chat long-reply expand UX** | **DONE** — Cursor-like full replies |
 
 ### P3 — Provider expansion & live smoke
@@ -1077,7 +1077,7 @@ Normative spec: [`architecture/observability-v2.md`](architecture/observability-
 | --- | --- |
 | **Vector / semantic memory** | Deferred until ≥3 real sessions lack recall |
 | **Offline metrics HTML dashboard** | OTel + Grafana cover most needs |
-| **TUI client (`harnesslab tui`)** | Experimental |
+| **TUI client (`harnesslab tui`)** | **Beta** — multi-pane sessions, async turns, trace feed ([`guides/tui.md`](guides/tui.md)) |
 
 ### Explicit non-goals (unchanged)
 

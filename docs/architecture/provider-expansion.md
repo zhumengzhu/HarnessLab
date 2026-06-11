@@ -319,9 +319,9 @@ Secrets: unchanged — env var names in config only.
 
 Web UI SSE streams **span lifecycle** events (`span.started` / `span.event` /
 `span.completed` / `span.link`) and, for thinking models, **token deltas**
-(`reasoning_delta`, `assistant_delta`) via `stream_context`. DeepSeek OpenAI-chat
-transport implements token streaming first; Anthropic / OpenAI Responses / Gemini
-streaming remains incremental work.
+(`reasoning_delta`, `assistant_delta`) via `stream_context`. Transports with
+stream paths: DeepSeek (OpenAI-chat), Anthropic Messages, OpenAI Responses,
+Gemini generateContent — all gated by `stream_sink_active()` during Web SSE turns.
 
 Design rule: streaming callbacks stay adapter-internal until the loop grows
 an async API; **`spans.jsonl`** (completed spans) remains the source of truth for replay.

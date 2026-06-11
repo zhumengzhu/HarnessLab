@@ -95,9 +95,9 @@ Composer, SSE streaming, fork, slash commands, tool cards, model picker persiste
 | Proposal transitions + gate runs | Done |
 | Budget usage / budget events in session workspace | Done |
 | MCP health in Settings | Done (needs `tools.mcp_servers` in config) |
-| Hook event visualization in trace | Partial (trace labels exist) |
+| Hook event visualization in trace | **Done** — Activity + span labels for `tool.hooks.*` |
 | Session checkpoints list + rewind confirm + file diff preview | **Done** — Trace Tab Checkpoints fold |
-| Provider failover surfacing | Planned |
+| Provider failover surfacing | **Done** — Settings + `POST /api/settings/failover` |
 
 **Exit:** Phase 5 Web surfaces fully hosted in TS frontend.
 

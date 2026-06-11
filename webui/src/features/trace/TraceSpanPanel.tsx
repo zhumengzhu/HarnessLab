@@ -4,7 +4,10 @@ import { isLiveSpan } from "../../lib/liveSpans";
 import { spanServiceColor } from "../../lib/spanColor";
 import { spanServiceName } from "../../lib/spanResource";
 import { useI18n } from "../../lib/i18n";
-import { spanOperationHint, spanOperationName, spanMatchesQuery } from "../../lib/spanDisplay";
+import { spanOperationHint, spanOperationName } from "../../lib/spanDisplay";
+import { spanMatchesDeepQuery } from "../../lib/spanSearch";
+import { aggregateTurnLlmMetrics } from "../../lib/traceMetrics";
+import { PromptDiffPanel } from "./PromptDiffPanel";
 import {
   buildTimelineTicks,
   collectCollapsibleSpanIds,
@@ -56,8 +59,13 @@ export function TraceSpanPanel(props: TraceSpanPanelProps) {
   const filteredFlat = useMemo(() => {
     const q = nameFilter.trim();
     if (!q) return flat;
-    return flat.filter(({ node }) => spanMatchesQuery(node.span, q));
+    return flat.filter(({ node }) => spanMatchesDeepQuery(node.span, q));
   }, [flat, nameFilter]);
+
+  const turnSummary = useMemo(
+    () => aggregateTurnLlmMetrics(spans, activeTrace?.traceId ?? null),
+    [spans, activeTrace?.traceId]
+  );
 
   const selectedNode: SpanTreeNode | null =
     filteredFlat.find((row) => row.node.span.span_id === selectedSpanId)?.node ??
@@ -150,6 +158,18 @@ export function TraceSpanPanel(props: TraceSpanPanelProps) {
               <span className="trace-jaeger-stat">
                 {t("trace.spanCount", { count: String(filteredFlat.length) })}
               </span>
+              {turnSummary.llmCalls > 0 ? (
+                <span className="trace-jaeger-stat trace-jaeger-token-stat">
+                  {t("trace.turnTokens", {
+                    input: String(turnSummary.inputTokens),
+                    output: String(turnSummary.outputTokens),
+                    total: String(turnSummary.totalTokens || turnSummary.inputTokens + turnSummary.outputTokens),
+                  })}
+                  {turnSummary.costUsd != null
+                    ? ` · $${turnSummary.costUsd.toFixed(4)}`
+                    : ""}
+                </span>
+              ) : null}
             </>
           ) : null}
         </div>
@@ -198,6 +218,8 @@ export function TraceSpanPanel(props: TraceSpanPanelProps) {
           </button>
         </div>
       </header>
+
+      <PromptDiffPanel spans={spans} />
 
       {!selectedSessionId ? <p className="trace-span-hint">{t("trace.selectSession")}</p> : null}
       {loading ? <p className="trace-span-hint">{t("trace.loading")}</p> : null}

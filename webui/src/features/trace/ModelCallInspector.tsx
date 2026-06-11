@@ -1,3 +1,5 @@
+import { TraceContextInspector } from "./TraceContextInspector";
+
 type PromptBlock = {
   name: string;
   role: string;
@@ -24,8 +26,16 @@ export function ModelCallInspector({ payload }: ModelCallInspectorProps) {
   const failoverBackend =
     typeof payload.failover_backend === "string" ? payload.failover_backend : null;
   const failoverExhausted = payload.failover_exhausted === true;
+  const context =
+    typeof payload.context === "object" && payload.context ? payload.context : null;
 
-  if (!blocks.length && !apiMessages.length && !reasoning && failoverAttempts == null) {
+  if (
+    !blocks.length &&
+    !apiMessages.length &&
+    !reasoning &&
+    failoverAttempts == null &&
+    !context
+  ) {
     return null;
   }
 
@@ -43,8 +53,12 @@ export function ModelCallInspector({ payload }: ModelCallInspectorProps) {
         <div className="trace-inspector-meta">
           latency: {latencyMs.toFixed(0)}ms
           {typeof payload.decision_kind === "string" ? ` · ${payload.decision_kind}` : ""}
+          {typeof payload.total_tokens === "number" ? ` · ${payload.total_tokens} tok` : ""}
+          {typeof payload.cost_usd === "number" ? ` · $${payload.cost_usd.toFixed(4)}` : ""}
         </div>
       ) : null}
+
+      <TraceContextInspector context={context as Record<string, unknown> | null} />
 
       {reasoning ? (
         <details className="trace-inspector-section">

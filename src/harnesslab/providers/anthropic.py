@@ -14,6 +14,7 @@ from harnesslab.core.compaction import ModelOverflowError
 from harnesslab.core.context import build_prompt_block_meta
 from harnesslab.core.models import Decision, Session
 from harnesslab.core.prompt import ComposedPrompt, PromptBlock, PromptComposer
+from harnesslab.core.stream_context import emit_stream_delta, stream_sink_active
 from harnesslab.providers.catalog import ModelCatalog
 from harnesslab.providers.model_resolve import (
     DEFAULT_ANTHROPIC_MODEL,
@@ -103,7 +104,15 @@ class AnthropicModel:
             **prompt_meta,
         }
         try:
-            payload = self._chat.create_message(body)
+            if stream_sink_active():
+                payload = self._chat.create_message_stream(
+                    body,
+                    on_delta=lambda kind, text: emit_stream_delta(
+                        "reasoning" if kind == "reasoning" else "assistant", text
+                    ),
+                )
+            else:
+                payload = self._chat.create_message(body)
         except ModelOverflowError:
             self._last_call_meta = dict(base_meta)
             _log.warning("context overflow model=%s session=%s", self._model_name, session.id)
