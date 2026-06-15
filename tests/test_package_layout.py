@@ -41,3 +41,25 @@ packages = ["src/harnesslab"]
     monkeypatch.setattr(checker, "ROOT", tmp_path)
     errors = checker.collect_layout_errors()
     assert any("missing/path" in msg for msg in errors)
+
+
+def test_collect_layout_errors_reports_force_include_inside_package(
+    tmp_path: Path, monkeypatch
+) -> None:
+    checker = _load_checker()
+    (tmp_path / "src/harnesslab/providers/catalog").mkdir(parents=True)
+    pyproject = tmp_path / "pyproject.toml"
+    pyproject.write_text(
+        """
+[tool.hatch.build.targets.wheel]
+packages = ["src/harnesslab"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"src/harnesslab/providers/catalog" = "harnesslab/providers/catalog"
+""".strip(),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(checker, "PYPROJECT", pyproject)
+    monkeypatch.setattr(checker, "ROOT", tmp_path)
+    errors = checker.collect_layout_errors()
+    assert any("duplicates wheel.packages" in msg for msg in errors)

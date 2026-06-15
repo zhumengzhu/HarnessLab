@@ -1,6 +1,8 @@
 import { useState } from "react";
 import { useI18n } from "../../lib/i18n";
+import type { ReplaySpanFocus } from "../../lib/replayFocus";
 import { CheckpointPanel } from "./CheckpointPanel";
+import { TraceReplayPanel } from "../trace/TraceReplayPanel";
 import { TracePanel } from "../trace/TracePanel";
 import { TraceSpanPanel } from "../trace/TraceSpanPanel";
 import { TraceRawJsonlPanel } from "../trace/TraceRawJsonlPanel";
@@ -32,6 +34,9 @@ export function SessionTraceView(props: SessionTraceViewProps) {
   } = props;
 
   const [viewMode, setViewMode] = useState<TraceViewMode>("spans");
+  const [spanFocusRequest, setSpanFocusRequest] = useState<(ReplaySpanFocus & { seq: number }) | null>(
+    null
+  );
   const { t } = useI18n();
 
   return (
@@ -70,6 +75,13 @@ export function SessionTraceView(props: SessionTraceViewProps) {
           <summary>{t("trace.checkpointsFold")}</summary>
           <CheckpointPanel sessionId={sessionId} onRewindSuccess={onRewindSuccess} />
         </details>
+        <TraceReplayPanel
+          sessionId={sessionId}
+          onFocusSpan={(focus) => {
+            setViewMode("spans");
+            setSpanFocusRequest({ ...focus, seq: Date.now() });
+          }}
+        />
       </div>
 
       {viewMode === "spans" ? (
@@ -79,6 +91,8 @@ export function SessionTraceView(props: SessionTraceViewProps) {
           error={error}
           spans={spans}
           isLive={isLive}
+          focusRequest={spanFocusRequest}
+          onFocusHandled={() => setSpanFocusRequest(null)}
         />
       ) : viewMode === "events" ? (
         <TracePanel

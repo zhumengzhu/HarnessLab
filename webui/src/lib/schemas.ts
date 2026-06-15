@@ -328,6 +328,21 @@ export type ArtifactResponse = {
   content: string;
 };
 
+export type ReplayDivergenceItem = {
+  index: number;
+  kind: string;
+  detail: string;
+};
+
+export type ReplayResponse = {
+  session_id: string;
+  matched: boolean;
+  original_len: number;
+  replayed_len: number;
+  unreplayable?: string;
+  divergences: ReplayDivergenceItem[];
+};
+
 export type ProposalSummary = {
   id: string;
   status: "open" | "accepted" | "rejected" | "superseded";

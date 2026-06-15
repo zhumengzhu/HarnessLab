@@ -33,8 +33,11 @@ Uses SQLite session store and the same `HarnessLoop` as CLI/Web.
 | `Enter` | Send message |
 | `n` | New session |
 | `r` | Refresh session list |
+| `s` | Show settings summary |
 | `?` | Help |
 | `q` | Quit |
+
+Slash commands: `/settings`, `/model <backend>`, `/failover on|off`, `/compact`.
 
 Turns run in a **background worker** so the UI stays responsive during long agent runs.
 
@@ -43,9 +46,9 @@ Turns run in a **background worker** so the UI stays responsive during long agen
 | Feature | Web | TUI |
 | --- | --- | --- |
 | Multi-session sidebar | ✅ | ✅ |
-| Span waterfall | ✅ Jaeger tree | Activity stream |
+| Span waterfall | ✅ Jaeger tree | Per-turn hierarchical tree |
 | Token/context inspector | ✅ Trace tab | LLM token line only |
-| Settings / failover toggle | ✅ | config.json only |
+| Settings / failover toggle | ✅ | `/settings` · `/failover` · `/model` · `s` key |
 | Streaming token deltas | ✅ SSE | ✅ live preview (`stream-live`) during turn |
 
 TUI targets **daily terminal use** and **quick session switching**; deep trace

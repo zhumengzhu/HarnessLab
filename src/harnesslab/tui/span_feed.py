@@ -121,3 +121,86 @@ class SpanFeedFormatter:
                     )
                 )
         return lines
+
+    def render_session_tree(
+        self, spans: list[SpanRecord], *, session_id: str
+    ) -> list[SpanFeedLine]:
+        """Render a per-turn hierarchical span tree for the TUI trace pane."""
+
+        session_spans = [
+            span
+            for span in spans
+            if (span.attributes or {}).get("harnesslab.session.id") == session_id
+        ]
+        if not session_spans:
+            return []
+
+        by_trace: dict[str, list[SpanRecord]] = {}
+        for span in session_spans:
+            by_trace.setdefault(span.trace_id, []).append(span)
+
+        trace_groups = sorted(
+            by_trace.values(),
+            key=lambda group: (
+                min(span.turn_index for span in group),
+                min(str(span.start_time) for span in group),
+            ),
+        )
+
+        lines: list[SpanFeedLine] = []
+        for group in trace_groups:
+            turn = min(span.turn_index for span in group)
+            lines.append(
+                SpanFeedLine(
+                    markup=f"[dim]── turn {turn} ──[/dim]",
+                    plain=f"── turn {turn} ──",
+                )
+            )
+            for span, depth in _preorder_tree(group):
+                prefix = "  " * depth + ("├─ " if depth else "")
+                attrs = span.attributes or {}
+                formatted = self._format_span(span, attrs)
+                if formatted is not None:
+                    lines.append(
+                        SpanFeedLine(
+                            markup=f"{prefix}{formatted.markup}",
+                            plain=f"{prefix}{formatted.plain}",
+                        )
+                    )
+                for event_line in self._format_events(span):
+                    event_prefix = "  " * (depth + 1)
+                    lines.append(
+                        SpanFeedLine(
+                            markup=f"{event_prefix}{event_line.markup}",
+                            plain=f"{event_prefix}{event_line.plain}",
+                        )
+                    )
+        return lines
+
+
+def _preorder_tree(spans: list[SpanRecord]) -> list[tuple[SpanRecord, int]]:
+    by_id = {span.span_id: span for span in spans}
+    children: dict[str, list[SpanRecord]] = {span.span_id: [] for span in spans}
+    roots: list[SpanRecord] = []
+    for span in spans:
+        parent_id = span.parent_span_id
+        if parent_id and parent_id in by_id:
+            children[parent_id].append(span)
+        else:
+            roots.append(span)
+
+    for child_list in children.values():
+        child_list.sort(key=lambda row: (row.start_time, row.name))
+
+    roots.sort(key=lambda row: (row.start_time, row.name))
+
+    rows: list[tuple[SpanRecord, int]] = []
+
+    def walk(node: SpanRecord, depth: int) -> None:
+        rows.append((node, depth))
+        for child in children.get(node.span_id, []):
+            walk(child, depth + 1)
+
+    for root in roots:
+        walk(root, 0)
+    return rows

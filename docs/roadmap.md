@@ -993,8 +993,9 @@ This section is the **living backlog** after Phase 5 substantial completion.
 Items are ordered by impact on daily use and learning clarity. Each should
 ship with tests + doc updates per `AGENTS.md`.
 
-**Priority note (2026-05):** Phase 6–7 and Phase E Web cleanup are **complete**.
-Next: token streaming beyond DeepSeek (P0) and provider failover UX (P2).
+**Priority note (2026-06):** Phase 6–7, Observability v2, P0 provider parity, and Trace
+operator polish (replay UI, ⌘F search, line-level prompt diff, HTML export) are **complete**.
+Next: P3 live provider smoke (CI optional lane).
 
 ### P0 — Correctness & provider parity
 
@@ -1059,16 +1060,19 @@ Normative spec: [`architecture/observability-v2.md`](architecture/observability-
 | **TS migration Phase D** | Advanced controls in TS only | MCP health **DONE**; rewind UI **DONE** |
 | **TS migration Phase E** | Remove legacy `web/static/` | **Done** — TS-only; build required |
 | **SSE stream integration tests** | Guard event ordering | **Done** — TS `sse-client.test.ts` + Python ordering test |
-| **Optional Playwright smoke** | E2E chat workflow | Non-blocking |
+| **Optional Playwright smoke** | E2E chat workflow | **Done** — `webui/e2e/smoke.spec.ts` chat + replay |
 | **Provider failover UX** | P6 backend exists | **Done** — Settings toggle + `POST /api/settings/failover` + Activity/Trace surfacing |
+| **Trace replay Web UI** | CLI-only divergence | **Done** — `POST /api/sessions/{id}/replay` + Trace panel |
+| **Trace ⌘F search focus** | claude-tap parity | **Done** — deep filter + keyboard shortcut |
+| **Prompt line-level diff** | claude-tap parity | **Done** — `PromptDiffPanel` detail block |
 | **Chat long-reply expand UX** | **DONE** — Cursor-like full replies |
 
 ### P3 — Provider expansion & live smoke
 
 | Item | Why |
 | --- | --- |
-| **Live multi-provider smoke** | OpenRouter or native keys — optional `RUN_*_LIVE=1` lanes |
-| **OpenRouter / proxy profile** | Document `OPENAI_BASE_URL` + catalog `reasoning_support: proxy` caveats |
+| **Live multi-provider smoke** | OpenRouter or native keys — optional `RUN_*_LIVE=1` lanes | **Partial** — `tests/manual/` (+ OpenRouter guide) |
+| **OpenRouter / proxy profile** | Document `OPENAI_BASE_URL` + catalog `reasoning_support: proxy` caveats | **Done** — [`guides/openrouter-proxy.md`](guides/openrouter-proxy.md) |
 | **Constrained provider plugins** | §6.7 local entry_points only |
 
 ### P4 — Learning harness depth (optional)

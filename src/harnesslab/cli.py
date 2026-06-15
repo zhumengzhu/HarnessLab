@@ -155,6 +155,8 @@ def _eval_skip_tags(args: argparse.Namespace) -> set[str]:
     env = os.environ.get("HARNESSLAB_EVAL_SKIP_TAGS", "")
     if env.strip():
         tags.update(t.strip() for t in env.split(",") if t.strip())
+    if os.environ.get("RUN_LIVE_EVAL") != "1":
+        tags.add("network")
     return tags
 
 

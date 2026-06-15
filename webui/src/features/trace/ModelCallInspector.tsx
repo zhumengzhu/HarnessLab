@@ -1,4 +1,5 @@
 import { TraceContextInspector } from "./TraceContextInspector";
+import { TokenBreakdownInspector } from "./TokenBreakdownInspector";
 
 type PromptBlock = {
   name: string;
@@ -28,13 +29,18 @@ export function ModelCallInspector({ payload }: ModelCallInspectorProps) {
   const failoverExhausted = payload.failover_exhausted === true;
   const context =
     typeof payload.context === "object" && payload.context ? payload.context : null;
+  const usageBreakdown =
+    typeof payload.usage_breakdown === "object" && payload.usage_breakdown
+      ? (payload.usage_breakdown as Record<string, unknown>)
+      : null;
 
   if (
     !blocks.length &&
     !apiMessages.length &&
     !reasoning &&
     failoverAttempts == null &&
-    !context
+    !context &&
+    !usageBreakdown
   ) {
     return null;
   }
@@ -59,6 +65,8 @@ export function ModelCallInspector({ payload }: ModelCallInspectorProps) {
       ) : null}
 
       <TraceContextInspector context={context as Record<string, unknown> | null} />
+
+      <TokenBreakdownInspector breakdown={usageBreakdown} />
 
       {reasoning ? (
         <details className="trace-inspector-section">

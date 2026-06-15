@@ -566,6 +566,62 @@ def _artifact_payload(
     }
 
 
+def _replay_payload(
+    runtime: WebRuntime,
+    session_id: str,
+    body: dict[str, Any],
+) -> dict[str, Any]:
+    from harnesslab.replay import (  # noqa: PLC0415
+        UnreplayableTraceError,
+        detect_divergence,
+        replay_session,
+    )
+
+    runtime.loop._sessions.get(session_id)  # noqa: SLF001
+    session_spans = _session_spans(runtime, session_id)
+    if not session_spans:
+        raise ValueError("no spans for session")
+
+    strict = bool(body.get("strict", False))
+    ignore = frozenset({"sub_agent.run"})
+    use_ignore = (
+        ignore
+        if any(span.name == "sub_agent.run" for span in session_spans)
+        else frozenset()
+    )
+    try:
+        replayed = replay_session(
+            session_spans,
+            workspace_root=runtime.workspace_root,
+        )
+    except UnreplayableTraceError as exc:
+        return {
+            "session_id": session_id,
+            "matched": False,
+            "unreplayable": str(exc),
+            "original_len": len(session_spans),
+            "replayed_len": 0,
+            "divergences": [],
+        }
+
+    report = detect_divergence(
+        session_spans,
+        replayed,
+        strict=strict,
+        ignore_span_names=use_ignore,
+    )
+    return {
+        "session_id": session_id,
+        "matched": report.matched,
+        "original_len": report.original_len,
+        "replayed_len": report.replayed_len,
+        "divergences": [
+            {"index": item.index, "kind": item.kind, "detail": item.detail}
+            for item in report.divergences
+        ],
+    }
+
+
 def _checkpoint_store_for(runtime: WebRuntime):
     return getattr(runtime.loop, "_checkpoint_store", None)
 
@@ -1155,6 +1211,14 @@ class _Handler(BaseHTTPRequestHandler):
                         session_id=session_id,
                         checkpoint_id=checkpoint_id,
                     )
+                )
+
+            if remainder.endswith("/replay"):
+                session_id = remainder[: -len("/replay")].strip("/")
+                if not session_id:
+                    raise ValueError("session id required")
+                return self._json_ok(
+                    _replay_payload(self.runtime, session_id, body)
                 )
 
         if path == "/api/model":

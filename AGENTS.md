@@ -19,9 +19,9 @@ provider expansion (P0–P7: catalog, transforms, DeepSeek / Anthropic /
 OpenAI / Gemini adapters, optional failover, optional OTel fan-out) are
 **complete**. The runtime is a daily-usable local agent harness.
 
-**Next planned phase:** Phase 6 — Multi-agent supervisor is **complete**
-(opt-in `spawn_sub_agent`, child sessions, trace fan-in, Web UI, CLI/replay
-tree). Phase 7 — Skills discovery/install is next. See [`docs/roadmap.md`](docs/roadmap.md).
+**Next planned phase:** Phase 6 — Multi-agent supervisor and Phase 7 — Skills
+discovery/install are **complete**. See [What's next](#whats-next-prioritized) for
+P3 live provider smoke and deferred items.
 
 **Multi-agent (Phase 6):** opt-in supervisor pattern via `spawn_sub_agent` +
 `start_child`; `sub_agent_spawned` / `sub_agent_completed` trace fan-in;
@@ -152,7 +152,7 @@ Never bypass policy checks for convenience.
 Before completing non-trivial changes, run:
 
 ```bash
-uv run python scripts/check_package_layout.py
+uv run python scripts/check_package_layout.py  # includes uv build (CI parity)
 uv run pytest
 uv run ruff check
 ```

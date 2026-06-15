@@ -569,6 +569,22 @@ def test_web_artifact_endpoint(tmp_path: Path) -> None:
     assert exc.value.code == 404
 
 
+def test_web_replay_endpoint(tmp_path: Path) -> None:
+    port = _free_port()
+    runtime = _web_runtime(tmp_path, max_steps=1)
+    _start_server(runtime, port)
+    base = f"http://127.0.0.1:{port}"
+
+    created = _post(f"{base}/api/sessions", {"message": "/final replay probe"})
+    session_id = created["session"]["id"]
+    payload = _post(f"{base}/api/sessions/{session_id}/replay", {"strict": False})
+    assert payload["session_id"] == session_id
+    assert payload["matched"] is True
+    assert payload["original_len"] >= 1
+    assert payload["replayed_len"] >= 1
+    assert payload["divergences"] == []
+
+
 def test_web_health_includes_pricing_fingerprint(tmp_path: Path) -> None:
     port = _free_port()
     runtime = _web_runtime(tmp_path)

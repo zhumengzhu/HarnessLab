@@ -51,3 +51,28 @@ def test_ingest_llm_generate_includes_tokens() -> None:
     lines = feed.ingest([span], session_id="ses1")
     assert len(lines) == 1
     assert "120 tok" in lines[0].plain
+
+
+def test_render_session_tree_indents_children() -> None:
+    feed = SpanFeedFormatter()
+    root = _span(
+        span_id="root",
+        name="harnesslab.turn",
+        parent_span_id=None,
+        attributes={"harnesslab.session.id": "ses1"},
+    )
+    child = _span(
+        span_id="tool1",
+        name="tool.read_file",
+        parent_span_id="root",
+        attributes={
+            "harnesslab.session.id": "ses1",
+            "harnesslab.tool.name": "read_file",
+            "harnesslab.tool.ok": True,
+        },
+    )
+    lines = feed.render_session_tree([root, child], session_id="ses1")
+    plain = "\n".join(line.plain for line in lines)
+    assert "── turn 0 ──" in plain
+    assert "read_file" in plain
+    assert "  ├─ tool read_file" in plain

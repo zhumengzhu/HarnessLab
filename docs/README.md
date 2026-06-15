@@ -43,6 +43,7 @@ payload shape, update the relevant file and tests in the same PR.
 | [`guides/multi-agent.md`](guides/multi-agent.md) | Enable spawn_sub_agent, limits, CLI/Web visibility |
 | [`guides/deep-research-landscape.md`](guides/deep-research-landscape.md) | Deep research skills vs tools (DeerFlow, OpenCode, HarnessLab design) |
 | [`guides/web-research-providers.md`](guides/web-research-providers.md) | Search/fetch providers, pricing, proxy |
+| [`guides/openrouter-proxy.md`](guides/openrouter-proxy.md) | OpenRouter / `OPENAI_BASE_URL` proxy setup |
 | [`guides/mcp-servers.md`](guides/mcp-servers.md) | MCP 服务器配置（stdio、allowlist、Playwright 示例） |
 | [`guides/browser-automation.md`](guides/browser-automation.md) | 浏览器自动化：fetch vs MCP、与 OpenClaw 对比 |
 | [`guides/deepseek-thinking-troubleshooting.md`](guides/deepseek-thinking-troubleshooting.md) | DeepSeek thinking 400s, `reasoning_content` replay, session recovery |

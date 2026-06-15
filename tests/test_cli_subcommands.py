@@ -15,6 +15,11 @@ def _eval_task_count(repo_root: Path) -> int:
     return len(load_suite(repo_root / "eval" / "tasks").tasks)
 
 
+def _eval_offline_task_count(repo_root: Path) -> int:
+    suite = load_suite(repo_root / "eval" / "tasks")
+    return len([task for task in suite.tasks if "network" not in task.tags])
+
+
 @pytest.fixture()
 def repo_root() -> Path:
     return Path(__file__).resolve().parents[1]
@@ -134,11 +139,11 @@ def test_eval_subcommand_runs_all_tasks_and_passes(
     out = capsys.readouterr().out
 
     assert exc.value.code == cli.EXIT_OK, out
-    count = _eval_task_count(repo_root)
+    count = _eval_offline_task_count(repo_root)
     assert f"Summary: {count}/{count} passed" in out
     report = (tmp_path / "reports" / "latest.json").read_text(encoding="utf-8")
     payload = json.loads(report)
-    assert len(payload["results"]) == _eval_task_count(repo_root)
+    assert len(payload["results"]) == _eval_offline_task_count(repo_root)
     assert payload["regressions"] == []
 
 
@@ -223,7 +228,7 @@ def test_eval_update_baseline_overwrites_file(
     assert "baseline updated" in out
     payload = json.loads(baseline_path.read_text(encoding="utf-8"))
     assert "results" in payload
-    assert len(payload["results"]) == _eval_task_count(repo_root)
+    assert len(payload["results"]) == _eval_offline_task_count(repo_root)
 
 
 def test_eval_regression_exit_code(

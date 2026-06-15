@@ -13,6 +13,9 @@ uv run pytest
 uv run ruff check
 ```
 
+`check_package_layout.py` validates hatch `packages` / `force-include` paths **and**
+runs `uv build` (same step as CI) so duplicate wheel assets are caught locally.
+
 Only proceed with `git commit` if all succeed. If any fails, fix the
 issue first and re-run the gate.
 

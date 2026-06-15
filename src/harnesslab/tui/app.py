@@ -10,6 +10,12 @@ from harnesslab.core.operator_config import OperatorConfig, load_operator_config
 from harnesslab.core.stream_context import bind_stream_sink, reset_stream_sink
 from harnesslab.replay.span_reader import read_spans
 from harnesslab.telemetry.recorder_factory import default_spans_path
+from harnesslab.tui.settings_actions import (
+    apply_failover,
+    apply_model_backend,
+    format_settings_summary,
+    parse_slash_command,
+)
 from harnesslab.tui.span_feed import SpanFeedFormatter
 
 
@@ -55,6 +61,7 @@ def run_tui(workspace_root: Path) -> None:
             ("n", "new_session", "New"),
             ("r", "refresh_sessions", "Refresh"),
             ("?", "show_help", "Help"),
+            ("s", "show_settings", "Settings"),
         ]
 
         def __init__(self, workspace: Path) -> None:
@@ -91,7 +98,7 @@ def run_tui(workspace_root: Path) -> None:
             self._refresh_sessions(select_id=self._session.id)
             self._update_status()
             self.query_one("#chat-log", RichLog).write(
-                "[dim]HarnessLab TUI — n=new session, r=refresh, ?=help, q=quit[/dim]"
+                "[dim]HarnessLab TUI — n=new · s=settings · /model · /failover · q=quit[/dim]"
             )
 
         def _update_status(self) -> None:
@@ -133,6 +140,7 @@ def run_tui(workspace_root: Path) -> None:
             chat.write(f"[dim]resumed session {self._session.id}[/dim]")
             for message in self._session.messages:
                 self._render_message(chat, message.role, message.content)
+            self._refresh_trace_tree()
             self._update_status()
 
         def action_new_session(self) -> None:
@@ -152,9 +160,62 @@ def run_tui(workspace_root: Path) -> None:
         def action_show_help(self) -> None:
             chat = self.query_one("#chat-log", RichLog)
             chat.write(
-                "[dim]/compact · /help · n=new session · Enter=send · "
-                "left pane=switch session[/dim]"
+                "[dim]/compact · /settings · /model simple|deepseek|… · "
+                "/failover on|off · n=new session · s=settings[/dim]"
             )
+
+        def action_show_settings(self) -> None:
+            chat = self.query_one("#chat-log", RichLog)
+            chat.write(f"[dim]{format_settings_summary(self._operator_config)}[/dim]")
+
+        def _handle_slash(self, text: str) -> bool:
+            parsed = parse_slash_command(text)
+            if parsed is None:
+                return False
+            command, args = parsed
+            chat = self.query_one("#chat-log", RichLog)
+            if command in {"/help", "/?"}:
+                self.action_show_help()
+                return True
+            if command == "/settings":
+                self.action_show_settings()
+                return True
+            if command == "/failover":
+                flag = args[0]
+                if flag not in {"on", "off"}:
+                    chat.write("[yellow]/failover on|off[/yellow]")
+                    return True
+                try:
+                    self._operator_config = apply_failover(
+                        self._loop,
+                        workspace_root=self._workspace,
+                        config=self._operator_config,
+                        enabled=flag == "on",
+                        fallbacks=list(self._operator_config.model_fallbacks) or None,
+                    )
+                    chat.write(
+                        f"[green]failover {flag}[/green] · "
+                        f"{format_settings_summary(self._operator_config)}"
+                    )
+                    self._update_status()
+                except Exception as exc:  # noqa: BLE001
+                    chat.write(f"[red]failover failed: {exc}[/red]")
+                return True
+            if command == "/model":
+                backend = args[0]
+                try:
+                    self._operator_config, norm = apply_model_backend(
+                        self._loop,
+                        workspace_root=self._workspace,
+                        config=self._operator_config,
+                        backend=backend,
+                    )
+                    chat.write(f"[green]model → {norm}[/green]")
+                    self._update_status()
+                except Exception as exc:  # noqa: BLE001
+                    chat.write(f"[red]model switch failed: {exc}[/red]")
+                return True
+            return False
 
         @on(Input.Submitted)
         def _on_input(self, event: Input.Submitted) -> None:
@@ -162,8 +223,7 @@ def run_tui(workspace_root: Path) -> None:
             event.input.value = ""
             if not text:
                 return
-            if text.lower() in {"/help", "/?"}:
-                self.action_show_help()
+            if self._handle_slash(text):
                 return
             if self._busy:
                 self.query_one("#chat-log", RichLog).write("[yellow]turn in progress…[/yellow]")
@@ -232,18 +292,27 @@ def run_tui(workspace_root: Path) -> None:
                 chat.write(f"[dim italic]{''.join(self._stream_reasoning)}[/dim italic]")
             chat.write(f"[bold green]assistant[/bold green]: {response}")
             self._session = self._loop._sessions.get(self._session.id)  # noqa: SLF001
-            self._emit_spans()
+            self._refresh_trace_tree()
             self._update_status()
             self._refresh_sessions(select_id=self._session.id)
 
-        def _emit_spans(self) -> None:
+        def _refresh_trace_tree(self) -> None:
             path = self._spans_path
+            trace = self.query_one("#trace-pane", RichLog)
             if not path.is_file():
+                trace.clear()
                 return
             spans = read_spans(path)
-            trace = self.query_one("#trace-pane", RichLog)
-            for line in self._span_feed.ingest(spans, session_id=self._session.id):
+            lines = self._span_feed.render_session_tree(
+                spans,
+                session_id=self._session.id,
+            )
+            trace.clear()
+            for line in lines:
                 trace.write(line.markup)
+
+        def _emit_spans(self) -> None:
+            self._refresh_trace_tree()
 
         @staticmethod
         def _render_message(log: RichLog, role: str, content: str) -> None:

@@ -23,16 +23,16 @@ compaction, sub-agents, checkpoints).
 | Span waterfall / hierarchy | Flat turn list only | Jaeger-style native tree | claude-tap lacks execution hierarchy |
 | Live streaming | SSE append of API records | Span lifecycle SSE + token deltas | Different streams |
 | Request/response deep read | Full HTTP, cURL export, SSE rebuild | `ModelCallInspector` (prompt blocks, API messages) | HarnessLab lacks raw HTTP proxy view |
-| Turn-to-turn diff | Structured diff (`diff.js`) | Prompt block + `api_messages` index diff | Full line-level message diff TBD |
-| Global trace search | Cmd+F across records | Deep span filter (attrs + metrics + prompt text) | No dedicated Cmd+F shortcut |
+| Turn-to-turn diff | Structured diff (`diff.js`) | Block + `api_messages` index + **line-level** diff | — |
+| Global trace search | Cmd+F across records | Deep span filter + **⌘F / Ctrl+F focus** | — |
 | Tool inspection | Rich tool_use / tool_result | Tool I/O panel + artifact fetch via Web API | Full output when externalized only |
-| Context / token audit | Per-request usage + cache R/W | Context inspector + turn token bar in Trace | Cache R/W breakdown TBD |
+| Context / token audit | Per-request usage + cache R/W | Context inspector + token bar + **usage_breakdown** panel | — |
 | Metrics dashboard | Session aggregates in viewer | Usage nav + OTel/Grafana path | claude-tap lacks cost trends |
 | Export | JSONL, compact, HTML self-contained | JSONL copy/download + **self-contained HTML** | claude-tap lacks span hierarchy in export |
 | Hook / policy visibility | N/A (proxy layer) | `tool.hooks.*` spans + events | Activity + Trace now surface hooks (2026-06) |
 | Checkpoint / rewind | N/A | Trace tab checkpoints | HarnessLab-only |
 | Sub-agent links | Thread / response-id chains | Span links + child panel | Different correlation models |
-| Replay / eval UI | N/A | CLI only | **HarnessLab Web: no divergence UI** |
+| Replay / eval UI | N/A | CLI + **Trace replay panel** with span jump | — |
 
 ## HarnessLab strengths (keep investing here)
 
@@ -53,11 +53,12 @@ compaction, sub-agents, checkpoints).
 
 1. ~~Render **`ContextSnapshot`** in Trace `ModelCallInspector`~~ — **Done (2026-06)**.
 2. ~~**Turn-level token summary** in Trace toolbar~~ — **Done (2026-06)**.
-3. ~~**Prompt diff** between adjacent `llm.generate` spans~~ — **Partial (2026-06)**; block sizes + `api_messages` index diff; line-level TBD.
+3. ~~**Prompt diff** between adjacent `llm.generate` spans~~ — **Done (2026-06)**; block sizes, index diff, line-level detail.
 4. ~~**Tool inspector** with args + output preview~~ — **Done (2026-06)**; artifact fetch via `GET /api/sessions/{id}/artifacts/{ref}`.
-5. ~~**Trace global search** across attributes/metrics/prompt~~ — **Done (2026-06)** via deep filter.
+5. ~~**Trace global search** across attributes/metrics/prompt~~ — **Done (2026-06)**; deep filter + ⌘F focus.
 6. ~~**Self-contained HTML export** for offline review~~ — **Done (2026-06)** (Trace JSONL panel).
-7. **TUI production** — multi-pane + trace feed + token streaming preview (**Beta**, see [`guides/tui.md`](../guides/tui.md)).
+7. ~~**Replay divergence Web UI**~~ — **Done (2026-06)** (`TraceReplayPanel` + jump-to-span).
+8. ~~**TUI span tree**~~ — **Done (2026-06)** hierarchical trace pane; settings via slash commands (**Beta**).
 
 ## References
 

@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import type { SpanRecordItem } from "../../lib/schemas";
 import { collectLlmPromptSnapshots } from "../../lib/traceMetrics";
+import { diffApiMessageLines } from "../../lib/promptLineDiff";
 import { useI18n } from "../../lib/i18n";
 
 type PromptBlock = { name: string; content: string };
@@ -83,6 +84,7 @@ export function PromptDiffPanel({ spans }: PromptDiffPanelProps) {
   const right = snapshots[rightIdx];
   const lines = diffBlocks(blockMap(left.promptBlocks), blockMap(right.promptBlocks));
   const messageLines = diffApiMessages(left.apiMessages, right.apiMessages);
+  const messageDetailLines = diffApiMessageLines(left.apiMessages, right.apiMessages);
   const messageDelta = right.apiMessages.length - left.apiMessages.length;
 
   return (
@@ -126,6 +128,12 @@ export function PromptDiffPanel({ spans }: PromptDiffPanelProps) {
           <li>{t("trace.promptDiffEmpty")}</li>
         ) : null}
       </ul>
+      {messageDetailLines.length ? (
+        <details className="trace-prompt-diff-detail">
+          <summary>{t("trace.promptDiffLineDetail")}</summary>
+          <pre>{messageDetailLines.join("\n")}</pre>
+        </details>
+      ) : null}
     </details>
   );
 }

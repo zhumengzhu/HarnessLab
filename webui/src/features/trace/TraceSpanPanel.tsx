@@ -7,6 +7,7 @@ import { useI18n } from "../../lib/i18n";
 import { spanOperationHint, spanOperationName } from "../../lib/spanDisplay";
 import { spanMatchesDeepQuery } from "../../lib/spanSearch";
 import { aggregateTurnLlmMetrics } from "../../lib/traceMetrics";
+import type { ReplaySpanFocus } from "../../lib/replayFocus";
 import { PromptDiffPanel } from "./PromptDiffPanel";
 import {
   buildTimelineTicks,
@@ -26,10 +27,20 @@ type TraceSpanPanelProps = {
   error: string | null;
   spans: SpanRecordItem[];
   isLive?: boolean;
+  focusRequest?: (ReplaySpanFocus & { seq: number }) | null;
+  onFocusHandled?: () => void;
 };
 
 export function TraceSpanPanel(props: TraceSpanPanelProps) {
-  const { selectedSessionId, loading, error, spans, isLive = false } = props;
+  const {
+    selectedSessionId,
+    loading,
+    error,
+    spans,
+    isLive = false,
+    focusRequest = null,
+    onFocusHandled,
+  } = props;
   const { t } = useI18n();
   const [selectedSpanId, setSelectedSpanId] = useState<string | null>(null);
   const [selectedTraceId, setSelectedTraceId] = useState<string | null>(null);
@@ -38,6 +49,24 @@ export function TraceSpanPanel(props: TraceSpanPanelProps) {
   const [detailOpen, setDetailOpen] = useState(true);
   const [liveTick, setLiveTick] = useState(0);
   const bodyRef = useRef<HTMLDivElement>(null);
+  const filterInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== "f") {
+        return;
+      }
+      const target = event.target as HTMLElement | null;
+      if (target?.tagName === "INPUT" || target?.tagName === "TEXTAREA") {
+        return;
+      }
+      event.preventDefault();
+      filterInputRef.current?.focus();
+      filterInputRef.current?.select();
+    };
+    window.addEventListener("keydown", onKeyDown);
+    return () => window.removeEventListener("keydown", onKeyDown);
+  }, []);
 
   useEffect(() => {
     if (!isLive) return;
@@ -90,10 +119,41 @@ export function TraceSpanPanel(props: TraceSpanPanelProps) {
   );
 
   useEffect(() => {
-    if (activeTrace) {
+    if (activeTrace && !focusRequest) {
       setSelectedSpanId(activeTrace.root.span.span_id);
     }
-  }, [activeTrace?.traceId]);
+  }, [activeTrace?.traceId, focusRequest]);
+
+  useEffect(() => {
+    if (!focusRequest) return;
+    const group =
+      traceGroups.find((row) => row.turnIndex === focusRequest.turnIndex) ??
+      traceGroups[focusRequest.turnIndex] ??
+      null;
+    if (!group) {
+      onFocusHandled?.();
+      return;
+    }
+    setSelectedTraceId(group.traceId);
+    if (focusRequest.spanNameHint) {
+      setNameFilter(focusRequest.spanNameHint);
+    }
+    const flatRows = flattenSpanTree(group.root, new Set());
+    const hint = focusRequest.spanNameHint?.toLowerCase() ?? "";
+    const match =
+      (hint
+        ? flatRows.find(({ node }) => {
+            const name = node.span.name.toLowerCase();
+            const operation = spanOperationName(node.span).toLowerCase();
+            return name.includes(hint) || operation.includes(hint);
+          })
+        : null) ?? flatRows[0];
+    if (match) {
+      setSelectedSpanId(match.node.span.span_id);
+      setDetailOpen(true);
+    }
+    onFocusHandled?.();
+  }, [focusRequest, traceGroups, onFocusHandled]);
 
   useEffect(() => {
     if (!isLive || !bodyRef.current) return;
@@ -197,9 +257,12 @@ export function TraceSpanPanel(props: TraceSpanPanelProps) {
           ) : null}
           <label className="trace-jaeger-filter">
             <input
+              ref={filterInputRef}
               type="search"
               value={nameFilter}
               placeholder={t("trace.spanFilterPlaceholder")}
+              aria-label={t("trace.spanFilter")}
+              title={t("trace.spanFilterShortcut")}
               onChange={(event) => setNameFilter(event.target.value)}
             />
           </label>

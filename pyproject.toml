@@ -38,12 +38,8 @@ build-backend = "hatchling.build"
 [tool.hatch.build.targets.wheel]
 packages = ["src/harnesslab"]
 
-[tool.hatch.build.targets.wheel.force-include]
-"src/harnesslab/core/prompt/blocks" = "harnesslab/core/prompt/blocks"
-"src/harnesslab/providers/catalog" = "harnesslab/providers/catalog"
-"src/harnesslab/providers/pricing_catalog.json" = "harnesslab/providers/pricing_catalog.json"
-"src/harnesslab/skills/samples" = "harnesslab/skills/samples"
-"src/harnesslab/skills/sample-index.json" = "harnesslab/skills/sample-index.json"
+# Asset paths under src/harnesslab/ are shipped via `packages` above.
+# Do not duplicate them in force-include (hatchling errors on wheel build).
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

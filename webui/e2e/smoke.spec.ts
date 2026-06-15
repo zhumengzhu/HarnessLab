@@ -1,4 +1,11 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Page } from "@playwright/test";
+
+test.describe.configure({ mode: "serial" });
+
+async function startFreshChat(page: Page) {
+  await page.goto("/");
+  await page.getByRole("button", { name: /New chat|新对话/ }).click();
+}
 
 test.describe("HarnessLab Web UI smoke", () => {
   test("loads shell and health-backed sidebar", async ({ page }) => {
@@ -31,5 +38,32 @@ test.describe("HarnessLab Web UI smoke", () => {
     await page.getByRole("button", { name: /设置|Settings/ }).click();
     await expect(page.getByRole("heading", { name: /设置|Settings/ })).toBeVisible();
     await expect(page.getByText(/界面偏好|UI preferences/)).toBeVisible();
+  });
+
+  test("simple model chat round-trip", async ({ page }) => {
+    const token = `Hello from Playwright E2E ${Date.now()}`;
+    await startFreshChat(page);
+    const composer = page.locator(".composer-form textarea");
+    await composer.fill(`/final ${token}`);
+    await page.getByRole("button", { name: /Send|发送/ }).click();
+    await expect(
+      page.getByTestId("chat-scroll-area").getByText(token, { exact: true })
+    ).toBeVisible({ timeout: 30_000 });
+  });
+
+  test("trace replay panel runs semantic compare", async ({ page }) => {
+    const token = `replay ui probe ${Date.now()}`;
+    await startFreshChat(page);
+    const composer = page.locator(".composer-form textarea");
+    await composer.fill(`/final ${token}`);
+    await page.getByRole("button", { name: /Send|发送/ }).click();
+    await expect(
+      page.getByTestId("chat-scroll-area").getByText(token, { exact: true })
+    ).toBeVisible({ timeout: 30_000 });
+
+    await page.getByRole("tab", { name: /Trace|追踪/ }).click();
+    await page.getByText(/Replay divergence|Replay 偏差/).click();
+    await page.getByRole("button", { name: /Run replay|运行 replay/ }).click();
+    await expect(page.locator(".trace-replay-ok")).toBeVisible({ timeout: 30_000 });
   });
 });
