@@ -20,13 +20,21 @@ from harnesslab.improve.fingerprint import (
 from harnesslab.improve.generator import dedupe_against_existing, generate
 from harnesslab.improve.proposal import Proposal, ProposalStatus
 from harnesslab.improve.render import to_markdown, write_proposal
+from harnesslab.improve.scoring import (
+    RateEstimate,
+    empirical_bayes_prior,
+    estimate_rate,
+)
 
 __all__ = [
     "Cluster",
     "Proposal",
     "ProposalStatus",
+    "RateEstimate",
     "build_clusters",
     "dedupe_against_existing",
+    "empirical_bayes_prior",
+    "estimate_rate",
     "fingerprint_for_eval_failure",
     "fingerprint_for_span",
     "generate",

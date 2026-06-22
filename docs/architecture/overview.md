@@ -363,6 +363,17 @@ flowchart TD
     HumanReview -->|reject| Rejected[status: rejected with reason]
 ```
 
+Clusters are scored with a deterministic Beta-Binomial posterior failure
+rate (Layer A of [`docs/research/bayesian-self-evolution.md`](../research/bayesian-self-evolution.md)).
+The denominator ("trials") is the offending tool's **total** invocation count
+(successes + failures), not just its failures, so a 2/2 failure on a rarely
+used tool can outrank a 2/50 failure on a busy one. A weak empirical-Bayes
+prior centred on the global base rate shrinks sparse clusters so one-off
+spikes do not over-fire. Proposals carry `trials`, `posterior_failure_rate`,
+`credible_interval`, and `priority` (the lower 90% credible bound, used as the
+ranking key); the scorer is closed-form with no RNG, preserving the
+deterministic-artifact contract.
+
 Failure signal sources and their fingerprint shapes:
 
 | Source | Trigger | Fingerprint |

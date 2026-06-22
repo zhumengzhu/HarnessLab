@@ -16,6 +16,10 @@ class Proposal(BaseModel):
     kind: str
     cluster_signature: str
     occurrences: int
+    trials: int = 0
+    posterior_failure_rate: float | None = None
+    credible_interval: tuple[float, float] | None = None
+    priority: float | None = None
     generated_at: datetime
     related_files: list[str] = Field(default_factory=list)
     suggested_actions: list[str]

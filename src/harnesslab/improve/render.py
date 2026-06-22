@@ -20,6 +20,13 @@ def to_markdown(proposal: Proposal) -> str:
     lines.append(f"kind: {proposal.kind}")
     lines.append(f'cluster_signature: "{proposal.cluster_signature}"')
     lines.append(f"occurrences: {proposal.occurrences}")
+    lines.append(f"trials: {proposal.trials}")
+    if proposal.posterior_failure_rate is not None:
+        lines.append(
+            f"posterior_failure_rate: {proposal.posterior_failure_rate:.4f}"
+        )
+    if proposal.priority is not None:
+        lines.append(f"priority: {proposal.priority:.4f}")
     lines.append(f"generated_at: {proposal.generated_at.isoformat()}")
     if proposal.related_files:
         lines.append("related_files:")
@@ -33,6 +40,18 @@ def to_markdown(proposal: Proposal) -> str:
         f"{proposal.occurrences} occurrence(s) of signature "
         f"`{proposal.cluster_signature}`."
     )
+    if proposal.posterior_failure_rate is not None and proposal.trials:
+        rate = f"{proposal.posterior_failure_rate * 100:.1f}%"
+        line = (
+            f"Posterior failure rate \u2248 {rate} "
+            f"({proposal.occurrences}/{proposal.trials} observed"
+        )
+        if proposal.credible_interval is not None:
+            low, high = proposal.credible_interval
+            line += f"; 90% CI [{low * 100:.1f}%, {high * 100:.1f}%]"
+        line += ")."
+        lines.append("")
+        lines.append(line)
     lines.append("")
 
     if proposal.sample_events:

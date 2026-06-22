@@ -182,6 +182,38 @@ def test_build_clusters_sort_order_is_deterministic() -> None:
     assert [c.occurrences for c in clusters] == [5, 2]
 
 
+def test_build_clusters_denominator_counts_tool_successes() -> None:
+    # 2 failures of read_file out of 10 total invocations -> trials == 10.
+    spans = (
+        [_span(name="tool.read_file", ok=False, status_message="boom")] * 2
+        + [_span(name="tool.read_file", ok=True)] * 8
+    )
+    clusters = build_clusters(spans, min_occurrences=2)
+    assert len(clusters) == 1
+    c = clusters[0]
+    assert c.occurrences == 2
+    assert c.trials == 10
+    assert c.posterior_failure_rate is not None
+    # Posterior rate is well below the naive 2/2 == 1.0 point estimate.
+    assert c.posterior_failure_rate < 0.5
+
+
+def test_build_clusters_ranks_high_rate_rare_tool_above_low_rate_busy_tool() -> None:
+    # alpha: 2/2 failures (100% observed). beta: 2/50 failures (4% observed).
+    spans = (
+        [_denied_span("alpha", "x")] * 2
+        + [_denied_span("beta", "y")] * 2
+        + [_span(name="tool.beta", ok=True)] * 48
+    )
+    clusters = build_clusters(spans, min_occurrences=2)
+    assert len(clusters) == 2
+    # The rare-but-always-failing tool must surface first (lower-confidence
+    # bound ranking), even though both have the same occurrence count.
+    assert clusters[0].signature == "tool_denied:alpha:x"
+    assert clusters[1].signature == "tool_denied:beta:y"
+    assert clusters[0].priority > clusters[1].priority
+
+
 def test_build_clusters_includes_eval_failures() -> None:
     eval_results = [
         TaskResult(
@@ -314,6 +346,30 @@ def test_to_markdown_includes_sample_events_section() -> None:
     md = to_markdown(_sample_proposal())
     assert "## Sample events" in md
     assert "session=`ses_demo" in md
+
+
+def test_generate_carries_posterior_fields_onto_proposal() -> None:
+    spans = (
+        [_span(name="tool.read_file", ok=False, status_message="boom")] * 2
+        + [_span(name="tool.read_file", ok=True)] * 8
+    )
+    proposal = generate(spans, now=_fixed_now())[0]
+    assert proposal.trials == 10
+    assert proposal.posterior_failure_rate is not None
+    assert proposal.credible_interval is not None
+    assert proposal.priority is not None
+
+
+def test_to_markdown_includes_posterior_failure_rate() -> None:
+    spans = (
+        [_span(name="tool.read_file", ok=False, status_message="boom")] * 2
+        + [_span(name="tool.read_file", ok=True)] * 8
+    )
+    md = to_markdown(generate(spans, now=_fixed_now())[0])
+    assert "posterior_failure_rate:" in md
+    assert "Posterior failure rate" in md
+    assert "90% CI" in md
+    assert "2/10 observed" in md
 
 
 def test_write_proposal_persists_file(tmp_path: Path) -> None:
