@@ -115,6 +115,8 @@ def parse_slash_command(text: str) -> tuple[str, list[str]] | None:
     command = parts[0].lower()
     if command in {"/settings", "/help", "/?"}:
         return command, parts[1:]
+    if command == "/find":
+        return command, parts[1:]
     if command == "/failover" and parts[1:2]:
         return command, [parts[1].lower()]
     if command == "/model" and parts[1:2]:

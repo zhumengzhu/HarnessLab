@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -83,6 +84,11 @@ _log = get_logger("core.loop")
 
 DEFAULT_MAX_STEPS = 20
 SKILL_INVOKE_MIN_STEPS = 40
+
+_CANCEL_TURN_MESSAGE = (
+    "Turn cancelled by operator. This session is still open — send a new "
+    "message to continue."
+)
 
 
 class HarnessLoop:
@@ -225,6 +231,8 @@ class HarnessLoop:
         session_id: str,
         user_input: str,
         max_steps: int = DEFAULT_MAX_STEPS,
+        *,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> str:
         """Drive the model/tool loop until terminal or ``max_steps``.
 
@@ -235,6 +243,14 @@ class HarnessLoop:
         passed as ``user_input`` to follow-up calls; real model adapters
         rely on ``session.messages`` for the new signal, and
         ``SimpleModel`` falls through to its canned final response.
+
+        ``should_cancel`` is an optional cooperative cancellation hook
+        polled at step boundaries (before the next model call and before
+        applying a decision's tool). When it returns ``True`` the turn
+        ends with ``terminal_reason == "cancelled"`` and the session is
+        left ``waiting_user`` so the operator can resume. Cancellation is
+        cooperative: an already in-flight model or tool call completes
+        before the check is observed.
         """
 
         if max_steps < 1:
@@ -293,6 +309,7 @@ class HarnessLoop:
                 model_user_input=model_user_input,
                 max_steps=effective_max_steps,
                 skill_command=skill_command,
+                should_cancel=should_cancel,
             )
 
             if (
@@ -333,7 +350,7 @@ class HarnessLoop:
         session.turn_count += 1
         if terminal_reason == "final":
             session.status = "done"
-        elif terminal_reason == "ask_user":
+        elif terminal_reason in {"ask_user", "cancelled"}:
             session.status = "waiting_user"
         self._sessions.save(session)
         return last_response
@@ -345,6 +362,7 @@ class HarnessLoop:
         model_user_input: str,
         max_steps: int,
         skill_command: SkillCommand | None,
+        should_cancel: Callable[[], bool] | None = None,
     ) -> tuple[str, str, int]:
         """Inner step loop; returns ``(last_response, terminal_reason, steps_used)``."""
 
@@ -356,9 +374,25 @@ class HarnessLoop:
         turn_started_at = self._clock.now()
         session_wall_base = session.budget_usage.wall_time_ms_total
 
+        def _cancelled() -> bool:
+            return should_cancel is not None and should_cancel()
+
+        def _mark_cancelled() -> None:
+            nonlocal last_response, terminal_reason
+            terminal_reason = "cancelled"
+            last_response = _CANCEL_TURN_MESSAGE
+            session.messages.append(
+                self._make_message(
+                    role="assistant", content=last_response, session=session
+                )
+            )
+
         def _execute_steps() -> None:
             nonlocal last_response, terminal_reason, steps_used, prev_terminal
             for step_index in range(max_steps):
+                if _cancelled():
+                    _mark_cancelled()
+                    break
                 step_reason = (
                     "initial" if step_index == 0 else f"after_{prev_terminal}"
                 )
@@ -451,6 +485,11 @@ class HarnessLoop:
                             "reasoning_text": self._model_reasoning_text(),
                         },
                     )
+
+                    if _cancelled() and decision.kind not in TERMINAL_DECISION_KINDS:
+                        _mark_cancelled()
+                        self._loop_spans.finish_step(step_handle, outcome="cancelled")
+                        break
 
                     step_response, step_outcome = self._apply_decision(session, decision)
                     if step_outcome in {"tool_ok", "tool_error"}:

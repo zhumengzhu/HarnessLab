@@ -77,6 +77,11 @@ Must NOT include yet:
  Terminal kinds (`final`, `ask_user`) end the inner loop; `tool`,
  `assistant`, and `plan` continue until `max_steps` or a terminal
  decision.
+- `run_session(..., should_cancel=callable)` is an optional cooperative
+ cancellation hook polled at step boundaries (before the next model call
+ and before a decided tool runs). On cancel the turn ends with
+ `terminal_reason == "cancelled"` and the session is left `waiting_user`;
+ an in-flight model/tool call completes first. Used by the TUI `Esc` stop.
 - Before each model call the loop may compact older messages
   ( **`context.compact`** spans). Adapters raise `ModelOverflowError` on
   context overflow; the loop compacts once and retries.

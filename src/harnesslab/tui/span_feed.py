@@ -38,7 +38,13 @@ class SpanFeedFormatter:
             out.extend(self._format_events(span))
         return out
 
-    def _format_span(self, span: SpanRecord, attrs: dict[str, Any]) -> SpanFeedLine | None:
+    def _format_span(
+        self,
+        span: SpanRecord,
+        attrs: dict[str, Any],
+        *,
+        verbose: bool = False,
+    ) -> SpanFeedLine | None:
         name = span.name
         metrics = span.metrics or {}
 
@@ -56,15 +62,23 @@ class SpanFeedFormatter:
             status = "ok" if ok else "error"
             duration = metrics.get("duration_ms")
             dur = f" · {int(duration)}ms" if isinstance(duration, (int, float)) else ""
+            cap = 240 if verbose else 80
             preview = metrics.get("output_preview")
             preview_text = ""
             if isinstance(preview, str) and preview.strip():
-                snippet = preview.replace("\n", " ").strip()[:80]
+                snippet = preview.replace("\n", " ").strip()[:cap]
                 preview_text = f" — {snippet}"
-            return SpanFeedLine(
-                markup=f"[magenta]tool[/magenta] {tool} · {status}{dur}{preview_text}",
-                plain=f"tool {tool} · {status}{dur}{preview_text}",
-            )
+            extra = ""
+            if verbose:
+                error = metrics.get("error")
+                if not ok and isinstance(error, str) and error.strip():
+                    extra += f" · [red]err:[/red] {error.strip()[:160]}"
+                ref = metrics.get("artifact_ref")
+                if isinstance(ref, str) and ref:
+                    extra += f" · [dim]art:{ref}[/dim]"
+            markup = f"[magenta]tool[/magenta] {tool} · {status}{dur}{preview_text}{extra}"
+            plain = f"tool {tool} · {status}{dur}{preview_text}"
+            return SpanFeedLine(markup=markup, plain=plain)
 
         if name == "llm.generate":
             parts: list[str] = []
@@ -78,6 +92,8 @@ class SpanFeedFormatter:
             if isinstance(attempts, int) and attempts > 1:
                 backend = attrs.get("harnesslab.failover.backend", "?")
                 parts.append(f"failover×{attempts}→{backend}")
+            if verbose:
+                parts.extend(_llm_verbose_parts(metrics))
             label = " · ".join(parts) if parts else "call"
             return SpanFeedLine(
                 markup=f"[blue]llm[/blue] {label}",
@@ -123,7 +139,7 @@ class SpanFeedFormatter:
         return lines
 
     def render_session_tree(
-        self, spans: list[SpanRecord], *, session_id: str
+        self, spans: list[SpanRecord], *, session_id: str, verbose: bool = False
     ) -> list[SpanFeedLine]:
         """Render a per-turn hierarchical span tree for the TUI trace pane."""
 
@@ -159,7 +175,7 @@ class SpanFeedFormatter:
             for span, depth in _preorder_tree(group):
                 prefix = "  " * depth + ("├─ " if depth else "")
                 attrs = span.attributes or {}
-                formatted = self._format_span(span, attrs)
+                formatted = self._format_span(span, attrs, verbose=verbose)
                 if formatted is not None:
                     lines.append(
                         SpanFeedLine(
@@ -176,6 +192,29 @@ class SpanFeedFormatter:
                         )
                     )
         return lines
+
+
+def _llm_verbose_parts(metrics: dict[str, Any]) -> list[str]:
+    """Extra detail appended to an ``llm.generate`` line in verbose mode."""
+
+    parts: list[str] = []
+    inp = metrics.get("input_tokens")
+    out = metrics.get("output_tokens")
+    if isinstance(inp, int) and isinstance(out, int):
+        parts.append(f"in {inp}/out {out}")
+    cost = metrics.get("cost_usd")
+    if isinstance(cost, (int, float)) and cost:
+        parts.append(f"${cost:.4f}")
+    context = metrics.get("context")
+    if isinstance(context, dict):
+        ratio = context.get("usage_ratio")
+        conv = context.get("conversation_tokens")
+        if isinstance(conv, int):
+            ctx = f"ctx {conv} tok"
+            if isinstance(ratio, (int, float)):
+                ctx += f" ({ratio * 100:.0f}%)"
+            parts.append(ctx)
+    return parts
 
 
 def _preorder_tree(spans: list[SpanRecord]) -> list[tuple[SpanRecord, int]]:

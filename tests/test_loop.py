@@ -164,6 +164,89 @@ def test_max_steps_appends_continue_hint(tmp_path: Path) -> None:
     )
 
 
+def _always_tool_loop(tmp_path: Path, model: object) -> HarnessLoop:
+    from harnesslab.core.runtime import SystemClock, UuidIdProvider
+    from harnesslab.policy.default_policy import DefaultPolicy
+    from harnesslab.session.in_memory import InMemorySessionStore
+    from harnesslab.telemetry.local_span_recorder import LocalSpanRecorder
+    from harnesslab.tools.file_tools import GrepTool
+    from harnesslab.tools.registry import ToolRegistry
+
+    tools = ToolRegistry()
+    tools.register(GrepTool(tmp_path))
+    return HarnessLoop(
+        model=model,
+        policy=DefaultPolicy(tmp_path),
+        sessions=InMemorySessionStore(),
+        tools=tools,
+        spans=LocalSpanRecorder(tmp_path / "trace.jsonl"),
+        clock=SystemClock(),
+        ids=UuidIdProvider(),
+        workspace_root=tmp_path,
+    )
+
+
+def test_should_cancel_before_first_step_runs_no_tool(tmp_path: Path) -> None:
+    from harnesslab.core.models import Decision
+
+    class AlwaysToolModel:
+        def decide(self, session, user_input: str) -> Decision:
+            return Decision(kind="tool", tool_name="grep", tool_args={"pattern": "x"})
+
+        def last_call_meta(self) -> dict:
+            return {}
+
+    loop = _always_tool_loop(tmp_path, AlwaysToolModel())
+    session = loop.start(goal="cancel early")
+    reply = loop.run_session(
+        session.id, "keep going", max_steps=5, should_cancel=lambda: True
+    )
+
+    assert "Turn cancelled by operator" in reply
+    assert session.status == "waiting_user"
+    assert session.step_count == 0
+    assert not any(m.tool_calls for m in session.messages if m.role == "assistant")
+
+
+def test_should_cancel_after_model_call_skips_tool_application(tmp_path: Path) -> None:
+    from harnesslab.core.models import Decision
+
+    class OnceThenCancelModel:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def decide(self, session, user_input: str) -> Decision:
+            self.calls += 1
+            return Decision(kind="tool", tool_name="grep", tool_args={"pattern": "x"})
+
+        def last_call_meta(self) -> dict:
+            return {}
+
+    model = OnceThenCancelModel()
+    loop = _always_tool_loop(tmp_path, model)
+    session = loop.start(goal="cancel mid step")
+    reply = loop.run_session(
+        session.id,
+        "keep going",
+        max_steps=5,
+        should_cancel=lambda: model.calls >= 1,
+    )
+
+    assert "Turn cancelled by operator" in reply
+    assert session.status == "waiting_user"
+    assert model.calls == 1
+    assert session.step_count == 0
+    assert not any(m.tool_calls for m in session.messages if m.role == "assistant")
+
+
+def test_no_cancel_hook_preserves_normal_completion(tmp_path: Path) -> None:
+    loop = build_runtime(tmp_path)
+    session = loop.start(goal="normal")
+    reply = loop.run_session(session.id, "hello", max_steps=3)
+    assert "Turn cancelled" not in reply
+    assert session.status in {"done", "waiting_user"}
+
+
 def test_compact_command_runs_manual_compaction(tmp_path: Path) -> None:
     from harnesslab.core.config import RuntimeLimits
     from harnesslab.core.replay import ReplaySpanRecorder

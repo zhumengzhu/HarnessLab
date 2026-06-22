@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import threading
 from pathlib import Path
 
 from harnesslab.cli import build_runtime
@@ -10,6 +11,12 @@ from harnesslab.core.operator_config import OperatorConfig, load_operator_config
 from harnesslab.core.stream_context import bind_stream_sink, reset_stream_sink
 from harnesslab.replay.span_reader import read_spans
 from harnesslab.telemetry.recorder_factory import default_spans_path
+from harnesslab.tui.session_list import (
+    filter_sessions,
+    format_status_line,
+    input_placeholder_for,
+    session_label,
+)
 from harnesslab.tui.settings_actions import (
     apply_failover,
     apply_model_backend,
@@ -59,7 +66,10 @@ def run_tui(workspace_root: Path) -> None:
         BINDINGS = [
             ("q", "quit", "Quit"),
             ("n", "new_session", "New"),
+            ("f", "fork_session", "Fork"),
             ("r", "refresh_sessions", "Refresh"),
+            ("v", "toggle_verbose", "Verbose"),
+            ("escape", "cancel_turn", "Stop"),
             ("?", "show_help", "Help"),
             ("s", "show_settings", "Settings"),
         ]
@@ -78,6 +88,9 @@ def run_tui(workspace_root: Path) -> None:
             self._spans_path = default_spans_path(workspace)
             self._span_feed = SpanFeedFormatter()
             self._busy = False
+            self._verbose = False
+            self._cancel_event = threading.Event()
+            self._session_filter = ""
             self._stream_reasoning: list[str] = []
             self._stream_assistant: list[str] = []
             self._stream_started = False
@@ -89,7 +102,7 @@ def run_tui(workspace_root: Path) -> None:
                 with Vertical(id="main-pane"):
                     yield RichLog(id="chat-log", highlight=True, markup=True, wrap=True)
                     yield Static(id="stream-live")
-                    yield Input(placeholder="Message · /compact · /help")
+                    yield Input(id="composer", placeholder="Message · /compact · /help")
                 yield RichLog(id="trace-pane", highlight=True, markup=True, wrap=True)
             yield Static(id="status-bar")
             yield Footer()
@@ -97,23 +110,34 @@ def run_tui(workspace_root: Path) -> None:
         def on_mount(self) -> None:
             self._refresh_sessions(select_id=self._session.id)
             self._update_status()
+            self._sync_input_placeholder()
             self.query_one("#chat-log", RichLog).write(
-                "[dim]HarnessLab TUI — n=new · s=settings · /model · /failover · q=quit[/dim]"
+                "[dim]HarnessLab TUI — n=new · f=fork · v=verbose · s=settings · "
+                "/model · /failover · q=quit[/dim]"
             )
+
+        def _sync_input_placeholder(self) -> None:
+            composer = self.query_one("#composer", Input)
+            composer.placeholder = input_placeholder_for(self._session.status)
 
         def _update_status(self) -> None:
             session = self._loop._sessions.get(self._session.id)  # noqa: SLF001
             bar = self.query_one("#status-bar", Static)
-            backend = self._operator_config.model_backend
-            failover = "on" if self._operator_config.model_failover_enabled else "off"
             bar.update(
-                f"session {self._session.id[:12]}… · model={backend} · "
-                f"failover={failover} · turns={session.turn_count} · "
-                f"steps={session.step_count} · max_steps={self._max_steps}"
+                format_status_line(
+                    session,
+                    backend=self._operator_config.model_backend,
+                    failover_enabled=self._operator_config.model_failover_enabled,
+                    max_steps=self._max_steps,
+                    session_filter=self._session_filter,
+                )
             )
 
         def _refresh_sessions(self, *, select_id: str | None = None) -> None:
-            sessions = self._loop._sessions.list(limit=40)  # noqa: SLF001
+            sessions = filter_sessions(
+                self._loop._sessions.list(limit=40),  # noqa: SLF001
+                self._session_filter,
+            )
             view = self.query_one("#session-list", ListView)
             view.clear()
             active_id = select_id or self._session.id
@@ -142,6 +166,7 @@ def run_tui(workspace_root: Path) -> None:
                 self._render_message(chat, message.role, message.content)
             self._refresh_trace_tree()
             self._update_status()
+            self._sync_input_placeholder()
 
         def action_new_session(self) -> None:
             self._session = self._loop.start(goal="TUI session")
@@ -153,15 +178,46 @@ def run_tui(workspace_root: Path) -> None:
             )
             self._refresh_sessions(select_id=self._session.id)
             self._update_status()
+            self._sync_input_placeholder()
+
+        def action_fork_session(self) -> None:
+            if self._busy:
+                self.query_one("#chat-log", RichLog).write(
+                    "[yellow]turn in progress…[/yellow]"
+                )
+                return
+            forked = self._loop.fork(self._session.id)
+            self._session = self._loop._sessions.get(forked.id)  # noqa: SLF001
+            self._span_feed.reset()
+            chat = self.query_one("#chat-log", RichLog)
+            trace = self.query_one("#trace-pane", RichLog)
+            chat.clear()
+            trace.clear()
+            chat.write(f"[dim]forked session {self._session.id}[/dim]")
+            for message in self._session.messages:
+                self._render_message(chat, message.role, message.content)
+            self._refresh_trace_tree()
+            self._refresh_sessions(select_id=self._session.id)
+            self._update_status()
+            self._sync_input_placeholder()
 
         def action_refresh_sessions(self) -> None:
             self._refresh_sessions(select_id=self._session.id)
 
+        def action_toggle_verbose(self) -> None:
+            self._verbose = not self._verbose
+            state = "on" if self._verbose else "off"
+            self.query_one("#chat-log", RichLog).write(
+                f"[dim]trace verbose {state}[/dim]"
+            )
+            self._refresh_trace_tree()
+
         def action_show_help(self) -> None:
             chat = self.query_one("#chat-log", RichLog)
             chat.write(
-                "[dim]/compact · /settings · /model simple|deepseek|… · "
-                "/failover on|off · n=new session · s=settings[/dim]"
+                "[dim]/compact · /remember · /settings · /model simple|deepseek|… · "
+                "/failover on|off · /find <query> · n=new · f=fork · v=verbose · "
+                "Esc=stop · s=settings[/dim]"
             )
 
         def action_show_settings(self) -> None:
@@ -179,6 +235,15 @@ def run_tui(workspace_root: Path) -> None:
                 return True
             if command == "/settings":
                 self.action_show_settings()
+                return True
+            if command == "/find":
+                self._session_filter = " ".join(args)
+                self._refresh_sessions(select_id=self._session.id)
+                self._update_status()
+                if self._session_filter.strip():
+                    chat.write(f"[green]filter[/green] · {self._session_filter.strip()}")
+                else:
+                    chat.write("[dim]filter cleared[/dim]")
                 return True
             if command == "/failover":
                 flag = args[0]
@@ -231,9 +296,20 @@ def run_tui(workspace_root: Path) -> None:
             self.query_one("#chat-log", RichLog).write(f"[bold cyan]you[/bold cyan]: {text}")
             self._run_turn(text)
 
+        def action_cancel_turn(self) -> None:
+            if not self._busy:
+                return
+            if self._cancel_event.is_set():
+                return
+            self._cancel_event.set()
+            self.query_one("#chat-log", RichLog).write(
+                "[yellow]stopping… (cancels at the next step)[/yellow]"
+            )
+
         @work(thread=True)
         def _run_turn(self, text: str) -> None:
             self._busy = True
+            self._cancel_event.clear()
             self._stream_started = False
             self._stream_reasoning = []
             self._stream_assistant = []
@@ -253,6 +329,7 @@ def run_tui(workspace_root: Path) -> None:
                     self._session.id,
                     text,
                     max_steps=self._max_steps,
+                    should_cancel=self._cancel_event.is_set,
                 )
                 streamed = self._stream_started
             finally:
@@ -292,8 +369,11 @@ def run_tui(workspace_root: Path) -> None:
                 chat.write(f"[dim italic]{''.join(self._stream_reasoning)}[/dim italic]")
             chat.write(f"[bold green]assistant[/bold green]: {response}")
             self._session = self._loop._sessions.get(self._session.id)  # noqa: SLF001
+            if self._session.status == "waiting_user":
+                chat.write("[yellow]⏳ the agent is waiting for your reply[/yellow]")
             self._refresh_trace_tree()
             self._update_status()
+            self._sync_input_placeholder()
             self._refresh_sessions(select_id=self._session.id)
 
         def _refresh_trace_tree(self) -> None:
@@ -306,6 +386,7 @@ def run_tui(workspace_root: Path) -> None:
             lines = self._span_feed.render_session_tree(
                 spans,
                 session_id=self._session.id,
+                verbose=self._verbose,
             )
             trace.clear()
             for line in lines:
@@ -326,10 +407,3 @@ def run_tui(workspace_root: Path) -> None:
                 log.write(f"[magenta]tool[/magenta]: {content[:200]}")
 
     HarnessTui(workspace_root).run()
-
-
-def session_label(session: Session) -> str:
-    title = (session.title or session.goal or "session").strip()
-    if len(title) > 22:
-        title = f"{title[:19]}…"
-    return f"{title} · t{session.turn_count}"

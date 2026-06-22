@@ -60,6 +60,17 @@ compaction, sub-agents, checkpoints).
 7. ~~**Replay divergence Web UI**~~ — **Done (2026-06)** (`TraceReplayPanel` + jump-to-span).
 8. ~~**TUI span tree**~~ — **Done (2026-06)** hierarchical trace pane; settings via slash commands (**Beta**).
 
+## TUI scope decision (2026-06)
+
+Deep trace review stays in the **Web Trace tab** and **CLI**. The TUI is a
+**glance-level** operator surface (status line + per-turn span feed + opt-in
+`v` verbose) and is **not** a terminal trace explorer: no navigable/searchable
+span tree, per-span inspector, prompt diff, replay-divergence UI, or HTML
+export. Rebuilding those in the terminal would duplicate the Web surface
+without learning value. See
+[`docs/guides/tui.md`](../guides/tui.md) §"Observability scope". Basic
+usability features (e.g. `Esc` to cancel a running turn) remain in scope.
+
 ## References
 
 - HarnessLab: [`docs/architecture/observability-v2.md`](../architecture/observability-v2.md), [`docs/architecture/webui-design.md`](../architecture/webui-design.md)
