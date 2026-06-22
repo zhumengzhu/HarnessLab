@@ -39,9 +39,10 @@ The status bar also surfaces the session's cumulative `cost=$…` and a
 | `f` | Fork current session |
 | `r` | Refresh session list |
 | `v` | Toggle verbose trace (tool errors/artifacts, token split, context %) |
+| `y` | Copy the last assistant reply to the clipboard |
 | `Esc` | Stop the running turn (cooperative cancel) |
 | `s` | Show settings summary |
-| `?` | Help |
+| `?` | Help (lists all slash commands) |
 | `q` | Quit |
 
 When a turn ends in `ask_user` (or the step budget is reached) the session
@@ -54,8 +55,17 @@ tool is executed), so an already in-flight model/tool call finishes first; a
 pending tool is **not** run after the stop. The turn ends as `cancelled` and
 the session is left `waiting_user` so you can resume by sending a new message.
 
-Slash commands: `/settings`, `/model <backend>`, `/failover on|off`, `/compact`,
-`/remember <text>`, `/find <query>` (empty query clears the filter).
+Slash commands: `/help`, `/settings`, `/model <backend>`, `/failover on|off`,
+`/compact`, `/remember <text>`, `/find <query>` (empty query clears the filter),
+`/skill`, `/copy`.
+
+The composer offers **inline autocomplete** for slash commands (and common
+argument variants such as `/model deepseek` or `/failover on`): type `/`, then
+accept the ghost-text suggestion with `→` / `Tab`. `/help` (or `?`) prints the
+full command list with descriptions.
+
+Assistant replies render as **Markdown** (headings, lists, code blocks); copy
+the latest one with `y` or `/copy`.
 
 Turns run in a **background worker** so the UI stays responsive during long agent runs.
 
@@ -71,6 +81,10 @@ Turns run in a **background worker** so the UI stays responsive during long agen
 | `ask_user` await affordance | ✅ | ✅ marker + composer placeholder |
 | Settings / failover toggle | ✅ | `/settings` · `/failover` · `/model` · `s` key |
 | Streaming token deltas | ✅ SSE | ✅ live preview (`stream-live`) during turn |
+| Slash command discovery | ✅ palette | ✅ inline autocomplete + `/help` |
+| Markdown replies | ✅ | ✅ Rich Markdown render |
+| Copy last reply | ✅ | ✅ `y` / `/copy` |
+| Cancel running turn | ✅ | ✅ `Esc` (cooperative) |
 
 TUI targets **daily terminal use** and **quick session switching**; deep trace
 review remains in the Web Trace tab.

@@ -20,6 +20,50 @@ from harnesslab.providers.registry import create_model, normalize_backend
 
 _TUI_BACKENDS = frozenset({"simple", "deepseek", "anthropic", "openai", "gemini"})
 
+# Discoverable slash commands: (command, one-line description). Drives the
+# composer autocomplete suggester and the `/help` listing so the two never
+# drift apart.
+SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
+    ("/help", "Show this command list"),
+    ("/settings", "Show model / failover settings"),
+    ("/model", "Switch model backend (simple|deepseek|anthropic|openai|gemini)"),
+    ("/failover", "Toggle provider failover (on|off)"),
+    ("/find", "Filter sessions by title/goal/id (empty clears)"),
+    ("/compact", "Compact older context now"),
+    ("/remember", "Save a durable note to session memory"),
+    ("/skill", "List or select workspace skills"),
+    ("/copy", "Copy the last assistant reply to the clipboard"),
+)
+
+
+def slash_suggestions() -> list[str]:
+    """Flat completion list for the composer's autocomplete suggester.
+
+    Bare commands come first (so a short prefix completes to the command),
+    followed by common argument variants for faster entry.
+    """
+
+    base = [command for command, _ in SLASH_COMMANDS]
+    variants = [
+        "/model simple",
+        "/model deepseek",
+        "/model anthropic",
+        "/model openai",
+        "/model gemini",
+        "/failover on",
+        "/failover off",
+        "/skill list",
+    ]
+    return base + variants
+
+
+def format_help() -> str:
+    """Render the `/help` body from the command catalog (Rich markup)."""
+
+    lines = [f"[bold]{command}[/bold] — {desc}" for command, desc in SLASH_COMMANDS]
+    keys = "keys: n=new · f=fork · v=verbose · y=copy · Esc=stop · r=refresh · s=settings · q=quit"
+    return "\n".join([*lines, f"[dim]{keys}[/dim]"])
+
 
 def install_loop_model(
     loop: HarnessLoop,
@@ -113,7 +157,7 @@ def parse_slash_command(text: str) -> tuple[str, list[str]] | None:
         return None
     parts = stripped.split()
     command = parts[0].lower()
-    if command in {"/settings", "/help", "/?"}:
+    if command in {"/settings", "/help", "/?", "/copy"}:
         return command, parts[1:]
     if command == "/find":
         return command, parts[1:]
