@@ -32,6 +32,18 @@ def test_parse_slash_copy() -> None:
     assert parse_slash_command("/copy") == ("/copy", [])
 
 
+def test_parse_slash_session_management() -> None:
+    assert parse_slash_command("/delete") == ("/delete", [])
+    assert parse_slash_command("/rename My New Title") == (
+        "/rename",
+        ["My", "New", "Title"],
+    )
+    assert parse_slash_command("/search loop module") == (
+        "/search",
+        ["loop", "module"],
+    )
+
+
 def test_slash_suggestions_cover_commands_and_variants() -> None:
     suggestions = slash_suggestions()
     commands = {command for command, _ in SLASH_COMMANDS}

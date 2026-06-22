@@ -29,6 +29,9 @@ SLASH_COMMANDS: tuple[tuple[str, str], ...] = (
     ("/model", "Switch model backend (simple|deepseek|anthropic|openai|gemini)"),
     ("/failover", "Toggle provider failover (on|off)"),
     ("/find", "Filter sessions by title/goal/id (empty clears)"),
+    ("/search", "Search the current chat history"),
+    ("/rename", "Rename the current session"),
+    ("/delete", "Delete the current session"),
     ("/compact", "Compact older context now"),
     ("/remember", "Save a durable note to session memory"),
     ("/skill", "List or select workspace skills"),
@@ -157,9 +160,9 @@ def parse_slash_command(text: str) -> tuple[str, list[str]] | None:
         return None
     parts = stripped.split()
     command = parts[0].lower()
-    if command in {"/settings", "/help", "/?", "/copy"}:
+    if command in {"/settings", "/help", "/?", "/copy", "/delete"}:
         return command, parts[1:]
-    if command == "/find":
+    if command in {"/find", "/search", "/rename"}:
         return command, parts[1:]
     if command == "/failover" and parts[1:2]:
         return command, [parts[1].lower()]

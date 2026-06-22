@@ -134,6 +134,17 @@ class SqliteSessionStore:
             )
             self._insert_messages(session.id, session.messages)
 
+    def delete(self, session_id: str) -> None:
+        with self._conn:
+            self._conn.execute(
+                "DELETE FROM messages WHERE session_id = ?;",
+                (session_id,),
+            )
+            self._conn.execute(
+                "DELETE FROM sessions WHERE id = ?;",
+                (session_id,),
+            )
+
     def _insert_messages(self, session_id: str, messages: list[Message]) -> None:
         if not messages:
             return

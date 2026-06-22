@@ -110,6 +110,13 @@ def test_session_store_port_contract(session_store: SessionStorePort) -> None:
     session_store.save(session)
     assert session_store.get(session.id).turn_count == 3
 
+    session_store.delete(session.id)
+    with pytest.raises(KeyError):
+        session_store.get(session.id)
+    # idempotent: deleting an unknown id must not raise
+    session_store.delete(session.id)
+    session_store.delete("does-not-exist")
+
 
 def test_memory_store_port_contract(memory_store: MemoryStorePort) -> None:
     assert memory_store.get("missing") is None

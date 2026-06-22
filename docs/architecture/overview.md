@@ -221,7 +221,9 @@ The following contracts should remain stable across implementations:
 - `ModelPort`
 - `PolicyPort`
 - `ToolPort`
-- `SessionStorePort`
+- `SessionStorePort` — `create` / `get` / `save` / `list` / `delete`
+  (`delete` is idempotent and removes the session plus its messages;
+  it does not cascade to child sessions)
 - `MemoryStorePort`
 - `ArtifactStorePort`
 - `SpanRecorderPort`

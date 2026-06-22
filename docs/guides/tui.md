@@ -40,6 +40,7 @@ The status bar also surfaces the session's cumulative `cost=$…` and a
 | `r` | Refresh session list |
 | `v` | Toggle verbose trace (tool errors/artifacts, token split, context %) |
 | `y` | Copy the last assistant reply to the clipboard |
+| `PgUp` / `PgDn` | Scroll the chat log |
 | `Esc` | Stop the running turn (cooperative cancel) |
 | `s` | Show settings summary |
 | `?` | Help (lists all slash commands) |
@@ -57,7 +58,12 @@ the session is left `waiting_user` so you can resume by sending a new message.
 
 Slash commands: `/help`, `/settings`, `/model <backend>`, `/failover on|off`,
 `/compact`, `/remember <text>`, `/find <query>` (empty query clears the filter),
-`/skill`, `/copy`.
+`/search <query>` (search the current chat history), `/rename <title>`,
+`/delete` (delete the current session), `/skill`, `/copy`.
+
+`/delete` removes the current session (and its messages) and switches to the
+most recent remaining session, or starts a fresh one when none are left. The
+chat log scrolls with `PgUp` / `PgDn` (and the mouse wheel).
 
 The composer offers **inline autocomplete** for slash commands (and common
 argument variants such as `/model deepseek` or `/failover on`): type `/`, then
@@ -75,6 +81,8 @@ Turns run in a **background worker** so the UI stays responsive during long agen
 | --- | --- | --- |
 | Multi-session sidebar | ✅ | ✅ (`/find` filter) |
 | Fork session | ✅ button | ✅ `f` key |
+| Rename / delete session | ✅ | ✅ `/rename` · `/delete` |
+| Chat history search | ✅ | ✅ `/search` |
 | Session cost/budget | ✅ panel | ✅ status bar |
 | Span waterfall | ✅ Jaeger tree | Per-turn hierarchical tree |
 | Token/context inspector | ✅ Trace tab | `v` verbose: token split + context % |
@@ -124,5 +132,8 @@ adding learning value. A "trace explorer in the TUI" is **out of scope**.
 
 - `src/harnesslab/tui/app.py` — Textual app (layout, workers, bindings)
 - `src/harnesslab/tui/span_feed.py` — span → Rich markup formatter
+- `src/harnesslab/tui/session_list.py` — sidebar label / filter / status helpers
+- `src/harnesslab/tui/settings_actions.py` — slash parsing, command catalog, model/failover
+- `src/harnesslab/tui/history.py` — chat history search
 
 See also [`docs/architecture/tui-stack-options.md`](../architecture/tui-stack-options.md).

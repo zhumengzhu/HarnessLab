@@ -16,6 +16,9 @@ class InMemorySessionStore:
     def save(self, session: Session) -> None:
         self._data[session.id] = session
 
+    def delete(self, session_id: str) -> None:
+        self._data.pop(session_id, None)
+
     def list(
         self,
         *,

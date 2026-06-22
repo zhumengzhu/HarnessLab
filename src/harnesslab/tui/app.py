@@ -13,6 +13,7 @@ from harnesslab.core.operator_config import OperatorConfig, load_operator_config
 from harnesslab.core.stream_context import bind_stream_sink, reset_stream_sink
 from harnesslab.replay.span_reader import read_spans
 from harnesslab.telemetry.recorder_factory import default_spans_path
+from harnesslab.tui.history import search_messages
 from harnesslab.tui.session_list import (
     filter_sessions,
     format_status_line,
@@ -75,6 +76,8 @@ def run_tui(workspace_root: Path) -> None:
             ("r", "refresh_sessions", "Refresh"),
             ("v", "toggle_verbose", "Verbose"),
             ("y", "copy_reply", "Copy"),
+            ("pageup", "scroll_chat_up", "Scroll up"),
+            ("pagedown", "scroll_chat_down", "Scroll down"),
             ("escape", "cancel_turn", "Stop"),
             ("?", "show_help", "Help"),
             ("s", "show_settings", "Settings"),
@@ -248,6 +251,12 @@ def run_tui(workspace_root: Path) -> None:
             self.copy_to_clipboard(self._last_reply)
             chat.write("[dim]copied last reply to clipboard[/dim]")
 
+        def action_scroll_chat_up(self) -> None:
+            self.query_one("#chat-log", RichLog).scroll_page_up()
+
+        def action_scroll_chat_down(self) -> None:
+            self.query_one("#chat-log", RichLog).scroll_page_down()
+
         def action_show_settings(self) -> None:
             chat = self.query_one("#chat-log", RichLog)
             chat.write(f"[dim]{format_settings_summary(self._operator_config)}[/dim]")
@@ -266,6 +275,15 @@ def run_tui(workspace_root: Path) -> None:
                 return True
             if command == "/copy":
                 self.action_copy_reply()
+                return True
+            if command == "/search":
+                self._handle_search(" ".join(args))
+                return True
+            if command == "/rename":
+                self._handle_rename(" ".join(args))
+                return True
+            if command == "/delete":
+                self._handle_delete()
                 return True
             if command == "/find":
                 self._session_filter = " ".join(args)
@@ -312,6 +330,56 @@ def run_tui(workspace_root: Path) -> None:
                     chat.write(f"[red]model switch failed: {exc}[/red]")
                 return True
             return False
+
+        def _handle_search(self, query: str) -> None:
+            chat = self.query_one("#chat-log", RichLog)
+            if not query.strip():
+                chat.write("[yellow]/search <query>[/yellow]")
+                return
+            hits = search_messages(self._session.messages, query)
+            if not hits:
+                chat.write(f"[dim]no matches for {query.strip()!r}[/dim]")
+                return
+            chat.write(f"[green]{len(hits)} match(es) for[/green] {query.strip()}")
+            for hit in hits:
+                chat.write(f"[dim]#{hit.index} {hit.role}:[/dim] {hit.snippet}")
+
+        def _handle_rename(self, title: str) -> None:
+            chat = self.query_one("#chat-log", RichLog)
+            new_title = title.strip()
+            if not new_title:
+                chat.write("[yellow]/rename <new title>[/yellow]")
+                return
+            self._session.title = new_title
+            self._loop._sessions.save(self._session)  # noqa: SLF001
+            self._refresh_sessions(select_id=self._session.id)
+            chat.write(f"[green]renamed[/green] → {new_title}")
+
+        def _handle_delete(self) -> None:
+            chat = self.query_one("#chat-log", RichLog)
+            if self._busy:
+                chat.write("[yellow]turn in progress…[/yellow]")
+                return
+            deleted_id = self._session.id
+            self._loop._sessions.delete(deleted_id)  # noqa: SLF001
+            remaining = self._loop._sessions.list(limit=1)  # noqa: SLF001
+            if remaining:
+                self._session = self._loop._sessions.get(remaining[0].id)  # noqa: SLF001
+            else:
+                self._session = self._loop.start(goal="TUI session")
+            self._session_filter = ""
+            self._span_feed.reset()
+            chat.clear()
+            self.query_one("#trace-pane", RichLog).clear()
+            chat.write(f"[dim]deleted session {deleted_id}[/dim]")
+            chat.write(f"[dim]switched to session {self._session.id}[/dim]")
+            for message in self._session.messages:
+                self._render_message(chat, message.role, message.content)
+            self._refresh_trace_tree()
+            self._refresh_sessions(select_id=self._session.id)
+            self._update_status()
+            self._sync_input_placeholder()
+            self._sync_last_reply()
 
         @on(Input.Submitted)
         def _on_input(self, event: Input.Submitted) -> None:

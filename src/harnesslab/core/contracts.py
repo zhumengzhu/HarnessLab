@@ -55,6 +55,15 @@ class SessionStorePort(Protocol):
         """
         ...
 
+    def delete(self, session_id: str) -> None:
+        """Remove a session (and its messages) by id.
+
+        Idempotent: deleting an unknown id is a no-op, not an error.
+        Child sessions are not cascaded; callers that care about lineage
+        should delete children explicitly.
+        """
+        ...
+
 
 class MemoryStorePort(Protocol):
     def put(self, key: str, value: str) -> None: ...
