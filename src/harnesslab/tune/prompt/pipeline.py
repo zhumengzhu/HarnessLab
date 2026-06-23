@@ -10,21 +10,23 @@ from __future__ import annotations
 from datetime import datetime
 
 from harnesslab.core.config import RuntimeLimits
-from harnesslab.eval.task import TaskSuite
 from harnesslab.tune.prompt.benchmark import ModelFactory, PromptBenchmark
 from harnesslab.tune.prompt.candidate import PromptCandidate, baseline_candidate
+from harnesslab.tune.prompt.judge import Judge
 from harnesslab.tune.prompt.report import PromptTuneReport, build_prompt_report
 from harnesslab.tune.prompt.selection import rank_candidates
+from harnesslab.tune.prompt.suite import PromptBenchmarkSuite
 
 
 def run_prompt_tuning(
     *,
     candidates: list[PromptCandidate],
-    suite: TaskSuite,
+    suite: PromptBenchmarkSuite,
     model_factory: ModelFactory,
     instruction: str = "",
     repeats: int = 1,
     base_limits: RuntimeLimits | None = None,
+    judge: Judge | None = None,
     baseline: PromptCandidate | None = None,
     now: datetime | None = None,
 ) -> PromptTuneReport:
@@ -39,7 +41,11 @@ def run_prompt_tuning(
         pool.append(cand)
 
     benchmark = PromptBenchmark(
-        suite, model_factory, repeats=repeats, base_limits=base_limits
+        suite,
+        model_factory,
+        repeats=repeats,
+        base_limits=base_limits,
+        judge=judge,
     )
     scored = [(cand, benchmark.run(cand)) for cand in pool]
     rankings = rank_candidates(scored)

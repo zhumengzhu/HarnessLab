@@ -5,9 +5,13 @@ from __future__ import annotations
 import pytest
 
 from harnesslab.core.models import Decision
-from harnesslab.eval.task import Task, TaskExpected, TaskSuite, TaskTurn
-from harnesslab.tune.prompt.benchmark import PromptBenchmark, passes_task
+from harnesslab.tune.prompt.benchmark import PromptBenchmark
 from harnesslab.tune.prompt.candidate import PromptCandidate
+from harnesslab.tune.prompt.suite import (
+    PromptBenchmarkSuite,
+    PromptBenchmarkTask,
+    PromptCheck,
+)
 
 
 class _FinalModel:
@@ -21,30 +25,31 @@ class _FinalModel:
 
 
 def _factory(candidate: PromptCandidate) -> _FinalModel:
-    reply = "the answer is 42" if "GOOD" in candidate.system_prompt else "no clue"
+    # A "good" (terse) prompt yields a short, on-target reply that passes both
+    # the substring and the max_chars check; a "bad" prompt is verbose.
+    reply = "42" if "GOOD" in candidate.system_prompt else "the answer is clearly 42"
     return _FinalModel(reply)
 
 
-def _suite(needle: str = "42") -> TaskSuite:
-    task = Task(
-        name="solve",
-        goal="solve it",
-        turns=[TaskTurn(input="please solve")],
-        expected=TaskExpected(final_reply_contains=[needle]),
+def _suite() -> PromptBenchmarkSuite:
+    return PromptBenchmarkSuite(
+        tasks=[
+            PromptBenchmarkTask(
+                id="solve",
+                input="please solve",
+                checks=[
+                    PromptCheck(kind="contains", value="42"),
+                    PromptCheck(kind="max_chars", limit=8),
+                ],
+            )
+        ]
     )
-    return TaskSuite(tasks=[task])
-
-
-def test_passes_task_substring_only() -> None:
-    task = _suite("42").tasks[0]
-    assert passes_task(task, "the answer is 42")
-    assert not passes_task(task, "no number here")
 
 
 def test_benchmark_distinguishes_good_and_bad_candidate() -> None:
     bench = PromptBenchmark(_suite(), _factory)
-    good = bench.run(PromptCandidate.from_text("GOOD: answer 42"))
-    bad = bench.run(PromptCandidate.from_text("BAD prompt"))
+    good = bench.run(PromptCandidate.from_text("GOOD: answer tersely"))
+    bad = bench.run(PromptCandidate.from_text("BAD verbose prompt"))
     assert good.passes == good.trials == 1
     assert bad.passes == 0
     assert bad.trials == 1
@@ -56,6 +61,28 @@ def test_repeats_multiply_trials() -> None:
     assert result.trials == 3
     assert result.passes == 3
     assert result.pass_rate == 1.0
+
+
+def test_judge_check_is_invoked() -> None:
+    suite = PromptBenchmarkSuite(
+        tasks=[
+            PromptBenchmarkTask(
+                id="graded",
+                input="q",
+                checks=[PromptCheck(kind="judge", value="terse")],
+            )
+        ]
+    )
+    calls: list[str] = []
+
+    def judge(task_input: str, rubric: str, reply: str) -> bool:
+        calls.append(rubric)
+        return "42" in reply
+
+    bench = PromptBenchmark(suite, _factory, judge=judge)
+    good = bench.run(PromptCandidate.from_text("GOOD"))
+    assert good.passes == 1
+    assert calls == ["terse"]
 
 
 def test_repeats_must_be_positive() -> None:

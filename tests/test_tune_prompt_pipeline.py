@@ -3,9 +3,13 @@
 from __future__ import annotations
 
 from harnesslab.core.models import Decision
-from harnesslab.eval.task import Task, TaskExpected, TaskSuite, TaskTurn
 from harnesslab.tune.prompt.candidate import PromptCandidate, baseline_candidate
 from harnesslab.tune.prompt.pipeline import run_prompt_tuning
+from harnesslab.tune.prompt.suite import (
+    PromptBenchmarkSuite,
+    PromptBenchmarkTask,
+    PromptCheck,
+)
 
 
 class _FinalModel:
@@ -17,18 +21,20 @@ class _FinalModel:
 
 
 def _factory(candidate: PromptCandidate) -> _FinalModel:
-    reply = "the answer is 42" if "GOOD" in candidate.system_prompt else "no clue"
+    reply = "42" if "GOOD" in candidate.system_prompt else "the answer is clearly 42"
     return _FinalModel(reply)
 
 
-def _suite() -> TaskSuite:
-    return TaskSuite(
+def _suite() -> PromptBenchmarkSuite:
+    return PromptBenchmarkSuite(
         tasks=[
-            Task(
-                name="solve",
-                goal="solve it",
-                turns=[TaskTurn(input="please solve")],
-                expected=TaskExpected(final_reply_contains=["42"]),
+            PromptBenchmarkTask(
+                id="solve",
+                input="please solve",
+                checks=[
+                    PromptCheck(kind="contains", value="42"),
+                    PromptCheck(kind="max_chars", limit=8),
+                ],
             )
         ]
     )

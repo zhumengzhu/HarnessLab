@@ -429,9 +429,12 @@ prompt** itself, which the deterministic eval models cannot score. Candidates
 come from one of two mutually-exclusive sources — `--candidates <frozen.json>`
 (produced upstream by any means) or `--generate "<instruction>" --n N` (live
 LLM generation that **freezes** the candidates to disk before scoring). The
-command then scores each candidate against a **live model**
-benchmark (the production loop with `composer=candidate.composer()`, scored by
-`final_reply_contains` substring presence), and ranks them by a Beta-Binomial
+command then scores each candidate against a **live model** benchmark (the
+production loop with `composer=candidate.composer()`), using a prompt-quality
+suite that is **decoupled from `eval`**: checks such as `contains`,
+`not_contains`, `regex`, `equals`, `max_chars`, and optional LLM `judge`.
+The default bundled suite rewards terse, instruction-following replies; override
+with `--benchmark-dir` (YAML). Candidates are ranked by a Beta-Binomial
 **success-rate** posterior that reuses the Layer A estimator
 (`src/harnesslab/improve/scoring.py`, with the pass count as numerator). The
 baseline prompt is always benchmarked alongside, and the best candidate becomes

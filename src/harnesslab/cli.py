@@ -115,11 +115,14 @@ from harnesslab.tune import (
     write_report,
 )
 from harnesslab.tune.prompt import (
+    DEFAULT_BENCHMARK_SUITE,
     ModelCandidateGenerator,
     default_system_prompt,
     freeze_candidates,
     generation_composer,
+    load_benchmark_suite,
     load_candidates,
+    make_model_judge,
     make_model_text_generator,
     run_prompt_tuning,
     write_prompt_report,
@@ -1000,21 +1003,13 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     tp.add_argument(
         "--benchmark-dir",
-        default=DEFAULT_TASKS_DIR,
+        default=None,
         help=(
-            "Directory of *.yaml benchmark tasks scored by final_reply_contains "
-            f"(default: {DEFAULT_TASKS_DIR})."
+            "Directory or YAML file of prompt-quality benchmark tasks "
+            "(checks: contains/not_contains/regex/equals/max_chars/judge). "
+            "Default: a bundled suite that rewards terse, instruction-following "
+            "prompts."
         ),
-    )
-    tp.add_argument(
-        "--task",
-        default=None,
-        help="Benchmark against a single task by file stem (faster iteration).",
-    )
-    tp.add_argument(
-        "--skip-tags",
-        default=None,
-        help="Comma-separated task tags to skip (also reads HARNESSLAB_EVAL_SKIP_TAGS).",
     )
     tp.add_argument(
         "--model",
@@ -1022,6 +1017,14 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Live model backend for the benchmark (deepseek/anthropic/openai/"
             "gemini). 'simple' is rejected: it ignores the system prompt."
+        ),
+    )
+    tp.add_argument(
+        "--judge-model",
+        default=None,
+        help=(
+            "Live backend used to grade 'judge' checks (LLM-as-judge). Only "
+            "needed when a benchmark task declares a judge check."
         ),
     )
     tp.add_argument(
@@ -1891,12 +1894,28 @@ def _cmd_tune_prompt(args: argparse.Namespace) -> int:
             print("candidates file is empty", file=sys.stderr)
             return EXIT_USAGE
 
-    tasks_dir = Path(args.benchmark_dir)
-    suite = _load_suite_or_single(tasks_dir, args.task)
-    suite = _filter_suite_by_tags(suite, _eval_skip_tags(args))
+    if args.benchmark_dir:
+        suite = load_benchmark_suite(Path(args.benchmark_dir))
+    else:
+        suite = DEFAULT_BENCHMARK_SUITE
     if not suite.tasks:
-        print("no benchmark tasks (all filtered out)", file=sys.stderr)
+        print("benchmark suite has no tasks", file=sys.stderr)
         return EXIT_USAGE
+
+    judge = None
+    if args.judge_model:
+        judge_backend = normalize_backend(args.judge_model)
+        if judge_backend == "simple":
+            print("--judge-model needs a live backend, not 'simple'", file=sys.stderr)
+            return EXIT_USAGE
+        judge_model = create_model(
+            judge_backend,
+            config=config,
+            composer=generation_composer(),
+            tool_specs_provider=lambda: [],
+            dynamic_blocks_provider=lambda _session: [],
+        )
+        judge = make_model_judge(judge_model)
 
     tmp_workspace = Path(tempfile.mkdtemp(prefix="hl-tune-prompt-"))
     tool_specs = tool_specs_from_registry(
@@ -1918,6 +1937,7 @@ def _cmd_tune_prompt(args: argparse.Namespace) -> int:
         model_factory=factory,
         instruction=args.instruction or args.generate or "",
         repeats=args.repeats,
+        judge=judge,
     )
 
     if args.format == "json":

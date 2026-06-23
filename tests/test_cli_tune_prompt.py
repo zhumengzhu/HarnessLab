@@ -9,7 +9,6 @@ import pytest
 
 from harnesslab import cli
 from harnesslab.core.models import Decision
-from harnesslab.eval.task import Task, TaskExpected, TaskSuite, TaskTurn
 from harnesslab.tune.prompt.candidate import PromptCandidate, freeze_candidates
 
 
@@ -25,6 +24,13 @@ def _run(monkeypatch: pytest.MonkeyPatch, argv: list[str]) -> int:
     with pytest.raises(SystemExit) as exc:
         cli.main()
     return int(exc.value.code)
+
+
+class _FinalModel:
+    """Always answers '42' — passes some default-suite checks, not others."""
+
+    def decide(self, session, user_input):  # noqa: ANN001, ANN201
+        return Decision(kind="final", assistant_message="42")
 
 
 def test_missing_candidates_file_is_usage_error(
@@ -67,6 +73,18 @@ def test_simple_backend_is_rejected(
     assert code == cli.EXIT_USAGE
 
 
+def test_judge_simple_backend_is_rejected(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = _write_candidates(tmp_path / "cands.json")
+    monkeypatch.setattr(cli, "create_model", lambda *a, **k: _FinalModel())
+    code = _run(
+        monkeypatch,
+        ["--candidates", str(path), "--model", "deepseek", "--judge-model", "simple"],
+    )
+    assert code == cli.EXIT_USAGE
+
+
 def test_md_path_writes_proposal_with_fake_model(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -75,27 +93,7 @@ def test_md_path_writes_proposal_with_fake_model(
     path = _write_candidates(tmp_path / "cands.json")
     out = tmp_path / "props"
 
-    class _FinalModel:
-        def decide(self, session, user_input):  # noqa: ANN001, ANN201
-            return Decision(kind="final", assistant_message="the answer is 42")
-
-    def _fake_create_model(*_args, **_kwargs):  # noqa: ANN002, ANN003
-        return _FinalModel()
-
-    def _fake_suite(*_args, **_kwargs):  # noqa: ANN002, ANN003
-        return TaskSuite(
-            tasks=[
-                Task(
-                    name="solve",
-                    goal="g",
-                    turns=[TaskTurn(input="solve")],
-                    expected=TaskExpected(final_reply_contains=["42"]),
-                )
-            ]
-        )
-
-    monkeypatch.setattr(cli, "create_model", _fake_create_model)
-    monkeypatch.setattr(cli, "_load_suite_or_single", _fake_suite)
+    monkeypatch.setattr(cli, "create_model", lambda *a, **k: _FinalModel())
 
     code = _run(
         monkeypatch,
@@ -110,6 +108,44 @@ def test_md_path_writes_proposal_with_fake_model(
     assert "wrote " in stdout
 
 
+def test_custom_benchmark_dir_is_loaded(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = _write_candidates(tmp_path / "cands.json")
+    out = tmp_path / "props"
+    bench = tmp_path / "bench"
+    bench.mkdir()
+    (bench / "only.yaml").write_text(
+        "input: solve\nchecks:\n  - kind: contains\n    value: '42'\n",
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(cli, "create_model", lambda *a, **k: _FinalModel())
+
+    code = _run(
+        monkeypatch,
+        [
+            "--candidates",
+            str(path),
+            "--model",
+            "deepseek",
+            "--benchmark-dir",
+            str(bench),
+            "--out",
+            str(out),
+            "--format",
+            "json",
+        ],
+    )
+    stdout = capsys.readouterr().out
+    assert code == cli.EXIT_OK
+    payload = json.loads(stdout)
+    # Single-task suite with one trivially-passing check.
+    assert payload["benchmark_tasks"] == 1
+
+
 def test_json_path_does_not_touch_disk(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,
@@ -118,25 +154,7 @@ def test_json_path_does_not_touch_disk(
     path = _write_candidates(tmp_path / "cands.json")
     out = tmp_path / "props"
 
-    class _FinalModel:
-        def decide(self, session, user_input):  # noqa: ANN001, ANN201
-            return Decision(kind="final", assistant_message="the answer is 42")
-
     monkeypatch.setattr(cli, "create_model", lambda *a, **k: _FinalModel())
-    monkeypatch.setattr(
-        cli,
-        "_load_suite_or_single",
-        lambda *a, **k: TaskSuite(
-            tasks=[
-                Task(
-                    name="solve",
-                    goal="g",
-                    turns=[TaskTurn(input="solve")],
-                    expected=TaskExpected(final_reply_contains=["42"]),
-                )
-            ]
-        ),
-    )
 
     code = _run(
         monkeypatch,
@@ -175,23 +193,9 @@ def test_generate_flow_freezes_candidates_and_writes_report(
                     kind="final",
                     assistant_message='["GOOD: answer 42", "ALT: be terse"]',
                 )
-            return Decision(kind="final", assistant_message="the answer is 42")
+            return Decision(kind="final", assistant_message="42")
 
     monkeypatch.setattr(cli, "create_model", lambda *a, **k: _DualModel())
-    monkeypatch.setattr(
-        cli,
-        "_load_suite_or_single",
-        lambda *a, **k: TaskSuite(
-            tasks=[
-                Task(
-                    name="solve",
-                    goal="g",
-                    turns=[TaskTurn(input="solve")],
-                    expected=TaskExpected(final_reply_contains=["42"]),
-                )
-            ]
-        ),
-    )
 
     code = _run(
         monkeypatch,

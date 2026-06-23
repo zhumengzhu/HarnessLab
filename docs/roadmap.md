@@ -29,6 +29,8 @@ HarnessLab is a local, single-process harness built for learning (see
 6. `telemetry`: run trace and metrics aggregation
 7. `eval` / `replay` / `improve`: regression, divergence, proposals
 8. `providers`: external `ModelPort` adapters
+9. `tune`: Bayesian self-evolution — GP config search (B1) + LLM prompt
+   tuning scored by a live-model benchmark (B2); both advisory
 
 ## Step Model (Not a Timeline)
 
@@ -995,7 +997,29 @@ ship with tests + doc updates per `AGENTS.md`.
 
 **Priority note (2026-06):** Phase 6–7, Observability v2, P0 provider parity, and Trace
 operator polish (replay UI, ⌘F search, line-level prompt diff, HTML export) are **complete**.
-Next: P3 live provider smoke (CI optional lane).
+Bayesian self-evolution Layers A/B1/B2 are **complete** (see below), including
+the B2 prompt-quality benchmark suite. Also open: P3 live provider smoke (CI
+optional lane).
+
+### P1.5 — Bayesian self-evolution (`improve` + `tune`)
+
+Design: [`research/bayesian-self-evolution.md`](research/bayesian-self-evolution.md).
+Turns the advisory Improvement Loop from frequency counting into a layered
+Bayesian design. Every layer is **advisory** — nothing auto-applies.
+
+| Layer | What | Status |
+| --- | --- | --- |
+| **A — Estimation** | Beta-Binomial posterior failure-rate + credible interval ranking on `harnesslab propose` | **Done** |
+| **B1 — Config tuning** | Deterministic GP Bayesian optimization over runtime knobs, scored by the eval suite (`harnesslab tune`) | **Done** (weak lever: deterministic eval is insensitive to most knobs) |
+| **B2 — Prompt tuning** | LLM-generated prompt candidates scored by an isolated **live-model** benchmark, ranked by Beta-Binomial success posterior (`harnesslab tune-prompt`) | **Done**; live smoke verified |
+| **B2 — Live benchmark + scorers** | Discriminating prompt-quality benchmark (decoupled from eval) + richer scorers (contains/not_contains/regex/equals/max_chars/LLM-judge) so the ranking is meaningful for real users | **Done** |
+| **C — Online selection** | Thompson / dueling-bandit selection on the `run` path, default OFF | **Design only** |
+
+> **Honest status:** the B2 *plumbing* and a *discriminating default benchmark*
+> are shipped. Ranking value still depends on task quality — extend
+> `--benchmark-dir` for your domain. B1's mechanism is correct but its lever is
+> weak because the deterministic eval suite barely reacts to the knobs it tunes;
+> it is positioned as experimental/teaching.
 
 ### P0 — Correctness & provider parity
 

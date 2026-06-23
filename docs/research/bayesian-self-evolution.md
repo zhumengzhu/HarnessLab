@@ -174,7 +174,16 @@ Implementation lives in `src/harnesslab/tune/prompt/`:
   text), so the CLI can drive generation through the same provider stack.
 - `benchmark.py` — `PromptBenchmark` drives the production loop with an
   injectable `ModelFactory` (a real provider with `composer=candidate.composer()`)
-  and scores each task by `final_reply_contains` substring presence.
+  and scores each task with the prompt-quality checks in `suite.py` (not the
+  eval `Task` contract).
+- `suite.py` — `PromptBenchmarkSuite` / `PromptCheck` / `score_reply`: a
+  benchmark decoupled from `eval`. Check kinds: `contains`, `not_contains`,
+  `regex`, `iregex`, `equals`, `max_chars`, optional `judge`. Ships
+  `DEFAULT_BENCHMARK_SUITE` (five single-turn tasks that reward terse,
+  instruction-following prompts). YAML loader for `--benchmark-dir`.
+- `judge.py` — injectable `Judge` + `make_model_judge(ModelPort)` for
+  LLM-as-judge checks (opt-in via `--judge-model`; default suite uses only
+  deterministic checks).
 - `selection.py` — ranks candidates by a Beta-Binomial **success-rate**
   posterior, **reusing the Layer A estimator** (the pass count is the
   numerator); ranking is by lower credible bound so thin evidence is penalised.
@@ -184,7 +193,9 @@ Implementation lives in `src/harnesslab/tune/prompt/`:
   `--candidates <frozen.json>` (produced upstream by any means) or
   `--generate "<instruction>" --n N` (live LLM generation that freezes the
   candidates to `--save-candidates` before benchmarking). `--model` selects the
-  live backend; `simple` is rejected.
+  live backend; `simple` is rejected. Default benchmark: bundled suite; override
+  with `--benchmark-dir` (YAML file or directory). Optional `--judge-model` for
+  tasks that declare a `judge` check.
 
 **Scoring is a LIVE-model benchmark, not the deterministic `eval` suite.**
 This corrects the original B2 sketch (which assumed `eval` would score the
