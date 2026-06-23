@@ -58,8 +58,8 @@ from harnesslab.tools.shell_tool import RunShellSafeTool
 from harnesslab.tools.spawn_sub_agent import SpawnSubAgentTool
 
 
-def _limits_for_task(task: Task) -> RuntimeLimits:
-    base = RuntimeLimits()
+def _limits_for_task(task: Task, base: RuntimeLimits | None = None) -> RuntimeLimits:
+    base = base or RuntimeLimits()
     if task.limits is None:
         return base
     return replace(base, **task.limits.model_dump(exclude_none=True))
@@ -424,10 +424,25 @@ def _format_missing_span(expected: ExpectedSpan) -> str:
 
 
 class TaskRunner:
-    """Drive HarnessLoop end-to-end for each task, in isolation."""
+    """Drive HarnessLoop end-to-end for each task, in isolation.
 
-    def __init__(self, clock_start: datetime | None = None) -> None:
+    ``base_limits`` / ``shell_profile`` let an offline config search (the
+    Bayesian tuner, ``docs/research/bayesian-self-evolution.md`` Layer B1)
+    score a candidate runtime configuration against the suite. Per-task
+    ``limits`` / ``policy`` overrides still win so each task preserves the
+    behaviour it was written to exercise.
+    """
+
+    def __init__(
+        self,
+        clock_start: datetime | None = None,
+        *,
+        base_limits: RuntimeLimits | None = None,
+        shell_profile: str | None = None,
+    ) -> None:
         self._clock_start = clock_start or DEFAULT_REPLAY_CLOCK_START
+        self._base_limits = base_limits or RuntimeLimits()
+        self._shell_profile = shell_profile
 
     def run(self, suite: TaskSuite) -> list[TaskResult]:
         return [self.run_one(t) for t in suite.tasks]
@@ -441,7 +456,7 @@ class TaskRunner:
     def _drive_loop(
         self, task: Task, workspace: Path
     ) -> tuple[list[SpanRecord], str]:
-        limits = _limits_for_task(task)
+        limits = _limits_for_task(task, self._base_limits)
         tools = _build_tool_registry(workspace, limits)
         memory = InMemoryMemoryStore()
 
@@ -469,7 +484,9 @@ class TaskRunner:
             policy=DefaultPolicy(
                 workspace_root=workspace,
                 shell_profile=(
-                    task.policy.shell_profile if task.policy is not None else None
+                    task.policy.shell_profile
+                    if task.policy is not None and task.policy.shell_profile is not None
+                    else self._shell_profile
                 ),
                 enable_spawn_sub_agent=True,
             ),

@@ -65,7 +65,9 @@ Must NOT include yet:
 - Vector embedding RAG with auto-write (FTS5 semantic search PoC only)
 - Distributed runtime
 - Plugin marketplace complexity / model-initiated skill install
-- Uncontrolled self-modifying pipelines
+- Uncontrolled self-modifying pipelines (the Layer B2 prompt tuner may use an
+  LLM to *generate* candidate prompts, but only as **advisory, human-accepted**
+  proposals scored by an isolated live-model benchmark — never auto-applied)
 - Official OpenAI/Anthropic SDK adapters (MVP uses `httpx`; migrate in
   post-MVP provider expansion)
 
@@ -105,7 +107,15 @@ Must NOT include yet:
 - `src/harnesslab/providers`: external `ModelPort` adapters (e.g. DeepSeek)
 - `src/harnesslab/eval`: YAML task suite and regression runner
 - `src/harnesslab/replay`: span reader, replayer, divergence detector
-- `src/harnesslab/improve`: advisory proposal generator
+- `src/harnesslab/improve`: advisory proposal generator (Beta-Binomial
+  failure-rate scoring — Bayesian self-evolution Layer A)
+- `src/harnesslab/tune`: deterministic GP Bayesian optimization over runtime
+  knobs scored by the eval suite (`harnesslab tune`; Layer B1); advisory
+  `config_tuning` proposals, never auto-applied. `tune/prompt/` adds LLM
+  prompt-candidate generation scored by an isolated live-model benchmark and
+  ranked by a Beta-Binomial success posterior (`harnesslab tune-prompt`; Layer
+  B2); advisory `prompt_tuning` proposals, never auto-applied. See
+  [`docs/research/bayesian-self-evolution.md`](docs/research/bayesian-self-evolution.md)
 - `src/harnesslab/web`: localhost Web UI (`harnesslab serve`); lifecycle
   helper `./hl-serve` (`scripts/hl_serve.py`)
 - `tests`: unit and contract tests
@@ -258,12 +268,26 @@ one editing this repo) and every human contributor.
    - The proposal id is `prop_<YYYYMMDDhhmm>_<sha1(signature)[:8]>`,
      stable for a given (signature, generated_at minute).
 
-5. **No LLM in the proposal pipeline.**
-   - `suggested_actions` come from hand-written templates keyed by
-     cluster kind (`src/harnesslab/improve/templates.py`).
-   - Do not wire an LLM call into the proposal generator without first
-     updating this section, `docs/architecture/overview.md` Improvement
-     Loop, and the Non-Goals in the same change.
+5. **No LLM in the `improve` proposal generator.**
+   - The `improve` failure-proposal generator stays LLM-free:
+     `suggested_actions` come from hand-written templates keyed by cluster
+     kind (`src/harnesslab/improve/templates.py`). Do not wire an LLM call
+     into `harnesslab propose` without first updating this section,
+     `docs/architecture/overview.md` Improvement Loop, and the Non-Goals in
+     the same change.
+   - **Amendment (2026-06): LLM candidate generation is permitted in the
+     prompt tuner (`src/harnesslab/tune/prompt/`, Bayesian self-evolution
+     Layer B2)** under strict conditions:
+     - An LLM may *generate* candidate prompt variants offline; candidates
+       are **frozen/serialized** before scoring (generation/scoring
+       separation).
+     - The scoring path is a **live-model benchmark that is isolated from
+       `eval` / `replay`** — it must never make the deterministic
+       eval/replay paths non-deterministic.
+     - Output remains an **advisory** proposal; it is never auto-applied,
+       and status transitions stay human-driven.
+     - Provider secrets come from env vars only; this path is opt-in and
+       off by default.
 
 ## Prohibited Practices
 

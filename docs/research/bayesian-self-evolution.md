@@ -1,11 +1,14 @@
 # Bayesian Self-Evolution — Design Proposal
 
-Status: **design proposal** (2026-06). Not yet implemented. This document
-extends the advisory Improvement Loop
+Status: **partially implemented** (2026-06). Layer A (Beta-Binomial failure
+estimation), Layer B1 (deterministic GP config tuning), and Layer B2
+(LLM-generated prompt candidates scored by an isolated live-model benchmark)
+are **implemented**; Layer C (online bandit selection) remains a design
+proposal. This document extends the advisory Improvement Loop
 ([`docs/architecture/overview.md`](../architecture/overview.md) §"Improvement
 Loop") from a frequency-count heuristic toward a layered Bayesian design.
-It is awaiting a human decision on the open questions in
-[§7](#7-open-decisions-binding-rules-affected) before any code lands.
+The §7.1(b) rule amendment required for B2 landed in AGENTS.md "Proposal
+Handling" §5.
 
 ## 1. Motivation
 
@@ -114,6 +117,17 @@ flowchart TD
 
 ### Layer B — Bayesian Optimization (core "evolution", mirrors MIPROv2)
 
+> **Implementation finding (2026-06).** The deterministic eval models
+> (`SimpleModel` / `ReplayModel`) do **not** read the composed prompt or
+> sampling params — they parse `user_input` directly. So the "eval suite as
+> utility" lever only scores knobs the deterministic loop reacts to:
+> `RuntimeLimits`, `shell_profile`, and budget. Optimizing prompt **text** or
+> temperature against the deterministic eval would be optimizing against a
+> constant. Prompt/sampling optimization therefore requires a *live-model*
+> benchmark (non-deterministic, isolated from eval/replay) and is deferred to
+> B2 alongside LLM candidate generation. **B1 below was re-scoped to the
+> deterministically-scorable knob space accordingly.**
+
 - **what** = context (`PromptComposer` blocks) + policy/tool config · **when**
   = inter-test-time, offline · **how** = sequential BO (TPE/GP).
 - Use the `eval` suite as `U`. Run sequential Bayesian optimization over
@@ -125,31 +139,69 @@ flowchart TD
 The search space splits into two sub-spaces with different industry-standard
 candidate-generation methods. We adopt them in two sub-phases:
 
-**B1 — structural / numeric knobs (no LLM, do first).** Which prompt blocks
-are enabled and their ordering, temperature / top-p, shell profile
-(`dev` / `read_only` / `strict`), few-shot count, etc. This is a finite,
-low-dimensional space where deterministic Bayesian optimization is exactly the
-right tool — and it is precisely the sub-space the field already optimizes
-without an LLM ("Bayesian optimization is best for the combination of small
-settings like temperature or top-p"). B1 stays inside every binding rule:
-deterministic, no network/credential dependency, no rule amendment needed.
+**B1 — deterministically-scorable knobs (no LLM)** — **IMPLEMENTED (2026-06)**.
+The `RuntimeLimits` fields (compaction thresholds, context window, output cap)
+plus `shell_profile` — the knobs the deterministic eval actually reacts to.
+This is a finite, low-dimensional space where deterministic Bayesian
+optimization is exactly the right tool, and it stays inside every binding
+rule: deterministic, no network/credential dependency, no rule amendment.
 
-**B2 — free-form instruction text (controlled LLM, do second).** Rewriting
-the *wording* of a prompt block is a combinatorially infinite semantic space;
-templates/grids hit a hard ceiling, and the field is near-unanimous that an
-LLM must *generate* the candidates (OPRO, MIPROv2 proposer, EvoPrompt, GEPA,
-TextGrad, PDO mutation). B2 requires the §7.1(b) rule amendment and is gated
-behind it.
+> Shipped in `src/harnesslab/tune/` + `harnesslab tune`. A dependency-free,
+> RNG-free Gaussian-process surrogate (RBF kernel, hand-rolled Cholesky) with
+> Expected-Improvement acquisition searches the knob grid; the deterministic
+> `eval` suite is the utility (weighted cost: failed tasks dominate, then tool
+> failures / invalid args / denials, with a tiny tool-call regularizer). The
+> tuner emits an advisory `config_tuning` proposal (default-vs-best diff); it
+> is never applied automatically. See `tests/test_tune_*.py`.
 
-**Generation/scoring separation (the determinism key for B2).** Borrow the
+Note: temperature / top-p / prompt-block *text* are **not** in B1 because the
+deterministic eval cannot score them (see the finding above); they move to B2.
+
+**B2 — free-form instruction text (controlled LLM, do second).** **IMPLEMENTED
+(2026-06).** Rewriting the *wording* of the system prompt is a combinatorially
+infinite semantic space; templates/grids hit a hard ceiling, and the field is
+near-unanimous that an LLM must *generate* the candidates (OPRO, MIPROv2
+proposer, EvoPrompt, GEPA, TextGrad, PDO mutation). B2 required the §7.1(b)
+rule amendment (now landed in AGENTS.md "Proposal Handling" §5).
+
+Implementation lives in `src/harnesslab/tune/prompt/`:
+
+- `candidate.py` — `PromptCandidate` (the whole system prompt for one run) +
+  `freeze_candidates` / `load_candidates`; `StaticCandidateGenerator` and
+  `ModelCandidateGenerator` (LLM via an injectable `TextGenerator`).
+  `make_model_text_generator` wraps any `ModelPort` as a one-shot text
+  generator (stages the meta-prompt as a user message, returns the assistant
+  text), so the CLI can drive generation through the same provider stack.
+- `benchmark.py` — `PromptBenchmark` drives the production loop with an
+  injectable `ModelFactory` (a real provider with `composer=candidate.composer()`)
+  and scores each task by `final_reply_contains` substring presence.
+- `selection.py` — ranks candidates by a Beta-Binomial **success-rate**
+  posterior, **reusing the Layer A estimator** (the pass count is the
+  numerator); ranking is by lower credible bound so thin evidence is penalised.
+- `report.py` / `pipeline.py` — advisory `prompt_tuning` proposal + the
+  `run_prompt_tuning` orchestrator (baseline always benchmarked alongside).
+- CLI: `harnesslab tune-prompt`. Two candidate sources (mutually exclusive):
+  `--candidates <frozen.json>` (produced upstream by any means) or
+  `--generate "<instruction>" --n N` (live LLM generation that freezes the
+  candidates to `--save-candidates` before benchmarking). `--model` selects the
+  live backend; `simple` is rejected.
+
+**Scoring is a LIVE-model benchmark, not the deterministic `eval` suite.**
+This corrects the original B2 sketch (which assumed `eval` would score the
+candidates): the same finding that re-scoped B1 applies — `SimpleModel` /
+`ReplayModel` ignore the system prompt, so the deterministic suite cannot tell
+two prompts apart. B2 therefore scores against a real model and is **fully
+isolated from `eval` / `replay`** (like the Layer C `run` path), so it never
+makes those deterministic paths non-deterministic.
+
+**Generation/scoring separation (still the safety key for B2).** Borrow the
 MIPROv2 proposer/optimizer split: the LLM proposes candidate texts *offline*
 (non-deterministic, treated like a provider call); those candidates are
-**frozen and serialized** into an artifact; only then does the deterministic
-`eval` suite score them and the Bayesian optimizer select. `eval` / `replay`
-never see the LLM call — they only ever see frozen candidates plus
-deterministic scores. The LLM is a build-time artifact, not part of the scored
-loop, so B2 preserves the eval/replay determinism contract even with LLM
-candidate generation.
+**frozen and serialized** into a JSON artifact (`--candidates`); only then does
+the live benchmark score them and the Beta-Binomial ranking select. The LLM
+generation is a build-time artifact upstream of the scored loop, the benchmark
+is opt-in and off by default, and the output is an **advisory** proposal that
+is never auto-applied.
 
 ### Layer C — Online Bayesian Selection (optional, default OFF)
 
@@ -183,13 +235,16 @@ candidate generation.
 | --- | --- | --- | --- |
 | A — Estimation | none (closed form) | yes | pure function of counts |
 | B1 — Structural/numeric BO | seeded RNG | yes (seed-pinned) | reproducible trial log, no LLM |
-| B2 — LLM instruction candidates | LLM (offline) | yes (frozen candidates only) | generation/scoring split; scored path sees frozen artifacts + deterministic scores |
+| B2 — LLM prompt candidates | LLM generation (offline) + live-model benchmark | **no** | generation/scoring split; scoring is an isolated live benchmark, never `eval`/`replay` |
 | C — Online selection | live RNG | **no** | isolated to `run`, span-logged |
 
 The invariant: anything that touches `eval` / `replay` must be a deterministic
-function of its inputs. Closed-form posteriors (A), seed-pinned BO (B1), and
-frozen LLM-generated candidates scored deterministically (B2) all satisfy
-this; the live bandit (C) does not and is therefore fenced off.
+function of its inputs. Closed-form posteriors (A) and seed-pinned BO (B1)
+satisfy this and run on the deterministic paths. B2's LLM generation **and**
+its live-model benchmark are both non-deterministic, so — like the Layer C
+bandit (C) — B2 is fenced off from `eval` / `replay` entirely; the frozen
+candidate artifact keeps generation reproducible/reviewable even though the
+scoring is not.
 
 ## 7. Open Decisions (binding rules affected)
 
@@ -237,13 +292,16 @@ Loop".
    scorer; surface `priority` + credible interval on proposals. Small
    refactor, no red-line risk, immediate ranking improvement.
    **Done (2026-06).**
-2. **Layer B1** — define the structural/numeric config space over
-   `PromptComposer` blocks + runtime knobs and run **no-LLM** Bayesian
-   optimization against the eval suite. Core self-evolution, no rule change,
-   no network/credential dependency.
+2. **Layer B1** — define the deterministically-scorable knob space
+   (`RuntimeLimits` + `shell_profile`) and run **no-LLM** Bayesian optimization
+   against the eval suite. Core self-evolution, no rule change, no
+   network/credential dependency. **Done (2026-06)** — `harnesslab tune`.
 3. **Layer B2** — add **controlled LLM candidate generation** for free-form
-   instruction-text rewriting, using the generation/scoring separation.
-   Requires the §7.1(b) `AGENTS.md` amendment in the same change.
+   prompt rewriting, scored by an isolated **live-model benchmark** (not the
+   deterministic eval suite — `SimpleModel`/`ReplayModel` ignore prompt text),
+   ranked by a Beta-Binomial success posterior. Used the generation/scoring
+   separation (frozen candidate artifact) and the §7.1(b) `AGENTS.md`
+   amendment. **Done (2026-06)** — `harnesslab tune-prompt`.
 4. **Layer C** — explicit opt-in experimental feature, `run`-only, default
    OFF. Build last.
 

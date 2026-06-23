@@ -76,10 +76,17 @@ flowchart TD
 8. `replay`
    - Span reader, deterministic session replayer, divergence detector
    - `harnesslab replay` / `harnesslab metrics` CLI subcommands
-9. `improve`
-   - Failure fingerprinting, clustering, advisory proposal generation
-   - `harnesslab propose` CLI subcommand; proposals committed under
+9. `improve` / `tune`
+   - `improve`: failure fingerprinting, clustering, advisory proposal
+     generation with Beta-Binomial posterior failure-rate scoring (Bayesian
+     self-evolution Layer A); `harnesslab propose`, proposals committed under
      `proposals/` with explicit accept/reject lifecycle
+   - `tune`: deterministic GP Bayesian optimization over runtime knobs, scored
+     by the eval suite (Layer B1); `harnesslab tune`, advisory `config_tuning`
+     proposals. `tune/prompt/`: LLM-generated prompt candidates scored by an
+     isolated live-model benchmark and ranked by a Beta-Binomial success
+     posterior (Layer B2); `harnesslab tune-prompt`, advisory `prompt_tuning`
+     proposals
 10. `providers`
    - External `ModelPort` adapters (e.g. DeepSeek)
    - Runtime-selectable backend for `harnesslab run --model ...`
@@ -389,7 +396,9 @@ than loop misbehavior. If a divergence reflects a real regression the
 right place to encode it is a new eval task.
 
 Suggested-action text is generated from hand-written templates keyed
-by cluster `kind`. The project does not call an LLM here:
+by cluster `kind`. The `improve` generator does not call an LLM here
+(the Layer B2 prompt tuner is a separate, opt-in, advisory path that may —
+see AGENTS.md Proposal Handling §5 amendment):
 
 - It would add a network and credential dependency that the rest of
   the runtime carefully avoids.
@@ -397,6 +406,45 @@ by cluster `kind`. The project does not call an LLM here:
   artifacts of `(trace, eval_report)` plus version-pinned templates.
 - It would muddy the AGENTS.md guarantee that proposals are advisory
   and never self-modify the codebase.
+
+## Configuration Tuning (Layer B1)
+
+`harnesslab tune` runs deterministic Gaussian-process Bayesian optimization
+over the runtime knob space (`RuntimeLimits` + `shell_profile`), scored by the
+eval suite as utility, and writes an advisory `config_tuning` proposal
+(default-vs-best diff). It optimizes only knobs the **deterministic** eval
+models react to — not prompt text or sampling params, which `SimpleModel` /
+`ReplayModel` ignore. The surrogate (`src/harnesslab/tune/gp.py`) is a
+dependency-free RBF GP with Expected-Improvement acquisition and **no RNG**, so
+the search is reproducible and the proposal is a deterministic artifact of
+`(suite, search_space)`. Like improvement proposals, the suggestion is
+**advisory** and never applied automatically. Design and rationale (including
+why prompt/sampling tuning needs a live-model benchmark, deferred to B2):
+[`docs/research/bayesian-self-evolution.md`](../research/bayesian-self-evolution.md).
+
+## Prompt Tuning (Layer B2)
+
+`harnesslab tune-prompt` closes the gap B1 deferred: it tunes the **system
+prompt** itself, which the deterministic eval models cannot score. Candidates
+come from one of two mutually-exclusive sources — `--candidates <frozen.json>`
+(produced upstream by any means) or `--generate "<instruction>" --n N` (live
+LLM generation that **freezes** the candidates to disk before scoring). The
+command then scores each candidate against a **live model**
+benchmark (the production loop with `composer=candidate.composer()`, scored by
+`final_reply_contains` substring presence), and ranks them by a Beta-Binomial
+**success-rate** posterior that reuses the Layer A estimator
+(`src/harnesslab/improve/scoring.py`, with the pass count as numerator). The
+baseline prompt is always benchmarked alongside, and the best candidate becomes
+an advisory `prompt_tuning` proposal.
+
+Two safety properties make the LLM use here compatible with the project's
+rules (AGENTS.md "Proposal Handling" §5 amendment): (1) **generation/scoring
+separation** — the LLM call is offline and its output is frozen before scoring;
+(2) **isolation** — the live-model benchmark is completely separate from
+`eval` / `replay`, which stay deterministic. The proposal is **advisory** and
+never auto-applied. The benchmark is non-deterministic, so a narrow margin
+should be re-confirmed with higher `--repeats`. Modules:
+`src/harnesslab/tune/prompt/`.
 
 ## Provider Integration (Post-MVP Phase 1)
 

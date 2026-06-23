@@ -4,6 +4,7 @@ import argparse
 import json
 import os
 import sys
+import tempfile
 from dataclasses import replace
 from pathlib import Path
 from typing import Any, Literal
@@ -49,7 +50,7 @@ from harnesslab.core.tool_hooks import build_hook_runner
 from harnesslab.eval.baseline import compare, load_baseline, save_baseline
 from harnesslab.eval.loader import load_suite, load_task
 from harnesslab.eval.report import render_stdout, write_json
-from harnesslab.eval.runner import TaskRunner
+from harnesslab.eval.runner import TaskRunner, _build_tool_registry
 from harnesslab.eval.task import TaskResult, TaskSuite
 from harnesslab.improve import (
     dedupe_against_existing,
@@ -104,6 +105,25 @@ from harnesslab.tools.research_tools import (
 )
 from harnesslab.tools.shell_tool import RunShellSafeTool
 from harnesslab.tools.spawn_sub_agent import SpawnSubAgentTool
+from harnesslab.tune import (
+    DEFAULT_CONFIG,
+    DEFAULT_SEARCH_SPACE,
+    EvalObjective,
+    TrialRecord,
+    build_report,
+    optimize,
+    write_report,
+)
+from harnesslab.tune.prompt import (
+    ModelCandidateGenerator,
+    default_system_prompt,
+    freeze_candidates,
+    generation_composer,
+    load_candidates,
+    make_model_text_generator,
+    run_prompt_tuning,
+    write_prompt_report,
+)
 from harnesslab.web.server import WebRuntime, serve
 from harnesslab.web.span_hub import SpanHub
 
@@ -123,6 +143,8 @@ SUBCOMMANDS = (
     "replay",
     "metrics",
     "propose",
+    "tune",
+    "tune-prompt",
     "session",
     "artifact",
     "context",
@@ -132,6 +154,9 @@ SUBCOMMANDS = (
     "pricing",
     "tui",
 )
+
+DEFAULT_TUNE_N_INIT = 6
+DEFAULT_TUNE_N_ITER = 12
 
 EXIT_OK = 0
 EXIT_UNREPLAYABLE = 2
@@ -875,6 +900,156 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    # ----- tune -----
+    tn = sub.add_parser(
+        "tune",
+        help="Bayesian search for a better runtime config (advisory).",
+        description=(
+            "Run deterministic Gaussian-process Bayesian optimization over "
+            "runtime knobs (RuntimeLimits + shell profile), scored by the "
+            "eval suite, and write an advisory config-diff proposal. No LLM, "
+            "no RNG; the suggestion is never applied automatically."
+        ),
+    )
+    tn.add_argument(
+        "--tasks-dir",
+        default=DEFAULT_TASKS_DIR,
+        help=f"Directory containing *.yaml tasks (default: {DEFAULT_TASKS_DIR}).",
+    )
+    tn.add_argument(
+        "--task",
+        default=None,
+        help="Tune against a single task by file stem (faster iteration).",
+    )
+    tn.add_argument(
+        "--skip-tags",
+        default=None,
+        help="Comma-separated task tags to skip (also reads HARNESSLAB_EVAL_SKIP_TAGS).",
+    )
+    tn.add_argument(
+        "--n-init",
+        type=int,
+        default=DEFAULT_TUNE_N_INIT,
+        help=f"Initial space-filling evaluations (default: {DEFAULT_TUNE_N_INIT}).",
+    )
+    tn.add_argument(
+        "--n-iter",
+        type=int,
+        default=DEFAULT_TUNE_N_ITER,
+        help=f"Bayesian-optimization iterations (default: {DEFAULT_TUNE_N_ITER}).",
+    )
+    tn.add_argument(
+        "--out",
+        default=DEFAULT_PROPOSALS_DIR,
+        help=f"Directory to write the tuning proposal into (default: {DEFAULT_PROPOSALS_DIR}).",
+    )
+    tn.add_argument(
+        "--format",
+        default="md",
+        choices=["md", "json"],
+        help=(
+            "md (default): write a markdown config-diff proposal under --out. "
+            "json: emit the report as JSON on stdout instead of touching disk."
+        ),
+    )
+
+    # ----- tune-prompt -----
+    tp = sub.add_parser(
+        "tune-prompt",
+        help="Benchmark LLM-generated prompt candidates (advisory, live model).",
+        description=(
+            "Bayesian self-evolution Layer B2: score already-frozen prompt "
+            "candidates against a LIVE model benchmark (isolated from "
+            "eval/replay), rank them by a Beta-Binomial success-rate posterior, "
+            "and write an advisory prompt_tuning proposal. Candidates are "
+            "produced (e.g. by an LLM) and frozen UPSTREAM into --candidates; "
+            "this command only scores and ranks them. Never auto-applied."
+        ),
+    )
+    tp.add_argument(
+        "--candidates",
+        default=None,
+        help=(
+            "Path to a frozen candidates JSON file (array of PromptCandidate). "
+            "Mutually exclusive with --generate."
+        ),
+    )
+    tp.add_argument(
+        "--generate",
+        default=None,
+        metavar="INSTRUCTION",
+        help=(
+            "Generate candidates with the live model from this instruction "
+            "(e.g. 'make the agent more concise'), freeze them, then benchmark. "
+            "Mutually exclusive with --candidates."
+        ),
+    )
+    tp.add_argument(
+        "--n",
+        type=int,
+        default=4,
+        help="Number of candidates to request when using --generate (default: 4).",
+    )
+    tp.add_argument(
+        "--save-candidates",
+        default=None,
+        help=(
+            "Where to freeze generated candidates (default: "
+            "<--out>/prompt_candidates.json). Only used with --generate."
+        ),
+    )
+    tp.add_argument(
+        "--benchmark-dir",
+        default=DEFAULT_TASKS_DIR,
+        help=(
+            "Directory of *.yaml benchmark tasks scored by final_reply_contains "
+            f"(default: {DEFAULT_TASKS_DIR})."
+        ),
+    )
+    tp.add_argument(
+        "--task",
+        default=None,
+        help="Benchmark against a single task by file stem (faster iteration).",
+    )
+    tp.add_argument(
+        "--skip-tags",
+        default=None,
+        help="Comma-separated task tags to skip (also reads HARNESSLAB_EVAL_SKIP_TAGS).",
+    )
+    tp.add_argument(
+        "--model",
+        default="deepseek",
+        help=(
+            "Live model backend for the benchmark (deepseek/anthropic/openai/"
+            "gemini). 'simple' is rejected: it ignores the system prompt."
+        ),
+    )
+    tp.add_argument(
+        "--repeats",
+        type=int,
+        default=1,
+        help="Times to run the suite per candidate to reduce benchmark noise.",
+    )
+    tp.add_argument(
+        "--instruction",
+        default=None,
+        help="Optional note describing what the candidates were trying to improve.",
+    )
+    tp.add_argument(
+        "--out",
+        default=DEFAULT_PROPOSALS_DIR,
+        help=f"Directory to write the prompt proposal into (default: {DEFAULT_PROPOSALS_DIR}).",
+    )
+    tp.add_argument(
+        "--format",
+        default="md",
+        choices=["md", "json"],
+        help=(
+            "md (default): write a markdown prompt proposal under --out. "
+            "json: emit the report as JSON on stdout instead of touching disk."
+        ),
+    )
+
     # ----- session -----
     se = sub.add_parser(
         "session",
@@ -1200,6 +1375,10 @@ def main() -> None:
         sys.exit(_cmd_metrics(args))
     if args.command == "propose":
         sys.exit(_cmd_propose(args))
+    if args.command == "tune":
+        sys.exit(_cmd_tune(args))
+    if args.command == "tune-prompt":
+        sys.exit(_cmd_tune_prompt(args))
     if args.command == "session":
         sys.exit(_cmd_session(args))
     if args.command == "artifact":
@@ -1590,6 +1769,192 @@ def _load_eval_results(report_path: Path) -> list[TaskResult]:
             f"eval report missing 'results' list: {report_path}"
         )
     return [TaskResult.model_validate(r) for r in raw_results]
+
+
+# ---------------------------------------------------------------------------
+# tune subcommand (Bayesian config search, advisory)
+# ---------------------------------------------------------------------------
+
+
+def _cmd_tune(args: argparse.Namespace) -> int:
+    tasks_dir = Path(args.tasks_dir)
+    suite = _load_suite_or_single(tasks_dir, args.task)
+    suite = _filter_suite_by_tags(suite, _eval_skip_tags(args))
+    if not suite.tasks:
+        print("no tasks to tune against (all filtered out)", file=sys.stderr)
+        return EXIT_USAGE
+
+    objective = EvalObjective(suite)
+    result = optimize(
+        DEFAULT_SEARCH_SPACE,
+        objective,
+        default_config=DEFAULT_CONFIG,
+        n_init=args.n_init,
+        n_iter=args.n_iter,
+    )
+
+    trials = [
+        TrialRecord(
+            config=config,
+            cost=cost,
+            breakdown=objective.breakdown(config).as_dict(),
+        )
+        for config, cost in result.trials
+    ]
+    report = build_report(
+        objective=(
+            "weighted cost = 100*failed_tasks + 5*tool_failures "
+            "+ 5*invalid_args + 1*denials + 0.1*tool_calls (minimize)"
+        ),
+        default_config=DEFAULT_CONFIG,
+        default_breakdown=objective.breakdown(DEFAULT_CONFIG).as_dict(),
+        best_config=result.best_config,
+        best_breakdown=objective.breakdown(result.best_config).as_dict(),
+        trials=trials,
+        dimensions=DEFAULT_SEARCH_SPACE.names,
+    )
+
+    if args.format == "json":
+        print(json.dumps(report.model_dump(mode="json"), indent=2, ensure_ascii=False))
+        return EXIT_OK
+
+    path = write_report(report, Path(args.out))
+    verdict = "improved" if report.improved else "no improvement over default"
+    print(
+        f"wrote {path}  [{verdict}: cost "
+        f"{report.default_cost:.4f} -> {report.best_cost:.4f}, "
+        f"{len(report.trials)} evals]"
+    )
+    return EXIT_OK
+
+
+# ---------------------------------------------------------------------------
+# tune-prompt subcommand (Bayesian Layer B2: live-model prompt benchmark)
+# ---------------------------------------------------------------------------
+
+
+def _cmd_tune_prompt(args: argparse.Namespace) -> int:
+    if bool(args.candidates) == bool(args.generate):
+        print(
+            "pass exactly one of --candidates (frozen file) or --generate "
+            "(live LLM generation)",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    backend = normalize_backend(args.model)
+    if backend == "simple":
+        print(
+            "tune-prompt needs a live model: SimpleModel ignores the system "
+            "prompt so it cannot distinguish candidates. Pass "
+            "--model deepseek/anthropic/openai/gemini.",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    if args.repeats < 1:
+        print("--repeats must be >= 1", file=sys.stderr)
+        return EXIT_USAGE
+
+    config = _load_operator_config()
+
+    if args.generate:
+        if args.n < 1:
+            print("--n must be >= 1", file=sys.stderr)
+            return EXIT_USAGE
+        candidates = _generate_prompt_candidates(
+            backend=backend, config=config, instruction=args.generate, n=args.n
+        )
+        if not candidates:
+            print(
+                "candidate generation produced no usable candidates "
+                "(model returned no valid JSON array)",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+        save_path = Path(
+            args.save_candidates or (Path(args.out) / "prompt_candidates.json")
+        )
+        freeze_candidates(candidates, save_path)
+        print(f"generated {len(candidates)} candidate(s) -> {save_path}")
+    else:
+        candidates_path = Path(args.candidates)
+        if not candidates_path.exists():
+            print(f"candidates file not found: {candidates_path}", file=sys.stderr)
+            return EXIT_USAGE
+        try:
+            candidates = load_candidates(candidates_path)
+        except (ValueError, json.JSONDecodeError) as exc:
+            print(f"failed to load candidates: {exc}", file=sys.stderr)
+            return EXIT_USAGE
+        if not candidates:
+            print("candidates file is empty", file=sys.stderr)
+            return EXIT_USAGE
+
+    tasks_dir = Path(args.benchmark_dir)
+    suite = _load_suite_or_single(tasks_dir, args.task)
+    suite = _filter_suite_by_tags(suite, _eval_skip_tags(args))
+    if not suite.tasks:
+        print("no benchmark tasks (all filtered out)", file=sys.stderr)
+        return EXIT_USAGE
+
+    tmp_workspace = Path(tempfile.mkdtemp(prefix="hl-tune-prompt-"))
+    tool_specs = tool_specs_from_registry(
+        _build_tool_registry(tmp_workspace, RuntimeLimits()).list()
+    )
+
+    def factory(candidate):
+        return create_model(
+            backend,
+            config=config,
+            composer=candidate.composer(),
+            tool_specs_provider=lambda: tool_specs,
+            dynamic_blocks_provider=lambda _session: [],
+        )
+
+    report = run_prompt_tuning(
+        candidates=candidates,
+        suite=suite,
+        model_factory=factory,
+        instruction=args.instruction or args.generate or "",
+        repeats=args.repeats,
+    )
+
+    if args.format == "json":
+        print(json.dumps(report.model_dump(mode="json"), indent=2, ensure_ascii=False))
+        return EXIT_OK
+
+    path = write_prompt_report(report, Path(args.out))
+    verdict = "improved" if report.improved else "no improvement over baseline"
+    print(f"wrote {path}  [{verdict}; best={report.best_id}]")
+    return EXIT_OK
+
+
+def _generate_prompt_candidates(
+    *,
+    backend: str,
+    config: OperatorConfig,
+    instruction: str,
+    n: int,
+):
+    """Ask the live model for ``n`` candidate system prompts (frozen upstream).
+
+    The generation model is built with **empty tool specs** and a neutral
+    generation system prompt so it answers with the requested JSON array
+    instead of trying to act as the agent under test.
+    """
+
+    gen_model = create_model(
+        backend,
+        config=config,
+        composer=generation_composer(),
+        tool_specs_provider=lambda: [],
+        dynamic_blocks_provider=lambda _session: [],
+    )
+    generator = ModelCandidateGenerator(make_model_text_generator(gen_model))
+    return generator.generate(
+        base_prompt=default_system_prompt(), instruction=instruction, n=n
+    )
 
 
 # ---------------------------------------------------------------------------
