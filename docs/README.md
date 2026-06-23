@@ -41,6 +41,7 @@ payload shape, update the relevant file and tests in the same PR.
 | [`research/harness-landscape.md`](research/harness-landscape.md) | 2026 agent harness capability map vs HarnessLab |
 | [`research/claude-code-monitor.md`](research/claude-code-monitor.md) | External agent observation notes |
 | [`research/bayesian-self-evolution.md`](research/bayesian-self-evolution.md) | Bayesian self-evolution design proposal (3-layer; extends Improvement Loop) |
+| [`guides/tune-prompt.md`](guides/tune-prompt.md) | `harnesslab tune-prompt`: live benchmark, YAML checks, proposals |
 | [`guides/multi-agent.md`](guides/multi-agent.md) | Enable spawn_sub_agent, limits, CLI/Web visibility |
 | [`guides/deep-research-landscape.md`](guides/deep-research-landscape.md) | Deep research skills vs tools (DeerFlow, OpenCode, HarnessLab design) |
 | [`guides/web-research-providers.md`](guides/web-research-providers.md) | Search/fetch providers, pricing, proxy |

@@ -108,6 +108,50 @@ def test_md_path_writes_proposal_with_fake_model(
     assert "wrote " in stdout
 
 
+def test_task_filter_limits_benchmark_tasks(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    path = _write_candidates(tmp_path / "cands.json")
+    monkeypatch.setattr(cli, "create_model", lambda *a, **k: _FinalModel())
+    code = _run(
+        monkeypatch,
+        [
+            "--candidates",
+            str(path),
+            "--model",
+            "deepseek",
+            "--task",
+            "exact_token",
+            "--format",
+            "json",
+        ],
+    )
+    payload = json.loads(capsys.readouterr().out)
+    assert code == cli.EXIT_OK
+    assert payload["benchmark_tasks"] == 1
+
+
+def test_task_filter_unknown_is_usage_error(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    path = _write_candidates(tmp_path / "cands.json")
+    monkeypatch.setattr(cli, "create_model", lambda *a, **k: _FinalModel())
+    code = _run(
+        monkeypatch,
+        [
+            "--candidates",
+            str(path),
+            "--model",
+            "deepseek",
+            "--task",
+            "does_not_exist",
+        ],
+    )
+    assert code == cli.EXIT_USAGE
+
+
 def test_custom_benchmark_dir_is_loaded(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

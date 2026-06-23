@@ -11,7 +11,9 @@ from harnesslab.tune.prompt.suite import (
     JudgeRequiredError,
     PromptBenchmarkTask,
     PromptCheck,
+    bundled_benchmarks_dir,
     check_passes,
+    filter_benchmark_tasks,
     load_benchmark_suite,
     score_reply,
 )
@@ -93,8 +95,19 @@ def test_score_reply_requires_all_checks() -> None:
 
 
 def test_default_suite_is_non_empty() -> None:
-    assert len(DEFAULT_BENCHMARK_SUITE.tasks) >= 3
+    assert len(DEFAULT_BENCHMARK_SUITE.tasks) >= 6
     assert all(t.checks for t in DEFAULT_BENCHMARK_SUITE.tasks)
+
+
+def test_filter_benchmark_tasks() -> None:
+    suite = DEFAULT_BENCHMARK_SUITE
+    filtered = filter_benchmark_tasks(suite, ["exact_token", "number_only"])
+    assert [t.id for t in filtered.tasks] == ["number_only", "exact_token"]
+
+
+def test_bundled_benchmarks_dir_has_examples() -> None:
+    root = bundled_benchmarks_dir()
+    assert (root / "minimal" / "terse_number.yaml").is_file()
 
 
 def test_load_suite_from_full_file(tmp_path: Path) -> None:

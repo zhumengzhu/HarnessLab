@@ -171,6 +171,9 @@ Base system prompt:
 ---
 
 Respond with ONLY a JSON array of {n} strings (each a complete system prompt).
+Preserve the literal placeholder `${{model_name}}` wherever the base prompt uses
+it (the runtime substitutes the model name at call time). Do not wrap prompts in
+markdown fences.
 """
 
 

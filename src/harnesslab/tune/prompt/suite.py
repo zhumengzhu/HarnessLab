@@ -136,6 +136,24 @@ def _task_from_data(data: dict, *, default_id: str) -> PromptBenchmarkTask:
     return PromptBenchmarkTask.model_validate(payload)
 
 
+def filter_benchmark_tasks(
+    suite: PromptBenchmarkSuite, task_ids: list[str]
+) -> PromptBenchmarkSuite:
+    """Keep only tasks whose ``id`` is in ``task_ids`` (order preserved)."""
+
+    wanted = {t.strip() for t in task_ids if t.strip()}
+    if not wanted:
+        return suite
+    tasks = [t for t in suite.tasks if t.id in wanted]
+    return PromptBenchmarkSuite(tasks=tasks)
+
+
+def bundled_benchmarks_dir() -> Path:
+    """Example YAML benchmarks shipped beside this module (for ``--benchmark-dir``)."""
+
+    return Path(__file__).resolve().parent / "benchmarks"
+
+
 # A small, dependency-free default suite. Every task is single-turn and
 # tool-free (cheap), and each is built so a terse, instruction-following prompt
 # passes while a verbose / preamble-heavy prompt fails — giving the ranking
@@ -178,6 +196,14 @@ DEFAULT_BENCHMARK_SUITE = PromptBenchmarkSuite(
             checks=[
                 PromptCheck(kind="regex", value=r'\{\s*"status"\s*:\s*"ok"\s*\}'),
                 PromptCheck(kind="max_chars", limit=40),
+            ],
+        ),
+        PromptBenchmarkTask(
+            id="no_product_name",
+            input="What is 3 plus 3? Reply with only the digit.",
+            checks=[
+                PromptCheck(kind="equals", value="6"),
+                PromptCheck(kind="not_contains", value="HarnessLab"),
             ],
         ),
     ]

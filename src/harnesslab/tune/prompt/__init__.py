@@ -49,6 +49,8 @@ from harnesslab.tune.prompt.suite import (
     PromptBenchmarkSuite,
     PromptBenchmarkTask,
     PromptCheck,
+    bundled_benchmarks_dir,
+    filter_benchmark_tasks,
     load_benchmark_suite,
     score_reply,
 )
@@ -70,7 +72,9 @@ __all__ = [
     "StaticCandidateGenerator",
     "baseline_candidate",
     "build_prompt_report",
+    "bundled_benchmarks_dir",
     "default_system_prompt",
+    "filter_benchmark_tasks",
     "freeze_candidates",
     "generation_composer",
     "load_benchmark_suite",

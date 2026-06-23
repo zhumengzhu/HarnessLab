@@ -1,0 +1,6 @@
+# One-task benchmark: exact token, no preamble.
+id: exact_ping
+input: "Output exactly this and nothing else: PING"
+checks:
+  - kind: equals
+    value: PING

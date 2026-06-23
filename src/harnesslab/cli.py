@@ -118,6 +118,7 @@ from harnesslab.tune.prompt import (
     DEFAULT_BENCHMARK_SUITE,
     ModelCandidateGenerator,
     default_system_prompt,
+    filter_benchmark_tasks,
     freeze_candidates,
     generation_composer,
     load_benchmark_suite,
@@ -1007,8 +1008,16 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Directory or YAML file of prompt-quality benchmark tasks "
             "(checks: contains/not_contains/regex/equals/max_chars/judge). "
-            "Default: a bundled suite that rewards terse, instruction-following "
-            "prompts."
+            "Default: bundled suite (6 tasks). Example YAML ships under "
+            "src/harnesslab/tune/prompt/benchmarks/."
+        ),
+    )
+    tp.add_argument(
+        "--task",
+        default=None,
+        help=(
+            "Run only benchmark task id(s), comma-separated (e.g. exact_token). "
+            "Filters the default or --benchmark-dir suite for faster iteration."
         ),
     )
     tp.add_argument(
@@ -1898,6 +1907,8 @@ def _cmd_tune_prompt(args: argparse.Namespace) -> int:
         suite = load_benchmark_suite(Path(args.benchmark_dir))
     else:
         suite = DEFAULT_BENCHMARK_SUITE
+    if args.task:
+        suite = filter_benchmark_tasks(suite, args.task.split(","))
     if not suite.tasks:
         print("benchmark suite has no tasks", file=sys.stderr)
         return EXIT_USAGE

@@ -1,0 +1,8 @@
+# One-task benchmark: terse numeric answer only.
+id: terse_number
+input: "What is 9 minus 4? Reply with only the digit, nothing else."
+checks:
+  - kind: contains
+    value: "5"
+  - kind: max_chars
+    limit: 4

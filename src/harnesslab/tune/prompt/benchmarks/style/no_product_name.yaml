@@ -1,0 +1,8 @@
+# Penalizes replies that leak the product identity from the default prompt.
+id: no_product_name
+input: "What is 3 plus 3? Reply with only the digit."
+checks:
+  - kind: equals
+    value: "6"
+  - kind: not_contains
+    value: HarnessLab
