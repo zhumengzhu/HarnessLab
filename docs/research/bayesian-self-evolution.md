@@ -3,8 +3,8 @@
 Status: **partially implemented** (2026-06). Layer A (Beta-Binomial failure
 estimation), Layer B1 (deterministic GP config tuning), and Layer B2
 (LLM-generated prompt candidates scored by an isolated live-model benchmark)
-are **implemented**; Layer C (online bandit selection) remains a design
-proposal. This document extends the advisory Improvement Loop
+are **implemented**; Layer C (online Thompson sampling on the `run` path) is
+**MVP shipped** for `harnesslab run` only. This document extends the advisory Improvement Loop
 ([`docs/architecture/overview.md`](../architecture/overview.md) §"Improvement
 Loop") from a frequency-count heuristic toward a layered Bayesian design.
 The §7.1(b) rule amendment required for B2 landed in AGENTS.md "Proposal
@@ -214,14 +214,23 @@ generation is a build-time artifact upstream of the scored loop, the benchmark
 is opt-in and off by default, and the output is an **advisory** proposal that
 is never auto-applied.
 
-### Layer C — Online Bayesian Selection (optional, default OFF)
+### Layer C — Online Bayesian Selection (optional, default OFF) — **MVP (2026-06)**
 
 - **what** = context · **when** = online · **how** = Thompson sampling /
   dueling bandit (PDO style).
-- Among accepted candidate configs, select online on the `run` path.
+- Among **accepted** `prompt_tuning` proposals (+ baseline), select a system
+  prompt on the `harnesslab run` path via Thompson sampling over Beta-Binomial
+  success-rate posteriors (reuses Layer A estimator).
 - **Hard isolation:** like the provider layer, this is `run`-only, **never**
-  enters `eval` / `replay`, logs every selection as a span, and **never**
-  auto-commits code. Gated behind explicit opt-in config.
+  enters `eval` / `replay`, logs selection/outcome as span events when wired,
+  and **never** auto-commits code. Gated behind `loop.online_selection.enabled`
+  in operator config (default `false`).
+- Implementation: `src/harnesslab/tune/online/`; CLI `harnesslab select list|reset`;
+  stats persist in `~/.config/harnesslab/online_selection.json`.
+- **Feedback signal (MVP):** session ends with `status=done` (terminal `final`)
+  counts as success; other terminal outcomes count as failure.
+- **Deferred:** per-turn selection on `serve` / TUI; dueling comparisons; config
+  knob arms from accepted `config_tuning` proposals.
 
 ## 5. Data-Model Changes
 
@@ -314,7 +323,8 @@ Loop".
    separation (frozen candidate artifact) and the §7.1(b) `AGENTS.md`
    amendment. **Done (2026-06)** — `harnesslab tune-prompt`.
 4. **Layer C** — explicit opt-in experimental feature, `run`-only, default
-   OFF. Build last.
+   OFF. **MVP shipped (2026-06)** — Thompson sampling over accepted prompt arms;
+   `serve`/TUI wiring deferred.
 
 Each phase ships independently and must pass the standard quality gate
 (`scripts/check_package_layout.py`, `pytest`, `ruff`).

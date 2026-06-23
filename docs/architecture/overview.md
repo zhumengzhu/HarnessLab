@@ -449,6 +449,20 @@ never auto-applied. The benchmark is non-deterministic, so a narrow margin
 should be re-confirmed with higher `--repeats`. Modules:
 `src/harnesslab/tune/prompt/`.
 
+## Online Selection (Layer C)
+
+Opt-in Thompson sampling over **accepted** `prompt_tuning` proposal arms (plus
+the baseline prompt) on the **`harnesslab run` path only**. Enable with
+`loop.online_selection.enabled: true` in operator config (default `false`).
+Each run selects an arm, applies its system prompt via `ModelPort`'s composer,
+then records a Bernoulli outcome: success when the session ends `status=done`
+(terminal `final`). Stats persist in
+`~/.config/harnesslab/online_selection.json`; inspect with
+`harnesslab select list`. Like every self-evolution surface, this **never**
+enters `eval` / `replay` and **never** auto-applies proposals — only arms from
+human-accepted proposals enter the pool. Modules: `src/harnesslab/tune/online/`.
+`serve` / TUI per-session selection is deferred.
+
 ## Provider Integration (Post-MVP Phase 1)
 
 `ModelPort` remains the stable contract. Concrete providers now live

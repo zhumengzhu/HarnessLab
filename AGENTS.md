@@ -114,7 +114,9 @@ Must NOT include yet:
   `config_tuning` proposals, never auto-applied. `tune/prompt/` adds LLM
   prompt-candidate generation scored by an isolated live-model benchmark and
   ranked by a Beta-Binomial success posterior (`harnesslab tune-prompt`; Layer
-  B2); advisory `prompt_tuning` proposals, never auto-applied. See
+  B2); advisory `prompt_tuning` proposals, never auto-applied.
+  `tune/online/` adds opt-in Thompson sampling over accepted prompt arms on the
+  `run` path only (Layer C; default OFF). See
   [`docs/research/bayesian-self-evolution.md`](docs/research/bayesian-self-evolution.md)
 - `src/harnesslab/web`: localhost Web UI (`harnesslab serve`); lifecycle
   helper `./hl-serve` (`scripts/hl_serve.py`)

@@ -114,9 +114,11 @@ from harnesslab.tune import (
     optimize,
     write_report,
 )
+from harnesslab.tune.online import OnlineSelectionCoordinator
 from harnesslab.tune.prompt import (
     DEFAULT_BENCHMARK_SUITE,
     ModelCandidateGenerator,
+    PromptCandidate,
     default_system_prompt,
     filter_benchmark_tasks,
     freeze_candidates,
@@ -149,6 +151,7 @@ SUBCOMMANDS = (
     "propose",
     "tune",
     "tune-prompt",
+    "select",
     "session",
     "artifact",
     "context",
@@ -397,6 +400,8 @@ def build_runtime(
     spans: SpanRecorderPort | None = None,
     shell_profile: str | None = None,
     operator_config: OperatorConfig | None = None,
+    *,
+    online_system_prompt: str | None = None,
 ) -> HarnessLoop:
     limits = limits or RuntimeLimits()
     limits = align_runtime_limits_with_model(
@@ -649,6 +654,11 @@ def build_runtime(
         operator_config.post_tool_hooks if operator_config is not None else (),
     )
     backend = normalize_backend(model_backend)
+    prompt_composer = None
+    if online_system_prompt is not None:
+        prompt_composer = PromptCandidate.from_text(
+            online_system_prompt, source="online_selection"
+        ).composer()
     model = create_model(
         backend,
         config=operator_config,
@@ -659,6 +669,7 @@ def build_runtime(
             skill_selection_mode=effective_skill_mode,
             planning_mode=effective_planning_mode,
         ),
+        composer=prompt_composer,
     )
     get_logger("cli").info(
         "runtime ready workspace=%s model=%s storage=%s",
@@ -1062,6 +1073,36 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
+    # ----- select (Layer C: online Thompson sampling, run-only) -----
+    sel = sub.add_parser(
+        "select",
+        help="Inspect or reset online prompt-selection arm statistics.",
+        description=(
+            "Layer C online selection persists Beta-Binomial arm stats under "
+            "~/.config/harnesslab/online_selection.json. Enable selection on "
+            "the run path via loop.online_selection.enabled in config.json."
+        ),
+    )
+    sel_sub = sel.add_subparsers(dest="select_action", required=True, metavar="ACTION")
+    sel_list = sel_sub.add_parser("list", help="List arms and success/trial counts.")
+    sel_list.add_argument(
+        "--workspace-root",
+        default=".",
+        help="Workspace root (loads accepted prompt_tuning proposals from proposals/).",
+    )
+    sel_list.add_argument(
+        "--proposals-dir",
+        default=None,
+        help=f"Override proposals directory (default: <workspace>/{DEFAULT_PROPOSALS_DIR}).",
+    )
+    sel_list.add_argument("--json", action="store_true", help="Emit JSON instead of a table.")
+    sel_reset = sel_sub.add_parser("reset", help="Clear stored arm statistics.")
+    sel_reset.add_argument(
+        "--arm-id",
+        default=None,
+        help="Clear one arm only (default: wipe the whole store).",
+    )
+
     # ----- session -----
     se = sub.add_parser(
         "session",
@@ -1391,6 +1432,8 @@ def main() -> None:
         sys.exit(_cmd_tune(args))
     if args.command == "tune-prompt":
         sys.exit(_cmd_tune_prompt(args))
+    if args.command == "select":
+        sys.exit(_cmd_select(args))
     if args.command == "session":
         sys.exit(_cmd_session(args))
     if args.command == "artifact":
@@ -1524,23 +1567,60 @@ def _cmd_run(args: argparse.Namespace) -> int:
         return EXIT_USAGE
     config = _load_operator_config()
     apply_provider_env(config)
+    backend = resolve_model_backend(
+        args.model, config=config, fallback="simple"
+    )
+    online_coordinator: OnlineSelectionCoordinator | None = None
+    online_prompt: str | None = None
+    if config.online_selection_enabled:
+        if backend == "simple":
+            print(
+                "loop.online_selection.enabled requires a live model, not 'simple'",
+                file=sys.stderr,
+            )
+            return EXIT_USAGE
+        try:
+            online_coordinator = OnlineSelectionCoordinator.from_workspace(workspace_root)
+            selection = online_coordinator.select()
+            online_prompt = selection.arm.system_prompt
+            get_logger("cli").info(
+                "online_selection arm=%s sample=%.4f successes=%s trials=%s",
+                selection.arm.id,
+                selection.sample,
+                selection.successes,
+                selection.trials,
+            )
+        except ValueError as exc:
+            print(str(exc), file=sys.stderr)
+            return EXIT_USAGE
     try:
         loop = build_runtime(
             workspace_root=workspace_root,
             storage_backend=args.storage,
             sqlite_path=sqlite_path,
-            model_backend=resolve_model_backend(
-                args.model, config=config, fallback="simple"
-            ),  # type: ignore[arg-type]
+            model_backend=backend,  # type: ignore[arg-type]
             limits=resolve_runtime_limits(None, config=config),
             shell_profile=resolve_shell_profile(None, config=config),
             operator_config=config,
+            online_system_prompt=online_prompt,
         )
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return EXIT_USAGE
     session = loop.start(goal=args.input)
     response = loop.run_session(session.id, args.input, max_steps=args.max_steps)
+    if online_coordinator is not None:
+        updated = online_coordinator.record_session(session)
+        if updated is not None:
+            sel = online_coordinator.last_selection
+            arm_id = sel.arm.id if sel else "?"
+            get_logger("cli").info(
+                "online_selection outcome arm=%s success=%s totals=%s/%s",
+                arm_id,
+                session.status == "done",
+                updated.successes,
+                updated.trials,
+            )
     print(response)
     return EXIT_OK
 
@@ -1837,6 +1917,63 @@ def _cmd_tune(args: argparse.Namespace) -> int:
         f"{report.default_cost:.4f} -> {report.best_cost:.4f}, "
         f"{len(report.trials)} evals]"
     )
+    return EXIT_OK
+
+
+# ---------------------------------------------------------------------------
+# select subcommand (Bayesian Layer C: online Thompson sampling on run path)
+# ---------------------------------------------------------------------------
+
+
+def _cmd_select(args: argparse.Namespace) -> int:
+    if args.select_action == "reset":
+        from harnesslab.tune.online.store import OnlineSelectionStore
+
+        store = OnlineSelectionStore()
+        store.reset(args.arm_id)
+        if args.arm_id:
+            print(f"cleared stats for arm {args.arm_id}")
+        else:
+            print(f"cleared {store.path}")
+        return EXIT_OK
+
+    workspace_root = Path(args.workspace_root).resolve()
+    proposals_dir = (
+        Path(args.proposals_dir)
+        if args.proposals_dir
+        else workspace_root / DEFAULT_PROPOSALS_DIR
+    )
+    try:
+        coordinator = OnlineSelectionCoordinator.from_workspace(
+            workspace_root, proposals_dir=proposals_dir
+        )
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        return EXIT_USAGE
+    stats = coordinator.stats()
+    rows = []
+    for arm in coordinator.arms:
+        st = stats.get(arm.id)
+        rows.append(
+            {
+                "id": arm.id,
+                "label": arm.label,
+                "source": arm.source,
+                "successes": st.successes if st else 0,
+                "trials": st.trials if st else 0,
+            }
+        )
+    if args.json:
+        print(json.dumps({"arms": rows}, indent=2))
+        return EXIT_OK
+    if not rows:
+        print("(no arms — accept a prompt_tuning proposal or enable baseline only)")
+        return EXIT_OK
+    print("id\tsource\tsuccesses\ttrials\tlabel")
+    for row in rows:
+        print(
+            f"{row['id']}\t{row['source']}\t{row['successes']}\t{row['trials']}\t{row['label']}"
+        )
     return EXIT_OK
 
 

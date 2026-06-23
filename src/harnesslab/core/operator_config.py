@@ -91,6 +91,7 @@ class OperatorConfig:
     mcp_allowed_tools: tuple[str, ...] = ()
     python_sandbox_profile: Literal["disabled", "local", "strict"] = "disabled"
     multi_agent_enabled: bool = False
+    online_selection_enabled: bool = False
     web_ui_version: Literal["legacy", "ts"] = "ts"
     pre_tool_hooks: tuple[dict[str, Any], ...] = ()
     post_tool_hooks: tuple[dict[str, Any], ...] = ()
@@ -401,6 +402,7 @@ def config_settings_snapshot(
         "mcp_allowed_tools": list(config.mcp_allowed_tools),
         "python_sandbox_profile": config.python_sandbox_profile,
         "multi_agent_enabled": config.multi_agent_enabled,
+        "online_selection_enabled": config.online_selection_enabled,
         "web_ui_version": config.web_ui_version,
         "hooks": {
             "pre_tool": list(config.pre_tool_hooks),
@@ -551,6 +553,9 @@ def _parse_config(data: dict[str, Any]) -> OperatorConfig:
         mcp_allowed_tools=_parse_str_list(tools.get("mcp_allowed_tools")),
         python_sandbox_profile=_python_sandbox_profile(policy),
         multi_agent_enabled=bool(loop.get("multi_agent", {}).get("enabled", False)),
+        online_selection_enabled=bool(
+            loop.get("online_selection", {}).get("enabled", False)
+        ),
         web_ui_version=_web_ui_version(data.get("web", {})),
         pre_tool_hooks=_parse_hook_list(hooks.get("pre_tool")),
         post_tool_hooks=_parse_hook_list(hooks.get("post_tool")),

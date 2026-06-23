@@ -1013,7 +1013,7 @@ Bayesian design. Every layer is **advisory** — nothing auto-applies.
 | **B1 — Config tuning** | Deterministic GP Bayesian optimization over runtime knobs, scored by the eval suite (`harnesslab tune`) | **Done** (weak lever: deterministic eval is insensitive to most knobs) |
 | **B2 — Prompt tuning** | LLM-generated prompt candidates scored by an isolated **live-model** benchmark, ranked by Beta-Binomial success posterior (`harnesslab tune-prompt`) | **Done**; live smoke verified |
 | **B2 — Live benchmark + scorers** | Discriminating prompt-quality benchmark (decoupled from eval) + richer scorers (contains/not_contains/regex/equals/max_chars/LLM-judge) so the ranking is meaningful for real users | **Done** |
-| **C — Online selection** | Thompson / dueling-bandit selection on the `run` path, default OFF | **Design only** |
+| **C — Online selection** | Thompson sampling on the `run` path over accepted prompt arms; `harnesslab select`; default OFF | **MVP shipped** (`run` only; `serve`/TUI deferred) |
 
 > **Honest status:** the B2 *plumbing* and a *discriminating default benchmark*
 > are shipped. Ranking value still depends on task quality — extend
